@@ -1,1 +1,21 @@
+# === editor/os ===
+.DS_Store
 .idea/
+.vscode/
+
+# === secrets/credentials ===
+.env
+.env.*
+!.env.example
+
+# === generated files ===
+*.DS_Store
+node_modules/
+build/
+dist/
+
+# === docker compose ===
+docker-compose.override.yml
+
+# === logs/dumps ===
+*.log
