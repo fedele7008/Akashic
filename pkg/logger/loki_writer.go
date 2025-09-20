@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 )
@@ -106,7 +107,12 @@ func (w *LokiWriter) flushAll() {
 	if payload == nil {
 		return
 	}
-	_ = w.pushWithRetry(payload)
+	err := w.pushWithRetry(payload)
+	if err != nil {
+		if _, err := fmt.Fprintf(os.Stderr, "LokiWriter flush error: %v\n", err); err != nil {
+			return
+		}
+	}
 }
 
 func (w *LokiWriter) flushLoop() {
