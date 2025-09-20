@@ -7,7 +7,7 @@ import (
 )
 
 func main() {
-	// TOOD: Make all config to have default values
+	// TODO: Make all config to have default values
 	lokiUrl := "http://localhost:3100/loki/api/v1/push"
 	logCfg := &logger.Config{
 		Service: "akashic",
