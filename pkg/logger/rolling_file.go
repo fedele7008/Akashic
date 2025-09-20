@@ -1,12 +1,22 @@
 package logger
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
 	"sync"
 )
+
+type RollingFileWriter struct {
+	FileWriter
+	size       int64
+	maxSize    int64
+	maxBackups int
+}
+
+var ErrFileWriterNotInitialized = errors.New("file writer not initialized")
 
 func (w *RollingFileWriter) suffixed(n int) string {
 	return fmt.Sprintf("%s.%d", w.path, n)

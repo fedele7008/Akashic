@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+type AppendingFileWriter struct {
+	FileWriter
+}
+
 func (w *AppendingFileWriter) Write(p []byte) (n int, err error) {
 	return w.FileWriter.Write(p)
 }

@@ -1,5 +1,16 @@
 package logger
 
+import (
+	"os"
+	"sync"
+)
+
+type FileWriter struct {
+	mu   sync.Mutex
+	path string
+	file *os.File
+}
+
 func (w *FileWriter) Write(p []byte) (n int, err error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

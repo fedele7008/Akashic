@@ -13,6 +13,27 @@ import (
 	"time"
 )
 
+type LokiWriter struct {
+	url         string
+	user        string
+	pass        string
+	fixedLabels map[string]string
+
+	batchSize        int
+	batchFlushPeriod time.Duration
+	retryMaxCount    int
+	retryMinBackoff  time.Duration
+	retryMaxBackoff  time.Duration
+	compress         bool
+
+	mu     sync.Mutex
+	buf    map[string][][2]string // buf[streamKey] = [..., [timestamp, line], ...]
+	timer  *time.Timer
+	quit   chan struct{}
+	wg     sync.WaitGroup
+	client *http.Client
+}
+
 func parseLabelsKey(key string) map[string]string {
 	out := map[string]string{}
 	if key == "" {

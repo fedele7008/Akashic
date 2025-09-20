@@ -12,6 +12,12 @@ import (
 	"go.uber.org/zap/zapcore"
 )
 
+type Logger struct {
+	App      *zap.Logger
+	Security *zap.Logger
+	Audit    *zap.Logger
+}
+
 func consoleEncoderConfig() zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
 		TimeKey:       "timestamp",

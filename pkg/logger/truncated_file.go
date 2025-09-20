@@ -7,6 +7,10 @@ import (
 	"sync"
 )
 
+type TruncatedFileWriter struct {
+	FileWriter
+}
+
 func (w *TruncatedFileWriter) Write(p []byte) (n int, err error) {
 	return w.FileWriter.Write(p)
 }
