@@ -1,7 +1,6 @@
 package logger
 
 import (
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -16,17 +15,20 @@ type RollingFileWriter struct {
 	maxBackups int
 }
 
-var ErrFileWriterNotInitialized = errors.New("file writer not initialized")
-
 func (w *RollingFileWriter) suffixed(n int) string {
 	return fmt.Sprintf("%s.%d", w.path, n)
 }
 
 func (w *RollingFileWriter) rotate() error {
+	// close file if it is still open
 	if w.file != nil {
-		_ = w.file.Close()
+		if err := w.file.Close(); err != nil {
+			return err
+		}
 	}
 
+	// for larger suffix number being oldest, shift log files from n suffix to n+1.
+	// if number of log file is at max, remove the oldest one.
 	for i := w.maxBackups - 1; i >= 1; i-- {
 		oldPath := w.suffixed(i)
 		newPath := w.suffixed(i + 1)
@@ -38,6 +40,7 @@ func (w *RollingFileWriter) rotate() error {
 		}
 	}
 
+	// finally shift most recent log file with no suffix to suffix of 1
 	if _, err := os.Stat(w.path); err == nil {
 		_ = os.Remove(w.suffixed(1))
 		if err := os.Rename(w.path, w.suffixed(1)); err != nil {
@@ -45,6 +48,7 @@ func (w *RollingFileWriter) rotate() error {
 		}
 	}
 
+	// create new log file with no suffix
 	f, err := os.OpenFile(w.path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
 	if err != nil {
 		return err
@@ -79,11 +83,19 @@ func (w *RollingFileWriter) Close() error {
 }
 
 func NewRollingFileWriter(path string, maxSizeMB, maxBackups int) (io.WriteCloser, error) {
-	if maxSizeMB < 1 {
+	if maxSizeMB == 0 {
+		// config not defined, use default value
 		maxSizeMB = DefaultMaxSizeMB
+	} else if maxSizeMB < 1 {
+		// config is under lower bound, use lower bound
+		maxSizeMB = 1
 	}
-	if maxBackups < 1 {
+	if maxBackups == 0 {
+		// config not defined, use default value
 		maxBackups = DefaultMaxBackups
+	} else if maxBackups < 1 {
+		// config is under lower bound, use lower bound
+		maxBackups = 1
 	}
 	w := &RollingFileWriter{
 		FileWriter: FileWriter{

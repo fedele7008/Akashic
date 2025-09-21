@@ -1,6 +1,7 @@
 package main
 
 import (
+	"akashic/akashic/pkg/common"
 	"akashic/akashic/pkg/logger"
 
 	"go.uber.org/zap"
@@ -36,7 +37,7 @@ func main() {
 					Enabled:  true,
 					Level:    logger.LevelDebug,
 					LokiURL:  lokiUrl,
-					Compress: false,
+					Compress: common.MakeNullable(false),
 				},
 			},
 		},
@@ -56,15 +57,15 @@ func main() {
 					Format:     logger.FormatText,
 					FilePath:   "logs/security.log",
 					FileMode:   logger.FileRolling,
-					MaxSizeMB:  100,
-					MaxBackups: 3,
+					MaxSizeMB:  1,
+					MaxBackups: 1,
 				},
 				{
 					Type:     logger.SinkLoki,
 					Enabled:  true,
 					Level:    logger.LevelDebug,
 					LokiURL:  lokiUrl,
-					Compress: true,
+					Compress: common.MakeNullable(true),
 				},
 			},
 		},
@@ -92,7 +93,7 @@ func main() {
 					Enabled:  true,
 					Level:    logger.LevelDebug,
 					LokiURL:  lokiUrl,
-					Compress: true,
+					Compress: common.MakeNullable(true),
 				},
 			},
 		},
@@ -105,7 +106,7 @@ func main() {
 	}
 	defer loggerCloseFn()
 
-	for i := 0; i < 2; i++ {
+	for i := 0; i < 3000; i++ {
 		logger.App.Debug("App debug log", zap.Int("some-key", 123))
 		logger.App.Info("App info log", zap.String("some-key", "some-value"))
 		logger.App.Warn("App warning log", zap.Error(err))

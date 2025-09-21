@@ -17,7 +17,7 @@ type LokiWriter struct {
 	url         string
 	user        string
 	pass        string
-	fixedLabels map[string]string
+	fixedLabels StaticLabel
 
 	batchSize        int
 	batchFlushPeriod time.Duration
@@ -34,8 +34,8 @@ type LokiWriter struct {
 	client *http.Client
 }
 
-func parseLabelsKey(key string) map[string]string {
-	out := map[string]string{}
+func parseLabelsKey(key string) StaticLabel {
+	out := StaticLabel{}
 	if key == "" {
 		return out
 	}
@@ -150,7 +150,7 @@ func (w *LokiWriter) flushLoop() {
 	}
 }
 
-func NewLokiWriter(cfg *SinkConfig, fixedLabels map[string]string) (*LokiWriter, error) {
+func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (*LokiWriter, error) {
 	if cfg.LokiURL == "" {
 		return nil, fmt.Errorf("SinkConfig missing loki_url")
 	}
@@ -162,10 +162,10 @@ func NewLokiWriter(cfg *SinkConfig, fixedLabels map[string]string) (*LokiWriter,
 
 		batchSize:        ifZero(cfg.BatchSize, DefaultBatchSize),
 		batchFlushPeriod: time.Duration(ifZero(cfg.BatchFlushPeriodMs, DefaultBatchFlushPeriodMs)) * time.Millisecond,
-		retryMaxCount:    ifZero(cfg.RetryMaxCount, DefaultRetryMaxCount),
+		retryMaxCount:    cfg.RetryMaxCount.IfValidGet(DefaultRetryMaxCount),
 		retryMinBackoff:  time.Duration(ifZero(cfg.RetryMinBackoffMs, DefaultRetryMinBackoffMs)) * time.Millisecond,
 		retryMaxBackoff:  time.Duration(ifZero(cfg.RetryMaxBackoffMs, DefaultRetryMaxBackoffMs)) * time.Millisecond,
-		compress:         cfg.Compress,
+		compress:         cfg.Compress.IfValidGet(DefaultCompress),
 
 		mu:     sync.Mutex{},
 		buf:    make(map[string][][2]string),

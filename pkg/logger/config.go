@@ -1,5 +1,7 @@
 package logger
 
+import "akashic/akashic/pkg/common"
+
 type FileMode string
 
 const (
@@ -63,19 +65,19 @@ type SinkConfig struct {
 	FilePath   string   `mapstructure:"file_path"`   // required
 	FileMode   FileMode `mapstructure:"file_mode"`   // optional (default: FileRolling)
 	MaxSizeMB  int      `mapstructure:"max_size_mb"` // optional (default: DefaultMaxSizeMB); rolling files only
-	MaxBackups int      `mapstructure:"max_backups"` // optional (default: DefaultMaxBackups); rolling files only
+	MaxBackups int      `mapstructure:"max_backups"` // optional (default: DefaultMaxBackups; min: 1); rolling files only
 
 	// loki specific fields
-	LokiURL            string      `mapstructure:"loki_url"`              // required
-	BasicAuthUser      string      `mapstructure:"basic_auth_user"`       // required
-	BasicAuthPass      string      `mapstructure:"basic_auth_pass"`       // required
-	LokiLabels         StaticLabel `mapstructure:"loki_labels"`           // optional (default: DefaultStaticLabel)
-	BatchSize          int         `mapstructure:"batch_size"`            // optional (default: DefaultBatchSize)
-	BatchFlushPeriodMs int         `mapstructure:"batch_flush_period_ms"` // optional (default: DefaultBatchFlushPeriodMs)
-	RetryMaxCount      int         `mapstructure:"retry_max_count"`       // optional (default: DefaultRetryMaxCount)
-	RetryMinBackoffMs  int         `mapstructure:"retry_min_backoff_ms"`  // optional (default: DefaultRetryMinBackoffMs)
-	RetryMaxBackoffMs  int         `mapstructure:"retry_max_backoff_ms"`  // optional (default: DefaultRetryMaxBackoffMs)
-	Compress           bool        `mapstructure:"compress"`              // optional (default: DefaultCompress)
+	LokiURL            string                `mapstructure:"loki_url"`              // required
+	BasicAuthUser      string                `mapstructure:"basic_auth_user"`       // required
+	BasicAuthPass      string                `mapstructure:"basic_auth_pass"`       // required
+	LokiLabels         StaticLabel           `mapstructure:"loki_labels"`           // optional (default: DefaultStaticLabel)
+	BatchSize          int                   `mapstructure:"batch_size"`            // optional (default: DefaultBatchSize)
+	BatchFlushPeriodMs int                   `mapstructure:"batch_flush_period_ms"` // optional (default: DefaultBatchFlushPeriodMs)
+	RetryMaxCount      common.Nullable[int]  `mapstructure:"retry_max_count"`       // optional (default: DefaultRetryMaxCount)
+	RetryMinBackoffMs  int                   `mapstructure:"retry_min_backoff_ms"`  // optional (default: DefaultRetryMinBackoffMs)
+	RetryMaxBackoffMs  int                   `mapstructure:"retry_max_backoff_ms"`  // optional (default: DefaultRetryMaxBackoffMs)
+	Compress           common.Nullable[bool] `mapstructure:"compress"`              // optional (default: DefaultCompress)
 }
 
 type Channel string

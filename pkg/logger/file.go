@@ -1,9 +1,12 @@
 package logger
 
 import (
+	"errors"
 	"os"
 	"sync"
 )
+
+var ErrFileWriterNotInitialized = errors.New("file writer not initialized")
 
 type FileWriter struct {
 	mu   sync.Mutex
