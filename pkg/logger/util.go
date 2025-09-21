@@ -1,8 +1,10 @@
 package logger
 
 import (
-	"encoding/json"
-	"strings"
+	"akashic/akashic/pkg/common"
+	"fmt"
+
+	"github.com/araddon/dateparse"
 )
 
 func ifZero[T ~int](value, defaultValue T) T {
@@ -12,14 +14,10 @@ func ifZero[T ~int](value, defaultValue T) T {
 	return value
 }
 
-func dirOf(p string) string {
-	if p == "" {
-		return "."
+func parseToUnixNano(ts string) (common.Nullable[string], error) {
+	t, err := dateparse.ParseAny(ts)
+	if err != nil {
+		return common.EmptyNullable[string](), err
 	}
-	if i := strings.LastIndexByte(p, '/'); i > 0 {
-		return p[:i]
-	}
-	return "."
+	return common.MakeNullable(fmt.Sprintf("%d", t.UnixNano())), nil
 }
-
-func SafeJSON(v any) string { b, _ := json.Marshal(v); return string(b) }

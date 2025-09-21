@@ -103,3 +103,13 @@ type Config struct {
 	Audit            ChannelConfig `mapstructure:"audit"`              // required
 	ForceAuditAppend bool          `mapstructure:"force_audit_append"` // optional (default: DefaultForceAuditAppend)
 }
+
+// json encoding key values
+const (
+	TimestampKey  = "timestamp"
+	LogLevelKey   = "level"
+	NameKey       = "logger"
+	CallerKey     = "caller"
+	MessageKey    = "message"
+	StacktraceKey = "stacktrace"
+)

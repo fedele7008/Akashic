@@ -4,14 +4,20 @@ import (
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
 	"net/http"
+	"net/url"
 	"os"
 	"sync"
 	"time"
 )
+
+type LogLine [2]string // [timestamp, line]
+type LogLists []LogLine
+type StreamKey map[string]string
 
 type LokiWriter struct {
 	url         string
@@ -27,42 +33,39 @@ type LokiWriter struct {
 	compress         bool
 
 	mu     sync.Mutex
-	buf    map[string][][2]string // buf[streamKey] = [..., [timestamp, line], ...]
+	buf    map[string]LogLists // buf[streamKeyStr] = [..., [timestamp, line], ...]
 	timer  *time.Timer
 	quit   chan struct{}
+	flush  chan struct{}
 	wg     sync.WaitGroup
 	client *http.Client
 }
 
-func parseLabelsKey(key string) StaticLabel {
-	out := StaticLabel{}
-	if key == "" {
-		return out
-	}
-	parts := bytes.Split([]byte(key), []byte{'|'})
-	for _, p := range parts {
-		kv := bytes.SplitN(p, []byte{'='}, 2)
-		if len(kv) == 2 {
-			out[string(kv[0])] = string(kv[1])
-		}
-	}
-	return out
+type stream struct {
+	Stream StreamKey `json:"stream"`
+	Value  LogLists  `json:"values"`
 }
 
-func buildPayloadAndReset(mu *sync.Mutex, buf map[string][][2]string) map[string]any {
+func buildPayloadAndReset(mu *sync.Mutex, buf map[string]LogLists) (map[string]any, error) {
 	mu.Lock()
 	defer mu.Unlock()
 	if len(buf) == 0 {
-		return nil
+		return nil, nil
 	}
 
-	type stream struct {
-		Stream map[string]string `json:"stream"`
-		Value  [][2]string       `json:"values"`
-	}
 	payload := make([]stream, 0, len(buf))
 	for key, vals := range buf {
-		label := parseLabelsKey(key)
+		decodedMap, err := url.ParseQuery(key)
+		if err != nil {
+			return nil, err
+		}
+		label := make(StreamKey, len(decodedMap))
+		for k, values := range decodedMap {
+			if len(values) > 0 {
+				// if multiple values exist, take very first one only
+				label[k] = values[0]
+			}
+		}
 		payload = append(payload, stream{
 			Stream: label,
 			Value:  vals,
@@ -71,46 +74,76 @@ func buildPayloadAndReset(mu *sync.Mutex, buf map[string][][2]string) map[string
 	for k := range buf {
 		delete(buf, k)
 	}
-	return map[string]any{"streams": payload}
+	return map[string]any{"streams": payload}, nil
 }
 
 func (w *LokiWriter) pushWithRetry(payload map[string]any) error {
 	b, _ := json.Marshal(payload)
-	body := io.Reader(bytes.NewReader(b))
 
-	var gz *gzip.Writer
-	var buf bytes.Buffer
-	if w.compress {
-		gz = gzip.NewWriter(&buf)
-		_, _ = gz.Write(b)
-		_ = gz.Close()
-		body = &buf
-	}
-
-	req, _ := http.NewRequest("POST", w.url, body)
-	req.Header.Set("Content-Type", "application/json")
-	if w.compress {
-		req.Header.Set("Content-Encoding", "gzip")
-	}
-	if w.user != "" {
-		req.SetBasicAuth(w.user, w.pass)
-	}
-
-	var err error
+	var errs []error
 	backoff := w.retryMinBackoff
-	for i := 0; i <= w.retryMaxCount; i++ {
+
+	for i := 0; i < w.retryMaxCount; i++ {
+		body := io.Reader(bytes.NewReader(b))
+
+		// compress if configured
+		var gz *gzip.Writer
+		var buf bytes.Buffer
+		if w.compress {
+			gz = gzip.NewWriter(&buf)
+			if _, err := gz.Write(b); err != nil {
+				errs = append(errs, fmt.Errorf("[attempt-%v] failed to compress logs: %w", i+1, err))
+			}
+			if err := gz.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("[attempt-%v] failed to close gzip writer: %w", i+1, err))
+				break
+			}
+			body = &buf
+		}
+
+		// set request headers
+		req, err := http.NewRequest("POST", w.url, body)
+		if err != nil {
+			errs = append(errs, fmt.Errorf("[attempt-%v] error creating request: %v", i+1, err))
+
+			time.Sleep(backoff)
+			if backoff < w.retryMaxBackoff {
+				backoff *= 2
+				if backoff > w.retryMaxBackoff {
+					backoff = w.retryMaxBackoff
+				}
+			}
+
+			continue
+		}
+		req.Header.Set("Content-Type", "application/json")
+		if w.compress {
+			req.Header.Set("Content-Encoding", "gzip")
+		}
+		if w.user != "" {
+			req.SetBasicAuth(w.user, w.pass)
+		}
+
+		// send request
 		resp, doErr := w.client.Do(req)
 		if doErr != nil && resp != nil && resp.Body != nil {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
+			if _, err = io.Copy(io.Discard, resp.Body); err != nil {
+				errs = append(errs, fmt.Errorf("[attempt-%v] error reading response body: %w", i+1, err))
+			}
+			if err = resp.Body.Close(); err != nil {
+				errs = append(errs, fmt.Errorf("[attempt-%v] error closing response body: %w", i+1, err))
+				break
+			}
 		}
+
+		// escape loop if success
 		if doErr == nil && resp.StatusCode >= 200 && resp.StatusCode < 300 {
 			return nil
 		}
+
+		// report error occurred during http request
 		if doErr != nil {
-			err = doErr
-		} else {
-			err = fmt.Errorf("loki push failed, status: %v", resp.Status)
+			errs = append(errs, fmt.Errorf("[attempt-%v] network error: %w", i+1, doErr))
 		}
 		time.Sleep(backoff)
 		if backoff < w.retryMaxBackoff {
@@ -120,19 +153,20 @@ func (w *LokiWriter) pushWithRetry(payload map[string]any) error {
 			}
 		}
 	}
-	return err
+	return errors.Join(append([]error{errors.New("something went wrong while sending log entities to Loki")}, errs...)...)
 }
 
 func (w *LokiWriter) flushAll() {
-	payload := buildPayloadAndReset(&w.mu, w.buf)
+	payload, err := buildPayloadAndReset(&w.mu, w.buf)
+	if err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "LokiWriter failed to build payload: %v\n", err)
+	}
 	if payload == nil {
 		return
 	}
-	err := w.pushWithRetry(payload)
+	err = w.pushWithRetry(payload)
 	if err != nil {
-		if _, err := fmt.Fprintf(os.Stderr, "LokiWriter flush error: %v\n", err); err != nil {
-			return
-		}
+		_, _ = fmt.Fprintf(os.Stderr, "LokiWriter flush error: %v\n", err)
 	}
 }
 
@@ -144,6 +178,9 @@ func (w *LokiWriter) flushLoop() {
 			w.flushAll()
 			return
 		case <-w.timer.C:
+			w.flushAll()
+			w.timer.Reset(w.batchFlushPeriod)
+		case <-w.flush:
 			w.flushAll()
 			w.timer.Reset(w.batchFlushPeriod)
 		}
@@ -168,9 +205,10 @@ func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (*LokiWriter, error
 		compress:         cfg.Compress.IfValidGet(DefaultCompress),
 
 		mu:     sync.Mutex{},
-		buf:    make(map[string][][2]string),
+		buf:    make(map[string]LogLists),
 		timer:  nil,
 		quit:   make(chan struct{}),
+		flush:  make(chan struct{}, 1),
 		client: &http.Client{Timeout: time.Duration(DefaultClientTimeoutSec) * time.Second},
 	}
 	w.timer = time.NewTimer(w.batchFlushPeriod)
@@ -179,53 +217,74 @@ func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (*LokiWriter, error
 	return w, nil
 }
 
-func parseLevel(p []byte) string {
-	var tmp map[string]string
-	if err := json.Unmarshal(p, &tmp); err != nil {
-		return ""
-	}
-	if val, ok := tmp["level"]; ok {
-		return val
-	}
-	return ""
-}
-
-func labelsKey(m map[string]string) string {
-	var b bytes.Buffer
-	first := true
-	for k, v := range m {
-		if !first {
-			b.WriteByte('|')
-		}
-		b.WriteString(k)
-		b.WriteByte('=')
-		b.WriteString(v)
-		first = false
-	}
-	return b.String()
-}
-
 func (w *LokiWriter) Write(p []byte) (n int, err error) {
-	level := parseLevel(p)
-	ts := fmt.Sprintf("%d", time.Now().UnixNano())
+	// deserialize json from log entity
+	var jsonMap map[string]any
+	if err := json.Unmarshal(p, &jsonMap); err != nil {
+		return 0, fmt.Errorf("error unmarshalling json while loki write: %v", err)
+	}
+
+	// extract level string
+	var level string
+	switch jsonMap[LogLevelKey].(type) {
+	case string:
+		level = jsonMap[LogLevelKey].(string)
+	default:
+		_, err := fmt.Fprintf(os.Stderr, "invalid log level json type (expected string): %v", jsonMap[LogLevelKey])
+		if err != nil {
+			return 0, err
+		}
+		return 0, fmt.Errorf("invalid log level json type (expected string): %v", jsonMap[LogLevelKey])
+	}
+	if level == "" {
+		return 0, errors.New("loki log level missing")
+	}
+
+	// extract timestamp
+	var tsStr string
+	switch jsonMap[TimestampKey].(type) {
+	case string:
+		tsStr = jsonMap[TimestampKey].(string)
+	default:
+		_, err := fmt.Fprintf(os.Stderr, "invalid timestamp json type (expected string): %v", jsonMap[TimestampKey])
+		if err != nil {
+			return 0, err
+		}
+		return 0, fmt.Errorf("invalid timestamp json type (expected string): %v", jsonMap[TimestampKey])
+	}
+	// need to parse timestamp into Unix epoch nanoseconds format (loki api requirement)
+	ts, err := parseToUnixNano(tsStr)
+	if err != nil {
+		return 0, err
+	}
+
+	// create string of entire log entity (serialized json string)
 	line := string(bytes.TrimSpace(p))
 
-	label := make(map[string]string, len(w.fixedLabels)+1)
+	// add log level to the key value
+	label := make(StaticLabel, len(w.fixedLabels)+1)
 	maps.Copy(label, w.fixedLabels)
-	if level != "" {
-		label["level"] = level
+	label[LogLevelKey] = level
+
+	// serialize key labels
+	urlEncoderBuf := url.Values{}
+	for k, v := range label {
+		urlEncoderBuf.Set(k, v)
 	}
+	key := urlEncoderBuf.Encode()
 
-	key := labelsKey(label)
-
+	// add to buffer
 	w.mu.Lock()
-	w.buf[key] = append(w.buf[key], [2]string{ts, line})
+	w.buf[key] = append(w.buf[key], LogLine{ts.IfValidGet(fmt.Sprintf("%d", time.Now().UnixNano())), line})
 	needFlush := len(w.buf[key]) >= w.batchSize
 	w.mu.Unlock()
 
+	// flush if necessary
 	if needFlush {
-		w.flushAll()
-		w.timer.Reset(w.batchFlushPeriod)
+		select {
+		case w.flush <- struct{}{}:
+		default:
+		}
 	}
 	return len(p), nil
 }

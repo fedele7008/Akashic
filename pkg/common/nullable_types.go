@@ -42,3 +42,7 @@ func (n Nullable[T]) IfNullSet(val T) Nullable[T] {
 func MakeNullable[T any](val T) Nullable[T] {
 	return Nullable[T]{}.Set(val)
 }
+
+func EmptyNullable[T any]() Nullable[T] {
+	return Nullable[T]{}
+}

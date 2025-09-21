@@ -20,12 +20,12 @@ type Logger struct {
 
 func consoleEncoderConfig() zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
-		TimeKey:       "timestamp",
-		LevelKey:      "level",
-		NameKey:       "logger",
-		CallerKey:     "caller",
-		MessageKey:    "message",
-		StacktraceKey: "stacktrace",
+		TimeKey:       TimestampKey,
+		LevelKey:      LogLevelKey,
+		NameKey:       NameKey,
+		CallerKey:     CallerKey,
+		MessageKey:    MessageKey,
+		StacktraceKey: StacktraceKey,
 		LineEnding:    zapcore.DefaultLineEnding,
 		EncodeLevel:   zapcore.CapitalLevelEncoder,
 		EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {

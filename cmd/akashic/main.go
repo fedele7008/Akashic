@@ -106,7 +106,7 @@ func main() {
 	}
 	defer loggerCloseFn()
 
-	for i := 0; i < 3000; i++ {
+	for i := 0; i < 1; i++ {
 		logger.App.Debug("App debug log", zap.Int("some-key", 123))
 		logger.App.Info("App info log", zap.String("some-key", "some-value"))
 		logger.App.Warn("App warning log", zap.Error(err))
