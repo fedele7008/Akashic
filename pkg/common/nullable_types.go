@@ -7,7 +7,7 @@ type Nullable[T any] struct {
 
 func (n Nullable[T]) Get() (val T, ok bool) {
 	ok = n.Valid
-	val = ternary(n.Valid, n.Value, func() T { var v T; return v }())
+	val = Ternary(n.Valid, n.Value, func() T { var v T; return v }())
 	return
 }
 
@@ -29,7 +29,7 @@ func (n Nullable[T]) IsValid() bool {
 }
 
 func (n Nullable[T]) IfValidGet(fallback T) T {
-	return ternary(n.Valid, n.Value, fallback)
+	return Ternary(n.Valid, n.Value, fallback)
 }
 
 func (n Nullable[T]) IfNullSet(val T) Nullable[T] {

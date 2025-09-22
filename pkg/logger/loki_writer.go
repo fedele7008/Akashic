@@ -1,6 +1,7 @@
 package logger
 
 import (
+	"akashic/akashic/pkg/common"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -32,13 +33,14 @@ type LokiWriter struct {
 	retryMaxBackoff  time.Duration
 	compress         bool
 
-	mu     sync.Mutex
-	buf    map[string]LogLists // buf[streamKeyStr] = [..., [timestamp, line], ...]
-	timer  *time.Timer
-	quit   chan struct{}
-	flush  chan struct{}
-	wg     sync.WaitGroup
-	client *http.Client
+	mu      sync.Mutex
+	buf     map[string]LogLists // buf[streamKeyStr] = [..., [timestamp, line], ...]
+	timer   *time.Timer
+	quit    chan struct{}
+	flush   chan struct{}
+	wg      sync.WaitGroup
+	breaker *common.Breaker
+	client  *http.Client
 }
 
 type stream struct {
@@ -157,6 +159,9 @@ func (w *LokiWriter) pushWithRetry(payload map[string]any) error {
 }
 
 func (w *LokiWriter) flushAll() {
+	if !w.breaker.Allow() {
+		return
+	}
 	payload, err := buildPayloadAndReset(&w.mu, w.buf)
 	if err != nil {
 		_, _ = fmt.Fprintf(os.Stderr, "LokiWriter failed to build payload: %v\n", err)
@@ -166,7 +171,10 @@ func (w *LokiWriter) flushAll() {
 	}
 	err = w.pushWithRetry(payload)
 	if err != nil {
+		w.breaker.OnFail()
 		_, _ = fmt.Fprintf(os.Stderr, "LokiWriter flush error: %v\n", err)
+	} else {
+		w.breaker.OnSuccess()
 	}
 }
 
@@ -204,12 +212,13 @@ func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (*LokiWriter, error
 		retryMaxBackoff:  time.Duration(ifZero(cfg.RetryMaxBackoffMs, DefaultRetryMaxBackoffMs)) * time.Millisecond,
 		compress:         cfg.Compress.IfValidGet(DefaultCompress),
 
-		mu:     sync.Mutex{},
-		buf:    make(map[string]LogLists),
-		timer:  nil,
-		quit:   make(chan struct{}),
-		flush:  make(chan struct{}, 1),
-		client: &http.Client{Timeout: time.Duration(DefaultClientTimeoutSec) * time.Second},
+		mu:      sync.Mutex{},
+		buf:     make(map[string]LogLists),
+		timer:   nil,
+		quit:    make(chan struct{}),
+		flush:   make(chan struct{}, 1),
+		breaker: common.NewBreaker(1, 5*time.Second),
+		client:  &http.Client{Timeout: time.Duration(DefaultClientTimeoutSec) * time.Second},
 	}
 	w.timer = time.NewTimer(w.batchFlushPeriod)
 	w.wg.Add(1)

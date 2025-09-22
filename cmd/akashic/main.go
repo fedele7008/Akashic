@@ -3,6 +3,7 @@ package main
 import (
 	"akashic/akashic/pkg/common"
 	"akashic/akashic/pkg/logger"
+	"time"
 
 	"go.uber.org/zap"
 )
@@ -106,20 +107,18 @@ func main() {
 	}
 	defer loggerCloseFn()
 
-	for i := 0; i < 1; i++ {
+	for i := 0; true; i++ {
+		time.Sleep(500 * time.Millisecond)
 		logger.App.Debug("App debug log", zap.Int("some-key", 123))
 		logger.App.Info("App info log", zap.String("some-key", "some-value"))
-		logger.App.Warn("App warning log", zap.Error(err))
-		logger.App.Error("App error log", zap.Int("some-key", 456))
 
-		logger.Security.Debug("Security debug log", zap.Int("some-key", 123))
-		logger.Security.Info("Security info log", zap.String("some-key", "some-value"))
-		logger.Security.Warn("Security warning log", zap.Error(err))
-		logger.Security.Error("Security error log", zap.Int("some-key", 456))
-
-		logger.Audit.Debug("Audit debug log", zap.Int("some-key", 123))
-		logger.Audit.Info("Audit info log", zap.String("some-key", "some-value"))
-		logger.Audit.Warn("Audit warning log", zap.Error(err))
-		logger.Audit.Error("Audit error log", zap.Int("some-key", 456))
+		//logger.Security.Debug("Security debug log", zap.Int("some-key", 123))
+		//logger.Security.Info("Security info log", zap.String("some-key", "some-value"))
+		//
+		//logger.Audit.Debug("Audit debug log", zap.Int("some-key", 123))
+		//logger.Audit.Info("Audit info log", zap.String("some-key", "some-value"))
+	}
+	for {
+		time.Sleep(1 * time.Second)
 	}
 }

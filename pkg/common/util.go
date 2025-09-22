@@ -1,6 +1,6 @@
 package common
 
-func ternary[T any](cond bool, caseTrue, caseFalse T) T {
+func Ternary[T any](cond bool, caseTrue, caseFalse T) T {
 	if cond {
 		return caseTrue
 	}
