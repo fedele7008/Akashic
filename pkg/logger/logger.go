@@ -29,10 +29,11 @@ func consoleEncoderConfig() zapcore.EncoderConfig {
 		LineEnding:    zapcore.DefaultLineEnding,
 		EncodeLevel:   zapcore.CapitalLevelEncoder,
 		EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(t.UTC().Format(time.RFC3339))
+			enc.AppendString(t.UTC().Format(time.UnixDate))
 		},
-		EncodeDuration: zapcore.StringDurationEncoder,
-		EncodeCaller:   zapcore.ShortCallerEncoder,
+		EncodeDuration:   zapcore.StringDurationEncoder,
+		EncodeCaller:     zapcore.ShortCallerEncoder,
+		ConsoleSeparator: " ",
 	}
 }
 
@@ -184,7 +185,7 @@ func New(cfg *Config) (logger *Logger, closeFn func(), err error) {
 		return nil, nil, fmt.Errorf("audit channel: %w", err)
 	}
 
-	app := zap.New(appCore)
+	app := zap.New(appCore, zap.AddCaller(), zap.AddStacktrace(levelToEnabler(LevelError)))
 	security := zap.New(securityCore)
 	audit := zap.New(auditCore)
 

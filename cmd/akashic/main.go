@@ -111,6 +111,7 @@ func main() {
 		time.Sleep(500 * time.Millisecond)
 		logger.App.Debug("App debug log", zap.Int("some-key", 123))
 		logger.App.Info("App info log", zap.String("some-key", "some-value"))
+		logger.App.Error("App error log", zap.String("some-key", "some-value error"))
 
 		//logger.Security.Debug("Security debug log", zap.Int("some-key", 123))
 		//logger.Security.Info("Security info log", zap.String("some-key", "some-value"))
