@@ -24,6 +24,7 @@ type Logger struct {
 	Security         *zap.Logger
 	Audit            *zap.Logger
 	ForceAuditAppend bool
+	closerFns        map[Channel][]io.Closer
 }
 
 func consoleEncoderConfig(encConfig *EncoderConfig) zapcore.EncoderConfig {
@@ -217,6 +218,7 @@ func New(cfg *Config) (logger *Logger, closeFn func(), err error) {
 		Security:         nil,
 		Audit:            nil,
 		ForceAuditAppend: config.ForceAuditAppend.GetOrDefault(),
+		closerFns:        make(map[Channel][]io.Closer),
 	}
 	consoleEnc := zapcore.NewConsoleEncoder(consoleEncoderConfig(&logger.LoggerConfig.EncoderConfig))
 	jsonEnc := zapcore.NewJSONEncoder(jsonEncoderConfig(&logger.LoggerConfig.EncoderConfig))
@@ -225,14 +227,19 @@ func New(cfg *Config) (logger *Logger, closeFn func(), err error) {
 	if err != nil {
 		return nil, nil, err
 	}
+	logger.closerFns[ChannelApp] = appCloser
+
 	securityCore, securityCloser, err := buildChannelCore(logger.LoggerConfig, ChannelSecurity, &consoleEnc, &jsonEnc)
 	if err != nil {
 		return nil, nil, err
 	}
+	logger.closerFns[ChannelSecurity] = securityCloser
+
 	auditCore, auditCloser, err := buildChannelCore(logger.LoggerConfig, ChannelAudit, &consoleEnc, &jsonEnc)
 	if err != nil {
 		return nil, nil, err
 	}
+	logger.closerFns[ChannelAudit] = auditCloser
 
 	logger.appOriginal = zap.New(appCore)
 	logger.securityOriginal = zap.New(securityCore)
@@ -250,10 +257,30 @@ func New(cfg *Config) (logger *Logger, closeFn func(), err error) {
 		_ = logger.appOriginal.Sync()
 		_ = logger.securityOriginal.Sync()
 		_ = logger.auditOriginal.Sync()
-		for _, closer := range append(append(appCloser, securityCloser...), auditCloser...) {
-			_ = closer.Close()
+		for _, closerList := range logger.closerFns {
+			if closerList != nil {
+				for _, closer := range closerList {
+					closerErr := closer.Close()
+					if closerErr != nil {
+						_, _ = fmt.Fprintf(os.Stderr, "closer error: %v", closerErr)
+					}
+				}
+			}
 		}
 	}
 	err = nil
 	return
+}
+
+func (logger *Logger) Reconfigure(cfg *Config) error {
+	if err := cfg.FillDefaults(); err != nil {
+		return err
+	}
+	oldConfig := logger.LoggerConfig
+	newConfig := cfg.Clone()
+
+	if oldConfig.Service != newConfig.Service {
+
+	}
+	return nil
 }

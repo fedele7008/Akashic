@@ -281,6 +281,10 @@ func (w *LokiWriter) Write(p []byte) (n int, err error) {
 }
 
 func (w *LokiWriter) Sync() error {
+	select {
+	case w.flush <- struct{}{}:
+	default:
+	}
 	return nil
 }
 

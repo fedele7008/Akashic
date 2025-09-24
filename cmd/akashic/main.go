@@ -11,86 +11,6 @@ import (
 func main() {
 	// TODO: Make all config to have default values
 	lokiUrl := "http://localhost:3100/loki/api/v1/push"
-	//logCfg := &logging.Config{
-	//	Service: "akashic",
-	//	Env:     "dev",
-	//	App: logging.ChannelConfig{
-	//		Enabled: common.MakeNullable(true),
-	//		Sinks: []logging.SinkConfig{
-	//			{
-	//				Type:   logging.SinkStdout,
-	//				Level:  logging.LevelInfo,
-	//				Format: logging.FormatText,
-	//			},
-	//			{
-	//				Type:       logging.SinkFile,
-	//				Level:      logging.LevelDebug,
-	//				Format:     logging.FormatText,
-	//				FilePath:   "logs/app.log",
-	//				FileMode:   logging.FileRolling,
-	//				MaxSizeMB:  100,
-	//				MaxBackups: 3,
-	//			},
-	//			{
-	//				Type:     logging.SinkLoki,
-	//				Level:    logging.LevelDebug,
-	//				LokiURL:  lokiUrl,
-	//				Compress: common.MakeNullable(false),
-	//			},
-	//		},
-	//	},
-	//	Security: logging.ChannelConfig{
-	//		Enabled: common.MakeNullable(true),
-	//		Sinks: []logging.SinkConfig{
-	//			{
-	//				Type:   logging.SinkStdout,
-	//				Level:  logging.LevelInfo,
-	//				Format: logging.FormatText,
-	//			},
-	//			{
-	//				Type:       logging.SinkFile,
-	//				Level:      logging.LevelDebug,
-	//				Format:     logging.FormatText,
-	//				FilePath:   "logs/security.log",
-	//				FileMode:   logging.FileRolling,
-	//				MaxSizeMB:  1,
-	//				MaxBackups: 1,
-	//			},
-	//			{
-	//				Type:     logging.SinkLoki,
-	//				Level:    logging.LevelDebug,
-	//				LokiURL:  lokiUrl,
-	//				Compress: common.MakeNullable(true),
-	//			},
-	//		},
-	//	},
-	//	Audit: logging.ChannelConfig{
-	//		Enabled: common.MakeNullable(true),
-	//		Sinks: []logging.SinkConfig{
-	//			{
-	//				Type:   logging.SinkStdout,
-	//				Level:  logging.LevelInfo,
-	//				Format: logging.FormatText,
-	//			},
-	//			{
-	//				Type:       logging.SinkFile,
-	//				Level:      logging.LevelDebug,
-	//				Format:     logging.FormatText,
-	//				FilePath:   "logs/audit.log",
-	//				FileMode:   logging.FileRolling,
-	//				MaxSizeMB:  100,
-	//				MaxBackups: 3,
-	//			},
-	//			{
-	//				Type:     logging.SinkLoki,
-	//				Level:    logging.LevelDebug,
-	//				LokiURL:  lokiUrl,
-	//				Compress: common.MakeNullable(true),
-	//			},
-	//		},
-	//	},
-	//	ForceAuditAppend: common.MakeNullable(true),
-	//}
 	logCfg := logging.GetConfig("akashic", "dev")
 	if logCfg == nil {
 		return
@@ -130,17 +50,17 @@ func main() {
 	}
 	defer loggerCloseFn()
 
-	for i := 0; true; i++ {
+	for i := 0; i < 1; i++ {
 		time.Sleep(500 * time.Millisecond)
 		logger.App.Debug(fmt.Sprintf("App %v", i), zap.Int("some-key", 123))
 		logger.App.Info(fmt.Sprintf("App %v", i), zap.String("some-key", "some-value"))
 		logger.App.Error(fmt.Sprintf("App %v", i), zap.String("some-key", "some-value error"))
 
-		//logging.Security.Debug("Security debug log", zap.Int("some-key", 123))
-		//logging.Security.Info("Security info log", zap.String("some-key", "some-value"))
-		//
-		//logging.Audit.Debug("Audit debug log", zap.Int("some-key", 123))
-		//logging.Audit.Info("Audit info log", zap.String("some-key", "some-value"))
+		logger.Security.Debug("Security debug log", zap.Int("some-key", 123))
+		logger.Security.Info("Security info log", zap.String("some-key", "some-value"))
+
+		logger.Audit.Debug("Audit debug log", zap.Int("some-key", 123))
+		logger.Audit.Info("Audit info log", zap.String("some-key", "some-value"))
 	}
 	// for {
 	// 	time.Sleep(1 * time.Second)
