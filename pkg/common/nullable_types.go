@@ -11,6 +11,11 @@ func (n Nullable[T]) Get() (val T, ok bool) {
 	return
 }
 
+func (n Nullable[T]) GetOrDefault() T {
+	val, _ := n.Get()
+	return val
+}
+
 func (n Nullable[T]) Set(val T) Nullable[T] {
 	n.Valid = true
 	n.Value = val

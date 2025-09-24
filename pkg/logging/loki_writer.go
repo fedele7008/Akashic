@@ -1,4 +1,4 @@
-package logger
+package logging
 
 import (
 	"akashic/akashic/pkg/common"
@@ -195,21 +195,21 @@ func (w *LokiWriter) flushLoop() {
 	}
 }
 
-func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (*LokiWriter, error) {
-	if cfg.LokiURL == "" {
+func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (io.WriteCloser, error) {
+	if cfg.LokiURL.GetOrDefault() == "" {
 		return nil, fmt.Errorf("SinkConfig missing loki_url")
 	}
 	w := &LokiWriter{
-		url:         cfg.LokiURL,
-		user:        cfg.BasicAuthUser,
-		pass:        cfg.BasicAuthPass,
+		url:         cfg.LokiURL.GetOrDefault(),
+		user:        cfg.BasicAuthUser.GetOrDefault(),
+		pass:        cfg.BasicAuthPass.GetOrDefault(),
 		fixedLabels: fixedLabels,
 
-		batchSize:        ifZero(cfg.BatchSize, DefaultBatchSize),
-		batchFlushPeriod: time.Duration(ifZero(cfg.BatchFlushPeriodMs, DefaultBatchFlushPeriodMs)) * time.Millisecond,
-		retryMaxCount:    cfg.RetryMaxCount.IfValidGet(DefaultRetryMaxCount),
-		retryMinBackoff:  time.Duration(ifZero(cfg.RetryMinBackoffMs, DefaultRetryMinBackoffMs)) * time.Millisecond,
-		retryMaxBackoff:  time.Duration(ifZero(cfg.RetryMaxBackoffMs, DefaultRetryMaxBackoffMs)) * time.Millisecond,
+		batchSize:        ifZero(cfg.BatchSize.GetOrDefault(), DefaultBatchSize),
+		batchFlushPeriod: time.Duration(ifZero(cfg.BatchFlushPeriodMs.GetOrDefault(), DefaultBatchFlushPeriodMs)) * time.Millisecond,
+		retryMaxCount:    ifZero(cfg.RetryMaxCount.GetOrDefault(), DefaultRetryMaxCount),
+		retryMinBackoff:  time.Duration(ifZero(cfg.RetryMinBackoffMs.GetOrDefault(), DefaultRetryMinBackoffMs)) * time.Millisecond,
+		retryMaxBackoff:  time.Duration(ifZero(cfg.RetryMaxBackoffMs.GetOrDefault(), DefaultRetryMaxBackoffMs)) * time.Millisecond,
 		compress:         cfg.Compress.IfValidGet(DefaultCompress),
 
 		mu:      sync.Mutex{},
@@ -217,8 +217,8 @@ func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (*LokiWriter, error
 		timer:   nil,
 		quit:    make(chan struct{}),
 		flush:   make(chan struct{}, 1),
-		breaker: common.NewBreaker(1, 5*time.Second),
-		client:  &http.Client{Timeout: time.Duration(DefaultClientTimeoutSec) * time.Second},
+		breaker: common.NewBreaker(cfg.BreakerMaxRetries.GetOrDefault(), time.Duration(cfg.BreakerCooldownMs.GetOrDefault())*time.Millisecond),
+		client:  &http.Client{Timeout: time.Duration(cfg.ClientTimeoutMs.GetOrDefault()) * time.Millisecond},
 	}
 	w.timer = time.NewTimer(w.batchFlushPeriod)
 	w.wg.Add(1)
@@ -229,42 +229,24 @@ func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (*LokiWriter, error
 func (w *LokiWriter) Write(p []byte) (n int, err error) {
 	// deserialize json from log entity
 	var jsonMap map[string]any
-	if err := json.Unmarshal(p, &jsonMap); err != nil {
+	if err = json.Unmarshal(p, &jsonMap); err != nil {
 		return 0, fmt.Errorf("error unmarshalling json while loki write: %v", err)
 	}
 
 	// extract level string
 	var level string
-	switch jsonMap[LogLevelKey].(type) {
+	switch jsonMap[DefaultLogLevelKey].(type) {
 	case string:
-		level = jsonMap[LogLevelKey].(string)
+		level = jsonMap[DefaultLogLevelKey].(string)
 	default:
-		_, err := fmt.Fprintf(os.Stderr, "invalid log level json type (expected string): %v", jsonMap[LogLevelKey])
+		_, err = fmt.Fprintf(os.Stderr, "invalid log level json type (expected string): %v", jsonMap[DefaultLogLevelKey])
 		if err != nil {
 			return 0, err
 		}
-		return 0, fmt.Errorf("invalid log level json type (expected string): %v", jsonMap[LogLevelKey])
+		return 0, fmt.Errorf("invalid log level json type (expected string): %v", jsonMap[DefaultLogLevelKey])
 	}
 	if level == "" {
 		return 0, errors.New("loki log level missing")
-	}
-
-	// extract timestamp
-	var tsStr string
-	switch jsonMap[TimestampKey].(type) {
-	case string:
-		tsStr = jsonMap[TimestampKey].(string)
-	default:
-		_, err := fmt.Fprintf(os.Stderr, "invalid timestamp json type (expected string): %v", jsonMap[TimestampKey])
-		if err != nil {
-			return 0, err
-		}
-		return 0, fmt.Errorf("invalid timestamp json type (expected string): %v", jsonMap[TimestampKey])
-	}
-	// need to parse timestamp into Unix epoch nanoseconds format (loki api requirement)
-	ts, err := parseToUnixNano(tsStr)
-	if err != nil {
-		return 0, err
 	}
 
 	// create string of entire log entity (serialized json string)
@@ -273,7 +255,7 @@ func (w *LokiWriter) Write(p []byte) (n int, err error) {
 	// add log level to the key value
 	label := make(StaticLabel, len(w.fixedLabels)+1)
 	maps.Copy(label, w.fixedLabels)
-	label[LogLevelKey] = level
+	label[DefaultLogLevelKey] = level
 
 	// serialize key labels
 	urlEncoderBuf := url.Values{}
@@ -284,7 +266,7 @@ func (w *LokiWriter) Write(p []byte) (n int, err error) {
 
 	// add to buffer
 	w.mu.Lock()
-	w.buf[key] = append(w.buf[key], LogLine{ts.IfValidGet(fmt.Sprintf("%d", time.Now().UnixNano())), line})
+	w.buf[key] = append(w.buf[key], LogLine{fmt.Sprintf("%d", time.Now().UnixNano()), line})
 	needFlush := len(w.buf[key]) >= w.batchSize
 	w.mu.Unlock()
 

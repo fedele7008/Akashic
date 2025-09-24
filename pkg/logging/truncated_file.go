@@ -1,4 +1,4 @@
-package logger
+package logging
 
 import (
 	"io"
@@ -7,20 +7,20 @@ import (
 	"sync"
 )
 
-type AppendingFileWriter struct {
+type TruncatedFileWriter struct {
 	FileWriter
 }
 
-func (w *AppendingFileWriter) Write(p []byte) (n int, err error) {
+func (w *TruncatedFileWriter) Write(p []byte) (n int, err error) {
 	return w.FileWriter.Write(p)
 }
 
-func (w *AppendingFileWriter) Close() error {
+func (w *TruncatedFileWriter) Close() error {
 	return w.FileWriter.Close()
 }
 
-func NewAppendingFileWriter(path string) (io.WriteCloser, error) {
-	w := &AppendingFileWriter{
+func NewTruncatedFileWriter(path string) (io.WriteCloser, error) {
+	w := &TruncatedFileWriter{
 		FileWriter: FileWriter{
 			mu:   sync.Mutex{},
 			path: path,
@@ -35,7 +35,7 @@ func NewAppendingFileWriter(path string) (io.WriteCloser, error) {
 		return nil, err
 	}
 
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		return nil, err
 	}
