@@ -1,0 +1,81 @@
+# Akashic Configuration - Simplified for Current Stage
+# Only essential configurations for logging, database, and sessions
+
+server:
+  auth:
+    host: "0.0.0.0"
+    port: 8080
+  control:
+    host: "127.0.0.1"
+    port: 8081
+    tls:
+      enabled: true
+      cert_file: "./certs/server.crt"
+      key_file: "./certs/server.key"
+      ca_file: "./certs/ca.crt"
+      client_auth_required: true
+
+database:
+  postgres:
+    host: "localhost"
+    port: 5432
+    database: "akashic"
+    username: "akashic_user"
+    password: "${POSTGRES_PASSWORD}"
+    ssl_mode: "require"
+    max_connections: 100
+    max_idle_connections: 10
+    connection_lifetime: "1h"
+  redis:
+    host: "localhost"
+    port: 6379
+    password: "${REDIS_PASSWORD}"
+    db: 0
+    pool_size: 10
+    session_ttl: "24h"
+    cache_ttl: "1h"
+
+session:
+  timeout: "30m"
+  secure_cookies: true
+  same_site: "Strict"
+  cookie_name: "akashic_session"
+  cookie_path: "/"
+
+logging:
+  service_name: "akashic"
+  env: "development"
+  channel:
+    enabled: true
+    show_caller: true
+    show_stacktrace: true
+    stacktrace_level: 2
+    sinks:
+      - type: 0  # stdout
+        enabled: true
+        level: 1  # info
+        format: 1  # json
+  security:
+    enabled: true
+    show_caller: true
+    show_stacktrace: true
+    stacktrace_level: 2
+    sinks:
+      - type: 0  # stdout
+        enabled: true
+        level: 1  # info
+        format: 1  # json
+  audit:
+    enabled: true
+    show_caller: true
+    show_stacktrace: true
+    stacktrace_level: 2
+    sinks:
+      - type: 0  # stdout
+        enabled: true
+        level: 1  # info
+        format: 1  # json
+
+deployment:
+  environment: "development"  # development, staging, production
+  debug: true
