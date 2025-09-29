@@ -13,7 +13,6 @@ import (
 	"akashic/akashic/pkg/logging"
 
 	"go.uber.org/zap"
-
 	"gopkg.in/yaml.v3"
 )
 
