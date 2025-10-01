@@ -1,6 +1,3 @@
-# Akashic Configuration - Simplified for Current Stage
-# Only essential configurations for logging, database, and sessions
-
 server:
   auth:
     host: "0.0.0.0"
@@ -14,14 +11,13 @@ server:
       key_file: "./certs/server.key"
       ca_file: "./certs/ca.crt"
       client_auth_required: true
-
 database:
   postgres:
     host: "localhost"
-    port: 5432
-    database: "akashic"
-    username: "akashic_user"
-    password: "${POSTGRES_PASSWORD}"
+    port: ${AKASHIC_DATABASE_POSTGRES_HOST_PORT}
+    database: ${AKASHIC_DATABASE_POSTGRES_DB}
+    username: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
+    password: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
     ssl_mode: "require"
     max_connections: 100
     max_idle_connections: 10
@@ -29,53 +25,89 @@ database:
   redis:
     host: "localhost"
     port: 6379
-    password: "${REDIS_PASSWORD}"
+    password: ${AKASHIC_DATABASE_REDIS_PASSWORD}
     db: 0
     pool_size: 10
     session_ttl: "24h"
     cache_ttl: "1h"
-
 session:
   timeout: "30m"
   secure_cookies: true
   same_site: "Strict"
   cookie_name: "akashic_session"
   cookie_path: "/"
-
 logging:
   service_name: "akashic"
-  env: "development"
-  channel:
+  encoder:
+    timestamp_key: "timestamp"
+    time_format: "Mon Jan _2 15:04:05 MST 2006" # UnixDate
+    level_key: "level"
+    name_key: "logging"
+    caller_key: "caller"
+    message_key: "message"
+    stacktrace_key: "stacktrace"
+  app:
     enabled: true
     show_caller: true
     show_stacktrace: true
     stacktrace_level: 2
     sinks:
-      - type: 0  # stdout
+      - type: "stdout" # stdout, stderr, file, loki
         enabled: true
-        level: 1  # info
-        format: 1  # json
+        level: "debug" # debug, info, warn, error, fatal
+        format: "text" # json, text
+      - type: "file"
+        enabled: true
+        level: "debug"
+        format: "text"
+        file_path: "./logs/app.log"
+        file_mode: "rolling" # append, truncate, rolling
+      - type: "loki"
+        enabled: true
+        level: "debug"
+        loki_url: "${AKASHIC_LOKI_API_URL}"
+        compress: true
   security:
     enabled: true
     show_caller: true
     show_stacktrace: true
     stacktrace_level: 2
     sinks:
-      - type: 0  # stdout
+      - type: "stdout" # stdout, stderr, file, loki
         enabled: true
-        level: 1  # info
-        format: 1  # json
+        level: "debug" # debug, info, warn, error, fatal
+        format: "text" # json, text
+      - type: "file"
+        enabled: true
+        level: "debug"
+        format: "text"
+        file_path: "./logs/security.log"
+        file_mode: "append" # append, truncate, rolling
+      - type: "loki"
+        enabled: true
+        level: "debug"
+        loki_url: "${AKASHIC_LOKI_API_URL}"
+        compress: true
   audit:
     enabled: true
     show_caller: true
     show_stacktrace: true
     stacktrace_level: 2
     sinks:
-      - type: 0  # stdout
+      - type: "stdout" # stdout, stderr, file, loki
         enabled: true
-        level: 1  # info
-        format: 1  # json
-
+        level: "debug" # debug, info, warn, error, fatal
+        format: "text" # json, text
+      - type: "file"
+        enabled: true
+        level: "debug"
+        format: "text"
+        file_path: "./logs/audit.log"
+        file_mode: "append" # append, truncate, rolling
+      - type: "loki"
+        enabled: true
+        level: "debug"
+        loki_url: "${AKASHIC_LOKI_API_URL}"
+        compress: true
 deployment:
   environment: "development"  # development, staging, production
-  debug: true

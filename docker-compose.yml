@@ -4,16 +4,16 @@ services:
     container_name: akashic-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
-      TZ: ${TZ}
+      POSTGRES_USER: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
+      TZ: ${AKASHIC_TZ}
     ports:
-      - "${POSTGRES_HOST_PORT:-5432}:5432"
+      - "${AKASHIC_DATABASE_POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1"]
+      test: ["CMD-SHELL", "pg_isready -U $${AKASHIC_DATABASE_POSTGRES_USERNAME} -d $${AKASHIC_DATABASE_POSTGRES_DB} || exit 1"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -26,15 +26,15 @@ services:
       sh -c "redis-server
       --appendonly yes
       --save 900 1 --save 300 10 --save 60 10000
-      --requirepass ${REDIS_PASSWORD}"
+      --requirepass ${AKASHIC_DATABASE_REDIS_PASSWORD}"
     environment:
-      TZ: ${TZ}
+      TZ: ${AKASHIC_TZ}
     ports:
-      - "${REDIS_HOST_PORT:-6379}:6379"
+      - "${AKASHIC_DATABASE_REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -49,7 +49,7 @@ services:
       - ./loki/config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
     ports:
-      - "${LOKI_HOST_PORT:-3100}:3100"
+      - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
     profiles:
       - obs
 
@@ -58,14 +58,14 @@ services:
     container_name: akashic-grafana
     restart: unless-stopped
     environment:
-      GF_SECURITY_ADMIN_USER: ${GF_SECURITY_ADMIN_USER:-admin}
-      GF_SECURITY_ADMIN_PASSWORD: ${GF_SECURITY_ADMIN_PASSWORD}
+      GF_SECURITY_ADMIN_USER: ${AKASHIC_GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${AKASHIC_GF_SECURITY_ADMIN_PASSWORD}
       GF_USERS_DEFAULT_THEME: light
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
     ports:
-      - "${GF_HOST_PORT:-3000}:3000"
+      - "${AKASHIC_GF_HOST_PORT:-3000}:3000"
     depends_on:
       - loki
     profiles:

@@ -40,6 +40,19 @@ const (
 	FileRolling
 )
 
+func ParseFileMode(s string) (FileMode, error) {
+	switch s {
+	case "append":
+		return FileAppend, nil
+	case "truncate":
+		return FileTruncate, nil
+	case "rolling":
+		return FileRolling, nil
+	default:
+		return FileMode(-1), fmt.Errorf("unknown file mode: %s", s)
+	}
+}
+
 type SinkType int
 
 const (
@@ -48,6 +61,21 @@ const (
 	SinkFile
 	SinkLoki
 )
+
+func ParseSinkType(s string) (SinkType, error) {
+	switch s {
+	case "stdout":
+		return SinkStdout, nil
+	case "stderr":
+		return SinkStderr, nil
+	case "file":
+		return SinkFile, nil
+	case "loki":
+		return SinkLoki, nil
+	default:
+		return -1, fmt.Errorf("unknown sink type: %s", s)
+	}
+}
 
 type Level int
 
@@ -59,12 +87,40 @@ const (
 	LevelFatal
 )
 
+func ParseLevel(s string) (Level, error) {
+	switch s {
+	case "debug":
+		return LevelDebug, nil
+	case "info":
+		return LevelInfo, nil
+	case "warn":
+		return LevelWarn, nil
+	case "error":
+		return LevelError, nil
+	case "fatal":
+		return LevelFatal, nil
+	default:
+		return LevelFatal, fmt.Errorf("unknown log level: %s", s)
+	}
+}
+
 type Format int
 
 const (
 	FormatText Format = iota
 	FormatJSON
 )
+
+func ParseFormat(s string) (Format, error) {
+	switch s {
+	case "text":
+		return FormatText, nil
+	case "json":
+		return FormatJSON, nil
+	default:
+		return FormatText, fmt.Errorf("unknown sink format: %s", s)
+	}
+}
 
 type Channel int
 
@@ -123,13 +179,13 @@ type SinkConfig struct {
 
 // EncoderConfig json encoder config
 type EncoderConfig struct {
-	TimestampKey  Optional[string]
-	TimeFormatKey Optional[string]
-	LevelKey      Optional[string]
-	NameKey       Optional[string]
-	CallerKey     Optional[string]
-	MessageKey    Optional[string]
-	StacktraceKey Optional[string]
+	TimestampKey  Optional[string] `mapstructure:"timestamp_key"`
+	TimeFormatKey Optional[string] `mapstructure:"time_format"`
+	LevelKey      Optional[string] `mapstructure:"level_key"`
+	NameKey       Optional[string] `mapstructure:"name_key"`
+	CallerKey     Optional[string] `mapstructure:"caller_key"`
+	MessageKey    Optional[string] `mapstructure:"message_key"`
+	StacktraceKey Optional[string] `mapstructure:"stacktrace_key"`
 }
 
 type ChannelConfig struct {
@@ -143,7 +199,7 @@ type ChannelConfig struct {
 type Config struct {
 	Service          Required[string] `mapstructure:"service_name"`
 	Env              Required[string] `mapstructure:"env"`
-	EncoderConfig    EncoderConfig    `mapstructure:"encoder_config"`
+	EncoderConfig    EncoderConfig    `mapstructure:"encoder"`
 	App              ChannelConfig    `mapstructure:"channel"`
 	Security         ChannelConfig    `mapstructure:"security"`
 	Audit            ChannelConfig    `mapstructure:"audit"`

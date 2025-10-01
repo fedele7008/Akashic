@@ -266,12 +266,10 @@ func New(cfg *Config) (logger *Logger, closeFn func(), err error) {
 		_ = logger.securityOriginal.Sync()
 		_ = logger.auditOriginal.Sync()
 		for _, closerList := range logger.closerFns {
-			if closerList != nil {
-				for _, closer := range closerList {
-					closerErr := closer.Close()
-					if closerErr != nil {
-						_, _ = fmt.Fprintf(os.Stderr, "closer error: %v", closerErr)
-					}
+			for _, closer := range closerList {
+				closerErr := closer.Close()
+				if closerErr != nil {
+					_, _ = fmt.Fprintf(os.Stderr, "closer error: %v", closerErr)
 				}
 			}
 		}
