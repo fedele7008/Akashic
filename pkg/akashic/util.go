@@ -1,0 +1,21 @@
+package akashic
+
+import (
+	"fmt"
+	"os"
+)
+
+// VerbosePrintlnf implements the app.VerbosePrinter interface
+func (app *AkashicApp) VerbosePrintlnf(format string, args ...any) {
+	if app.GetVerbose() {
+		fmt.Fprintf(os.Stderr, "[VERBOSE] "+format+"\n", args...)
+	}
+}
+
+func (app *AkashicApp) GetVerbose() bool {
+	return app.verbose
+}
+
+func (app *AkashicApp) SetVerbose(v bool) {
+	app.verbose = v
+}

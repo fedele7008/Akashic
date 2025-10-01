@@ -21,6 +21,7 @@ type AkashicApp struct {
 	Config    *config.ConfigManager
 	Logger    *logging.Logger
 	closerFns []func()
+	verbose   bool
 }
 
 func NewAkashicApp() *AkashicApp {
@@ -36,7 +37,8 @@ func NewAkashicApp() *AkashicApp {
 
 func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	var err error
-	app.Config, err = config.NewConfigManager(cmd)
+
+	app.Config, err = config.NewConfigManager(cmd, app)
 	if err != nil {
 		return fmt.Errorf("failed to initialize configuration: %v", err)
 	}
@@ -142,7 +144,7 @@ func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 		case <-app.ctx.Done():
 			app.Logger.App.Info("Shutdown signal received, stopping server")
 			if err := app.Close(); err != nil {
-				app.Config.VerbosePrintlnf("Error during shutdown: %v", err)
+				app.VerbosePrintlnf("Error during shutdown: %v", err)
 			}
 			fmt.Println("Graceful shutdown complete.")
 			return nil
