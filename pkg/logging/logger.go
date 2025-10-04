@@ -2,6 +2,7 @@ package logging
 
 import (
 	"akashic/akashic/pkg/common"
+	"akashic/akashic/pkg/config"
 	"fmt"
 	"io"
 	"maps"
@@ -18,28 +19,28 @@ type Logger struct {
 	appOriginal      *zap.Logger
 	securityOriginal *zap.Logger
 	auditOriginal    *zap.Logger
-	LoggerConfig     *Config
+	LoggerConfig     *config.LoggingConfig
 	ServiceName      string
 	ServiceEnv       string
 	App              *zap.Logger
 	Security         *zap.Logger
 	Audit            *zap.Logger
 	ForceAuditAppend bool
-	closerFns        map[Channel][]io.Closer
+	closerFns        map[string][]io.Closer
 }
 
-func consoleEncoderConfig(encConfig *EncoderConfig) zapcore.EncoderConfig {
+func consoleEncoderConfig(encConfig *config.EncoderConfig) zapcore.EncoderConfig {
 	return zapcore.EncoderConfig{
-		TimeKey:       encConfig.TimestampKey.GetOrDefault(),
-		LevelKey:      encConfig.LevelKey.GetOrDefault(),
-		NameKey:       encConfig.NameKey.GetOrDefault(),
-		CallerKey:     encConfig.CallerKey.GetOrDefault(),
-		MessageKey:    encConfig.MessageKey.GetOrDefault(),
-		StacktraceKey: encConfig.StacktraceKey.GetOrDefault(),
+		TimeKey:       encConfig.TimestampKey,
+		LevelKey:      encConfig.LevelKey,
+		NameKey:       encConfig.NameKey,
+		CallerKey:     encConfig.CallerKey,
+		MessageKey:    encConfig.MessageKey,
+		StacktraceKey: encConfig.StacktraceKey,
 		LineEnding:    zapcore.DefaultLineEnding,
 		EncodeLevel:   zapcore.CapitalLevelEncoder,
 		EncodeTime: func(t time.Time, enc zapcore.PrimitiveArrayEncoder) {
-			enc.AppendString(t.UTC().Format(encConfig.TimeFormatKey.GetOrDefault()))
+			enc.AppendString(t.UTC().Format(encConfig.TimeFormatKey))
 		},
 		EncodeDuration:   zapcore.StringDurationEncoder,
 		EncodeCaller:     zapcore.ShortCallerEncoder,
@@ -47,64 +48,64 @@ func consoleEncoderConfig(encConfig *EncoderConfig) zapcore.EncoderConfig {
 	}
 }
 
-func jsonEncoderConfig(encConfig *EncoderConfig) zapcore.EncoderConfig {
+func jsonEncoderConfig(encConfig *config.EncoderConfig) zapcore.EncoderConfig {
 	c := consoleEncoderConfig(encConfig)
 	c.EncodeLevel = zapcore.LowercaseLevelEncoder
 	return c
 }
 
-func openFileSink(sinkCfg *SinkConfig, isRebuild bool) (io.Writer, io.Closer, error) {
-	if sinkCfg.FilePath.GetOrDefault() == "" {
+func openFileSink(sinkCfg *config.SinkConfig, isRebuild bool) (io.Writer, io.Closer, error) {
+	if sinkCfg.FilePath == "" {
 		return nil, nil, fmt.Errorf("SinkConfig config missing file_path")
 	}
-	if err := os.MkdirAll(filepath.Dir(sinkCfg.FilePath.GetOrDefault()), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(sinkCfg.FilePath), 0o755); err != nil {
 		return nil, nil, err
 	}
-	switch sinkCfg.FileMode.GetOrDefault() {
-	case FileAppend:
-		w, err := NewAppendingFileWriter(sinkCfg.FilePath.GetOrDefault())
+	switch sinkCfg.FileMode {
+	case config.FileAppend:
+		w, err := NewAppendingFileWriter(sinkCfg.FilePath)
 		return w, w, err
-	case FileTruncate:
+	case config.FileTruncate:
 		if isRebuild {
-			w, err := NewAppendingFileWriter(sinkCfg.FilePath.GetOrDefault())
+			w, err := NewAppendingFileWriter(sinkCfg.FilePath)
 			return w, w, err
 		}
-		w, err := NewTruncatedFileWriter(sinkCfg.FilePath.GetOrDefault())
+		w, err := NewTruncatedFileWriter(sinkCfg.FilePath)
 		return w, w, err
-	case FileRolling:
-		w, err := NewRollingFileWriter(sinkCfg.FilePath.GetOrDefault(), sinkCfg.MaxSizeMB.GetOrDefault(), sinkCfg.MaxBackups.GetOrDefault())
+	case config.FileRolling:
+		w, err := NewRollingFileWriter(sinkCfg.FilePath, sinkCfg.MaxSizeMB, sinkCfg.MaxBackups)
 		return w, w, err
 	default:
-		return nil, nil, fmt.Errorf("unknown file mode: %v", sinkCfg.FileMode.GetOrDefault())
+		return nil, nil, fmt.Errorf("unknown file mode: %v", sinkCfg.FileMode)
 	}
 }
 
-func levelToEnabler(level Level) zapcore.LevelEnabler {
+func levelToEnabler(level config.Level) zapcore.LevelEnabler {
 	switch level {
-	case LevelDebug:
+	case config.LevelDebug:
 		return zap.DebugLevel
-	case LevelInfo:
+	case config.LevelInfo:
 		return zap.InfoLevel
-	case LevelWarn:
+	case config.LevelWarn:
 		return zap.WarnLevel
-	case LevelError:
+	case config.LevelError:
 		return zap.ErrorLevel
-	case LevelFatal:
+	case config.LevelFatal:
 		return zap.FatalLevel
 	default:
 		return zap.InfoLevel
 	}
 }
 
-func buildChannelCore(cfg *Config, ch Channel, consoleEnc, jsonEnc *zapcore.Encoder, isRebuild bool) (zapcore.Core, []io.Closer, error) {
+func buildChannelCore(cfg *config.LoggingConfig, ch config.Channel, consoleEnc, jsonEnc *zapcore.Encoder, isRebuild bool) (zapcore.Core, []io.Closer, error) {
 	// find channel config
-	var chCfg *ChannelConfig
+	var chCfg *config.ChannelConfig
 	switch ch {
-	case ChannelApp:
+	case config.ChannelApp:
 		chCfg = &cfg.App
-	case ChannelSecurity:
+	case config.ChannelSecurity:
 		chCfg = &cfg.Security
-	case ChannelAudit:
+	case config.ChannelAudit:
 		chCfg = &cfg.Audit
 	default:
 		return nil, nil, fmt.Errorf("unknown channel: %s", ch.String())
@@ -121,41 +122,40 @@ func buildChannelCore(cfg *Config, ch Channel, consoleEnc, jsonEnc *zapcore.Enco
 	for i := range chCfg.Sinks {
 		sinkCfg := &chCfg.Sinks[i]
 
-		if !sinkCfg.Enabled.GetOrDefault() {
+		if !sinkCfg.Enabled {
 			continue
 		}
-		enabler := levelToEnabler(sinkCfg.Level.IfValidGet(DefaultLevel))
+		enabler := levelToEnabler(sinkCfg.Level)
 
-		switch sinkCfg.Type.GetOrDefault() {
-		case SinkStdout:
+		switch sinkCfg.Type {
+		case config.SinkStdout:
 			var enc *zapcore.Encoder
-			switch sinkCfg.Format.GetOrDefault() {
-			case FormatText:
+			switch sinkCfg.Format {
+			case config.FormatText:
 				enc = consoleEnc
-			case FormatJSON:
+			case config.FormatJSON:
 				enc = jsonEnc
 			default:
-				return nil, nil, fmt.Errorf("%s: unknown sink format: %v", ch.String(), sinkCfg.Format.GetOrDefault())
+				return nil, nil, fmt.Errorf("%s: unknown sink format: %v", ch.String(), sinkCfg.Format)
 			}
 			cores = append(cores, zapcore.NewCore(*enc, zapcore.AddSync(os.Stdout), enabler))
-		case SinkStderr:
+		case config.SinkStderr:
 			var enc *zapcore.Encoder
-			switch sinkCfg.Format.GetOrDefault() {
-			case FormatText:
+			switch sinkCfg.Format {
+			case config.FormatText:
 				enc = consoleEnc
-			case FormatJSON:
+			case config.FormatJSON:
 				enc = jsonEnc
 			default:
-				return nil, nil, fmt.Errorf("%s: unknown sink format: %v", ch.String(), sinkCfg.Format.GetOrDefault())
+				return nil, nil, fmt.Errorf("%s: unknown sink format: %v", ch.String(), sinkCfg.Format)
 			}
 			cores = append(cores, zapcore.NewCore(*enc, zapcore.AddSync(os.Stderr), enabler))
-		case SinkFile:
-			if sinkCfg.FilePath.GetOrDefault() == "" {
-				return nil, nil, fmt.Errorf("%s: invalid file path: %v", ch.String(), sinkCfg.FilePath.GetOrDefault())
+		case config.SinkFile:
+			if sinkCfg.FilePath == "" {
+				return nil, nil, fmt.Errorf("%s: invalid file path: %v", ch.String(), sinkCfg.FilePath)
 			}
-			if ch == ChannelAudit && cfg.ForceAuditAppend.GetOrDefault() {
-				appendModeOpt := SetOptional[FileMode](FileAppend)
-				sinkCfg.FileMode = appendModeOpt
+			if ch == config.ChannelAudit && cfg.ForceAuditAppend {
+				sinkCfg.FileMode = config.FileAppend
 			}
 			writer, closer, err := openFileSink(sinkCfg, isRebuild)
 			if err != nil {
@@ -165,23 +165,23 @@ func buildChannelCore(cfg *Config, ch Channel, consoleEnc, jsonEnc *zapcore.Enco
 				closers = append(closers, closer)
 			}
 			var enc *zapcore.Encoder
-			switch sinkCfg.Format.GetOrDefault() {
-			case FormatText:
+			switch sinkCfg.Format {
+			case config.FormatText:
 				enc = consoleEnc
-			case FormatJSON:
+			case config.FormatJSON:
 				enc = jsonEnc
 			default:
-				return nil, nil, fmt.Errorf("%s: unknown sink format: %v", ch.String(), sinkCfg.Format.GetOrDefault())
+				return nil, nil, fmt.Errorf("%s: unknown sink format: %v", ch.String(), sinkCfg.Format)
 			}
 			cores = append(cores, zapcore.NewCore(*enc, zapcore.AddSync(writer), enabler))
-		case SinkLoki:
+		case config.SinkLoki:
 			// configure must have stream keys for Loki api
 			labels := map[string]string{
-				"service_name": cfg.Service.GetOrDefault(),
-				"env":          cfg.Env.GetOrDefault(),
+				"service_name": cfg.ServiceName,
+				"env":          cfg.Environment,
 				"channel":      ch.String(),
 			}
-			maps.Copy(labels, sinkCfg.LokiLabels.GetOrDefault())
+			maps.Copy(labels, sinkCfg.LokiLabels)
 			lokiWriter, err := NewLokiWriter(sinkCfg, labels)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %w", ch.String(), err)
@@ -189,76 +189,76 @@ func buildChannelCore(cfg *Config, ch Channel, consoleEnc, jsonEnc *zapcore.Enco
 			closers = append(closers, lokiWriter)
 			cores = append(cores, zapcore.NewCore(*jsonEnc, zapcore.AddSync(lokiWriter), enabler))
 		default:
-			return nil, nil, fmt.Errorf("%s: unknown sink type: %v", ch.String(), sinkCfg.Type.GetOrDefault())
+			return nil, nil, fmt.Errorf("%s: unknown sink type: %v", ch.String(), sinkCfg.Type)
 		}
 	}
 
 	return zapcore.NewTee(cores...), closers, nil
 }
 
-func attachOptions(logger *zap.Logger, chCfg *ChannelConfig) *zap.Logger {
+func attachOptions(logger *zap.Logger, chCfg *config.ChannelConfig) *zap.Logger {
 	var opts []zap.Option
-	if chCfg.ShowCaller.GetOrDefault() {
+	if chCfg.ShowCaller {
 		opts = append(opts, zap.AddCaller())
 	}
-	if chCfg.ShowStacktrace.GetOrDefault() {
-		lv := levelToEnabler(chCfg.StacktraceLevel.IfValidGet(DefaultStacktraceLevel))
+	if chCfg.ShowStacktrace {
+		lv := levelToEnabler(chCfg.StacktraceLevel)
 		opts = append(opts, zap.AddStacktrace(lv))
 	}
 	return logger.WithOptions(opts...)
 }
 
-func New(cfg *Config) (logger *Logger, closeFn func(), err error) {
-	// try to fill any undefined optional values
-	if err = cfg.FillDefaults(); err != nil {
+func New(cfg *config.LoggingConfig) (logger *Logger, closeFn func(), err error) {
+	// Configuration should be validated by the config manager before reaching here
+	if err = config.ValidateLoggingConfig(cfg); err != nil {
 		return nil, nil, err
 	}
 
-	config := cfg.Clone()
+	logConfig := cfg.Clone()
 
 	logger = &Logger{
 		appOriginal:      nil,
 		securityOriginal: nil,
 		auditOriginal:    nil,
-		LoggerConfig:     config,
-		ServiceName:      config.Service.GetOrDefault(),
-		ServiceEnv:       config.Env.GetOrDefault(),
+		LoggerConfig:     logConfig,
+		ServiceName:      logConfig.ServiceName,
+		ServiceEnv:       logConfig.Environment,
 		App:              nil,
 		Security:         nil,
 		Audit:            nil,
-		ForceAuditAppend: config.ForceAuditAppend.GetOrDefault(),
-		closerFns:        make(map[Channel][]io.Closer),
+		ForceAuditAppend: logConfig.ForceAuditAppend,
+		closerFns:        make(map[string][]io.Closer),
 	}
 	consoleEnc := zapcore.NewConsoleEncoder(consoleEncoderConfig(&logger.LoggerConfig.EncoderConfig))
 	jsonEnc := zapcore.NewJSONEncoder(jsonEncoderConfig(&logger.LoggerConfig.EncoderConfig))
 
-	appCore, appCloser, err := buildChannelCore(logger.LoggerConfig, ChannelApp, &consoleEnc, &jsonEnc, false)
+	appCore, appCloser, err := buildChannelCore(logger.LoggerConfig, config.ChannelApp, &consoleEnc, &jsonEnc, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	logger.closerFns[ChannelApp] = appCloser
+	logger.closerFns[config.ChannelApp.String()] = appCloser
 
-	securityCore, securityCloser, err := buildChannelCore(logger.LoggerConfig, ChannelSecurity, &consoleEnc, &jsonEnc, false)
+	securityCore, securityCloser, err := buildChannelCore(logger.LoggerConfig, config.ChannelSecurity, &consoleEnc, &jsonEnc, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	logger.closerFns[ChannelSecurity] = securityCloser
+	logger.closerFns[config.ChannelSecurity.String()] = securityCloser
 
-	auditCore, auditCloser, err := buildChannelCore(logger.LoggerConfig, ChannelAudit, &consoleEnc, &jsonEnc, false)
+	auditCore, auditCloser, err := buildChannelCore(logger.LoggerConfig, config.ChannelAudit, &consoleEnc, &jsonEnc, false)
 	if err != nil {
 		return nil, nil, err
 	}
-	logger.closerFns[ChannelAudit] = auditCloser
+	logger.closerFns[config.ChannelAudit.String()] = auditCloser
 
 	logger.appOriginal = zap.New(appCore)
 	logger.securityOriginal = zap.New(securityCore)
 	logger.auditOriginal = zap.New(auditCore)
 
-	logger.App = common.Ternary(logger.LoggerConfig.App.Enabled.GetOrDefault(),
+	logger.App = common.Ternary(logger.LoggerConfig.App.Enabled,
 		attachOptions(logger.appOriginal, &logger.LoggerConfig.App), zap.NewNop())
-	logger.Security = common.Ternary(logger.LoggerConfig.Security.Enabled.GetOrDefault(),
+	logger.Security = common.Ternary(logger.LoggerConfig.Security.Enabled,
 		attachOptions(logger.securityOriginal, &logger.LoggerConfig.Security), zap.NewNop())
-	logger.Audit = common.Ternary(logger.LoggerConfig.Audit.Enabled.GetOrDefault(),
+	logger.Audit = common.Ternary(logger.LoggerConfig.Audit.Enabled,
 		attachOptions(logger.auditOriginal, &logger.LoggerConfig.Audit), zap.NewNop())
 
 	closeFn = func() {
@@ -278,34 +278,34 @@ func New(cfg *Config) (logger *Logger, closeFn func(), err error) {
 	return
 }
 
-func (logger *Logger) Reconfigure(cfg *Config) error {
-	if err := cfg.FillDefaults(); err != nil {
+func (logger *Logger) Reconfigure(cfg *config.LoggingConfig) error {
+	if err := config.ValidateLoggingConfig(cfg); err != nil {
 		return err
 	}
 	oldConfig := logger.LoggerConfig
 	newConfig := cfg.Clone()
 
-	channelConfigs := map[Channel]*ChannelConfig{
-		ChannelApp:      &oldConfig.App,
-		ChannelSecurity: &oldConfig.Security,
-		ChannelAudit:    &oldConfig.Audit,
+	channelConfigs := map[config.Channel]*config.ChannelConfig{
+		config.ChannelApp:      &oldConfig.App,
+		config.ChannelSecurity: &oldConfig.Security,
+		config.ChannelAudit:    &oldConfig.Audit,
 	}
-	newChannelConfigs := map[Channel]*ChannelConfig{
-		ChannelApp:      &newConfig.App,
-		ChannelSecurity: &newConfig.Security,
-		ChannelAudit:    &newConfig.Audit,
+	newChannelConfigs := map[config.Channel]*config.ChannelConfig{
+		config.ChannelApp:      &newConfig.App,
+		config.ChannelSecurity: &newConfig.Security,
+		config.ChannelAudit:    &newConfig.Audit,
 	}
-	rebuildRequired := map[Channel]bool{
-		ChannelApp:      false,
-		ChannelSecurity: false,
-		ChannelAudit:    false,
+	rebuildRequired := map[config.Channel]bool{
+		config.ChannelApp:      false,
+		config.ChannelSecurity: false,
+		config.ChannelAudit:    false,
 	}
-	if oldConfig.Service != newConfig.Service || oldConfig.Env != newConfig.Env {
+	if oldConfig.ServiceName != newConfig.ServiceName || oldConfig.Environment != newConfig.Environment {
 		// Loki sink requires service and env values for labeling
 		for ch, chCfg := range channelConfigs {
 			for i := range chCfg.Sinks {
 				sink := &chCfg.Sinks[i]
-				if sink.Type.GetOrDefault() == SinkLoki {
+				if sink.Type == config.SinkLoki {
 					rebuildRequired[ch] = true
 				}
 			}
@@ -313,13 +313,13 @@ func (logger *Logger) Reconfigure(cfg *Config) error {
 	}
 	if oldConfig.EncoderConfig != newConfig.EncoderConfig {
 		// encoder is applied for all channels, require to rebuild all
-		rebuildRequired[ChannelApp] = true
-		rebuildRequired[ChannelSecurity] = true
-		rebuildRequired[ChannelAudit] = true
+		rebuildRequired[config.ChannelApp] = true
+		rebuildRequired[config.ChannelSecurity] = true
+		rebuildRequired[config.ChannelAudit] = true
 	}
 	if oldConfig.ForceAuditAppend != newConfig.ForceAuditAppend {
 		// force-audit-append option is only applicable for audit channel
-		rebuildRequired[ChannelAudit] = true
+		rebuildRequired[config.ChannelAudit] = true
 	}
 	for ch, oldChCfg := range channelConfigs {
 		newChCfg := newChannelConfigs[ch]
@@ -340,29 +340,29 @@ func (logger *Logger) Reconfigure(cfg *Config) error {
 		}
 		var log *zap.Logger
 		switch ch {
-		case ChannelApp:
+		case config.ChannelApp:
 			log = logger.appOriginal
-		case ChannelSecurity:
+		case config.ChannelSecurity:
 			log = logger.securityOriginal
-		case ChannelAudit:
+		case config.ChannelAudit:
 			log = logger.auditOriginal
 		}
 		if log != nil {
 			_ = log.Sync()
 		}
-		for _, cl := range logger.closerFns[ch] {
+		for _, cl := range logger.closerFns[ch.String()] {
 			err = cl.Close()
 			if err != nil {
 				return err
 			}
 		}
-		logger.closerFns[ch] = closer
+		logger.closerFns[ch.String()] = closer
 		switch ch {
-		case ChannelApp:
+		case config.ChannelApp:
 			logger.appOriginal = zap.New(core)
-		case ChannelSecurity:
+		case config.ChannelSecurity:
 			logger.securityOriginal = zap.New(core)
-		case ChannelAudit:
+		case config.ChannelAudit:
 			logger.auditOriginal = zap.New(core)
 		}
 	}
@@ -374,14 +374,14 @@ func (logger *Logger) Reconfigure(cfg *Config) error {
 			chCfg.ShowStacktrace != newChCfg.ShowStacktrace ||
 			chCfg.StacktraceLevel != newChCfg.StacktraceLevel {
 			switch ch {
-			case ChannelApp:
-				logger.App = common.Ternary(newChCfg.Enabled.GetOrDefault(),
+			case config.ChannelApp:
+				logger.App = common.Ternary(newChCfg.Enabled,
 					attachOptions(logger.appOriginal, newChCfg), zap.NewNop())
-			case ChannelSecurity:
-				logger.Security = common.Ternary(newChCfg.Enabled.GetOrDefault(),
+			case config.ChannelSecurity:
+				logger.Security = common.Ternary(newChCfg.Enabled,
 					attachOptions(logger.securityOriginal, newChCfg), zap.NewNop())
-			case ChannelAudit:
-				logger.Audit = common.Ternary(newChCfg.Enabled.GetOrDefault(),
+			case config.ChannelAudit:
+				logger.Audit = common.Ternary(newChCfg.Enabled,
 					attachOptions(logger.auditOriginal, newChCfg), zap.NewNop())
 			}
 		}

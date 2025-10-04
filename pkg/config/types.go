@@ -1,7 +1,7 @@
 package config
 
 import (
-	"akashic/akashic/pkg/logging"
+	"fmt"
 	"time"
 )
 
@@ -21,6 +21,227 @@ func (e Environment) String() string {
 	return string(e)
 }
 
+// FileMode specifies how log files should be handled
+type FileMode int
+
+const (
+	FileAppend FileMode = iota
+	FileTruncate
+	FileRolling
+)
+
+func ParseFileMode(s string) (FileMode, error) {
+	switch s {
+	case "append":
+		return FileAppend, nil
+	case "truncate":
+		return FileTruncate, nil
+	case "rolling":
+		return FileRolling, nil
+	default:
+		return FileMode(-1), fmt.Errorf("unknown file mode: %s", s)
+	}
+}
+
+// UnmarshalText implements the encoding.TextUnmarshaler interface
+func (f *FileMode) UnmarshalText(text []byte) error {
+	mode, err := ParseFileMode(string(text))
+	if err != nil {
+		return err
+	}
+	*f = mode
+	return nil
+}
+
+// SinkType specifies the output destination type
+type SinkType int
+
+const (
+	SinkStdout SinkType = iota
+	SinkStderr
+	SinkFile
+	SinkLoki
+)
+
+func ParseSinkType(s string) (SinkType, error) {
+	switch s {
+	case "stdout":
+		return SinkStdout, nil
+	case "stderr":
+		return SinkStderr, nil
+	case "file":
+		return SinkFile, nil
+	case "loki":
+		return SinkLoki, nil
+	default:
+		return -1, fmt.Errorf("unknown sink type: %s", s)
+	}
+}
+
+// UnmarshalText implements the encoding.TextUnmarshaler interface
+func (s *SinkType) UnmarshalText(text []byte) error {
+	sinkType, err := ParseSinkType(string(text))
+	if err != nil {
+		return err
+	}
+	*s = sinkType
+	return nil
+}
+
+// Level specifies the log level
+type Level int
+
+const (
+	LevelDebug Level = iota
+	LevelInfo
+	LevelWarn
+	LevelError
+	LevelFatal
+)
+
+func ParseLevel(s string) (Level, error) {
+	switch s {
+	case "debug":
+		return LevelDebug, nil
+	case "info":
+		return LevelInfo, nil
+	case "warn":
+		return LevelWarn, nil
+	case "error":
+		return LevelError, nil
+	case "fatal":
+		return LevelFatal, nil
+	default:
+		return LevelFatal, fmt.Errorf("unknown log level: %s", s)
+	}
+}
+
+// UnmarshalText implements the encoding.TextUnmarshaler interface
+func (l *Level) UnmarshalText(text []byte) error {
+	level, err := ParseLevel(string(text))
+	if err != nil {
+		return err
+	}
+	*l = level
+	return nil
+}
+
+// Format specifies the log format
+type Format int
+
+const (
+	FormatText Format = iota
+	FormatJSON
+)
+
+func ParseFormat(s string) (Format, error) {
+	switch s {
+	case "text":
+		return FormatText, nil
+	case "json":
+		return FormatJSON, nil
+	default:
+		return FormatText, fmt.Errorf("unknown sink format: %s", s)
+	}
+}
+
+// UnmarshalText implements the encoding.TextUnmarshaler interface
+func (f *Format) UnmarshalText(text []byte) error {
+	format, err := ParseFormat(string(text))
+	if err != nil {
+		return err
+	}
+	*f = format
+	return nil
+}
+
+// Channel specifies the log channel
+type Channel int
+
+const (
+	ChannelApp Channel = iota
+	ChannelSecurity
+	ChannelAudit
+)
+
+var channelName = map[Channel]string{
+	ChannelApp:      "app",
+	ChannelSecurity: "security",
+	ChannelAudit:    "audit",
+}
+
+func (ch Channel) String() string {
+	str := channelName[ch]
+	if str == "" {
+		return "unknown"
+	}
+	return str
+}
+
+// StaticLabel represents key-value labels for Loki
+type StaticLabel map[string]string
+
+// SinkConfig defines a single log output destination
+type SinkConfig struct {
+	// Common fields
+	Type    SinkType `mapstructure:"type" yaml:"type"`
+	Enabled bool     `mapstructure:"enabled" yaml:"enabled"`
+	Level   Level    `mapstructure:"level" yaml:"level"`
+	Format  Format   `mapstructure:"format" yaml:"format"` // ignored in loki sink
+
+	// File sink specific fields
+	FilePath   string   `mapstructure:"file_path" yaml:"file_path"`
+	FileMode   FileMode `mapstructure:"file_mode" yaml:"file_mode"`
+	MaxSizeMB  int      `mapstructure:"max_size_mb" yaml:"max_size_mb"`
+	MaxBackups int      `mapstructure:"max_backups" yaml:"max_backups"`
+
+	// Loki sink specific fields
+	LokiURL            string      `mapstructure:"loki_url" yaml:"loki_url"`
+	BasicAuthUser      string      `mapstructure:"basic_auth_user" yaml:"basic_auth_user"`
+	BasicAuthPass      string      `mapstructure:"basic_auth_pass" yaml:"basic_auth_pass"`
+	LokiLabels         StaticLabel `mapstructure:"loki_labels" yaml:"loki_labels"`
+	BatchSize          int         `mapstructure:"batch_size" yaml:"batch_size"`
+	BatchFlushPeriodMs int         `mapstructure:"batch_flush_period_ms" yaml:"batch_flush_period_ms"`
+	RetryMaxCount      int         `mapstructure:"retry_max_count" yaml:"retry_max_count"`
+	RetryMinBackoffMs  int         `mapstructure:"retry_min_backoff_ms" yaml:"retry_min_backoff_ms"`
+	RetryMaxBackoffMs  int         `mapstructure:"retry_max_backoff_ms" yaml:"retry_max_backoff_ms"`
+	Compress           bool        `mapstructure:"compress" yaml:"compress"`
+	BreakerMaxRetries  int         `mapstructure:"breaker_max_retries" yaml:"breaker_max_retries"`
+	BreakerCooldownMs  int         `mapstructure:"breaker_cooldown_ms" yaml:"breaker_cooldown_ms"`
+	ClientTimeoutMs    int         `mapstructure:"client_timeout_ms" yaml:"client_timeout_ms"`
+}
+
+// EncoderConfig defines JSON encoder configuration
+type EncoderConfig struct {
+	TimestampKey  string `mapstructure:"timestamp_key" yaml:"timestamp_key"`
+	TimeFormatKey string `mapstructure:"time_format" yaml:"time_format"`
+	LevelKey      string `mapstructure:"level_key" yaml:"level_key"`
+	NameKey       string `mapstructure:"name_key" yaml:"name_key"`
+	CallerKey     string `mapstructure:"caller_key" yaml:"caller_key"`
+	MessageKey    string `mapstructure:"message_key" yaml:"message_key"`
+	StacktraceKey string `mapstructure:"stacktrace_key" yaml:"stacktrace_key"`
+}
+
+// ChannelConfig defines configuration for a logging channel
+type ChannelConfig struct {
+	Enabled         bool         `mapstructure:"enabled" yaml:"enabled"`
+	ShowCaller      bool         `mapstructure:"show_caller" yaml:"show_caller"`
+	ShowStacktrace  bool         `mapstructure:"show_stacktrace" yaml:"show_stacktrace"`
+	StacktraceLevel Level        `mapstructure:"stacktrace_level" yaml:"stacktrace_level"`
+	Sinks           []SinkConfig `mapstructure:"sinks" yaml:"sinks"`
+}
+
+// LoggingConfig defines the complete logging configuration
+type LoggingConfig struct {
+	ServiceName      string        `mapstructure:"service_name" yaml:"service_name"`
+	Environment      string        `mapstructure:"environment" yaml:"environment"`
+	EncoderConfig    EncoderConfig `mapstructure:"encoder" yaml:"encoder"`
+	App              ChannelConfig `mapstructure:"app" yaml:"app"`
+	Security         ChannelConfig `mapstructure:"security" yaml:"security"`
+	Audit            ChannelConfig `mapstructure:"audit" yaml:"audit"`
+	ForceAuditAppend bool          `mapstructure:"force_audit_append" yaml:"force_audit_append"`
+}
+
 // Root configuration
 type Config struct {
 	// Server configuration for API endpoints
@@ -29,8 +250,8 @@ type Config struct {
 	Database DatabaseConfig `mapstructure:"database" yaml:"database"`
 	// Session management settings
 	Session SessionConfig `mapstructure:"session" yaml:"session"`
-	// Logging configuration (multi-sink system) - handled separately in postProcessConfig
-	Logging logging.Config `mapstructure:"-" yaml:"-"`
+	// Logging configuration (multi-sink system)
+	Logging LoggingConfig `mapstructure:"logging" yaml:"logging"`
 	// General deployment settings
 	Deployment DeploymentConfig `mapstructure:"deployment" yaml:"deployment"`
 }
@@ -141,4 +362,74 @@ type SessionConfig struct {
 type DeploymentConfig struct {
 	// Environment (development, staging, production)
 	Environment Environment `mapstructure:"environment" yaml:"environment"`
+}
+
+// ValidateLoggingConfig validates the logging configuration
+func ValidateLoggingConfig(cfg *LoggingConfig) error {
+	var errs []error
+	joinErrs := func(errs []error) error {
+		return errors.Join(append([]error{errors.New("logging config is not valid")}, errs...)...)
+	}
+
+	if cfg == nil {
+		errs = append(errs, errors.New("logging config is nil"))
+		return joinErrs(errs)
+	}
+
+	if cfg.ServiceName == "" {
+		errs = append(errs, errors.New("service_name is required"))
+	}
+
+	if cfg.Environment == "" {
+		errs = append(errs, errors.New("environment is required"))
+	}
+
+	channels := map[string]*ChannelConfig{
+		ChannelApp.String():      &cfg.App,
+		ChannelSecurity.String(): &cfg.Security,
+		ChannelAudit.String():    &cfg.Audit,
+	}
+
+	for chName, ch := range channels {
+		for i := range ch.Sinks {
+			sink := &ch.Sinks[i]
+
+			if sink.Type == SinkFile && sink.FilePath == "" {
+				errs = append(errs, fmt.Errorf("%s.sinks.file_path is required for file sink", chName))
+			}
+
+			if sink.Type == SinkLoki && sink.LokiURL == "" {
+				errs = append(errs, fmt.Errorf("%s.sinks.loki_url is required for loki sink", chName))
+			}
+		}
+	}
+
+	if len(errs) > 0 {
+		return joinErrs(errs)
+	}
+	return nil
+}
+
+// Clone creates a deep copy of the logging configuration
+func (cfg *LoggingConfig) Clone() *LoggingConfig {
+	newCfg := &LoggingConfig{}
+	*newCfg = *cfg
+
+	// Deep copy channels with their sinks
+	channels := []*ChannelConfig{&newCfg.App, &newCfg.Security, &newCfg.Audit}
+	originalChannels := []*ChannelConfig{&cfg.App, &cfg.Security, &cfg.Audit}
+
+	for i, ch := range channels {
+		originalCh := originalChannels[i]
+		ch.Sinks = make([]SinkConfig, len(originalCh.Sinks))
+		for j, sink := range originalCh.Sinks {
+			ch.Sinks[j] = sink
+			// Deep copy LokiLabels map
+			if sink.LokiLabels != nil {
+				ch.Sinks[j].LokiLabels = maps.Clone(sink.LokiLabels)
+			}
+		}
+	}
+
+	return newCfg
 }

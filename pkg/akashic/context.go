@@ -52,8 +52,6 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 
 	app.AddCloser(loggerClose)
 
-	app.Config.SetLogger(app.Logger)
-
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
 }

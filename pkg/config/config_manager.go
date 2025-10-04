@@ -4,13 +4,15 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
+	"time"
 
 	"akashic/akashic/pkg/common"
-	"akashic/akashic/pkg/logging"
 
 	"github.com/joho/godotenv"
+	"github.com/mitchellh/mapstructure"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -31,7 +33,6 @@ type ConfigManager struct {
 	viper       *viper.Viper
 	config      *Config
 	configMutex sync.RWMutex
-	logger      *logging.Logger
 	IAkashic    common.AkashicApp
 }
 
@@ -164,13 +165,67 @@ func (m *ConfigManager) readConfigWithEnvExpansion() error {
 	return nil
 }
 
+// stringToLoggingEnumHookFunc returns a decode hook that converts strings to our logging enum types
+func stringToLoggingEnumHookFunc() mapstructure.DecodeHookFunc {
+	return func(f, t reflect.Type, data interface{}) (interface{}, error) {
+		// Only process if source is string and target is one of our enum types
+		if f.Kind() != reflect.String {
+			return data, nil
+		}
+
+		str := data.(string)
+
+		// Check target type and convert accordingly
+		switch t {
+		case reflect.TypeOf(SinkType(0)):
+			return ParseSinkType(str)
+		case reflect.TypeOf(Level(0)):
+			return ParseLevel(str)
+		case reflect.TypeOf(Format(0)):
+			return ParseFormat(str)
+		case reflect.TypeOf(FileMode(0)):
+			return ParseFileMode(str)
+		default:
+			return data, nil
+		}
+	}
+}
+
+// stringToDurationHookFunc returns a decode hook that converts strings to time.Duration
+func stringToDurationHookFunc() mapstructure.DecodeHookFunc {
+	return func(f, t reflect.Type, data interface{}) (interface{}, error) {
+		// Only process if source is string and target is time.Duration
+		if f.Kind() != reflect.String || t != reflect.TypeOf(time.Duration(0)) {
+			return data, nil
+		}
+
+		str := data.(string)
+		return time.ParseDuration(str)
+	}
+}
+
 func (m *ConfigManager) LoadConfig() error {
 	m.configMutex.Lock()
 	defer m.configMutex.Unlock()
 
-	// Create config struct and unmarshal from viper
+	// Create config struct and unmarshal from viper with custom decode hooks
 	config := &Config{}
-	if err := m.viper.Unmarshal(config); err != nil {
+
+	// Configure mapstructure with custom decode hooks for our enum types and time.Duration
+	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
+		DecodeHook: mapstructure.ComposeDecodeHookFunc(
+			stringToLoggingEnumHookFunc(),
+			stringToDurationHookFunc(),
+		),
+		Metadata:   nil,
+		Result:     config,
+		ZeroFields: true,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create decoder: %v", err)
+	}
+
+	if err := decoder.Decode(m.viper.AllSettings()); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %v", err)
 	}
 
@@ -190,190 +245,16 @@ func (m *ConfigManager) LoadConfig() error {
 
 // postProcessConfig handles any configuration setup that needs to happen after unmarshaling
 func (m *ConfigManager) postProcessConfig(config *Config) error {
-	// Setup logging configuration using the logging package
-	// Note: logging package uses its own nullable type system, so we create it separately
-	serviceName := m.GetViper().GetString("logging.service_name")
-	env := config.Deployment.Environment.String()
-
-	logConfig := logging.GetConfig(serviceName, env)
-	if logConfig == nil {
-		return fmt.Errorf("failed to create logging configuration")
-	}
-	logConfig.EncoderConfig = logging.EncoderConfig{
-		TimestampKey:  logging.SetOptional(m.viper.GetString("logging.encoder.timestamp_key")),
-		TimeFormatKey: logging.SetOptional(m.viper.GetString("logging.encoder.time_format")),
-		LevelKey:      logging.SetOptional(m.viper.GetString("logging.encoder.level_key")),
-		NameKey:       logging.SetOptional(m.viper.GetString("logging.encoder.name_key")),
-		CallerKey:     logging.SetOptional(m.viper.GetString("logging.encoder.caller_key")),
-		MessageKey:    logging.SetOptional(m.viper.GetString("logging.encoder.message_key")),
-		StacktraceKey: logging.SetOptional(m.viper.GetString("logging.encoder.stacktrace_key")),
-	}
-	logConfig.App.Enabled = logging.SetOptional(m.viper.GetBool("logging.app.enabled"))
-	logConfig.App.ShowCaller = logging.SetOptional(m.viper.GetBool("logging.app.show_caller"))
-	logConfig.App.ShowStacktrace = logging.SetOptional(m.viper.GetBool("logging.app.show_stacktrace"))
-	stacktraceLv, err := logging.ParseLevel(m.viper.GetString("logging.app.stacktrace_level"))
-	if err == nil {
-		logConfig.App.StacktraceLevel = logging.SetOptional(stacktraceLv)
+	// Validate logging configuration
+	if err := ValidateLoggingConfig(&config.Logging); err != nil {
+		return fmt.Errorf("logging configuration validation failed: %v", err)
 	}
 
-	logConfig.Security.Enabled = logging.SetOptional(m.viper.GetBool("logging.security.enabled"))
-	logConfig.Security.ShowCaller = logging.SetOptional(m.viper.GetBool("logging.security.show_caller"))
-	logConfig.Security.ShowStacktrace = logging.SetOptional(m.viper.GetBool("logging.security.show_stacktrace"))
-	stacktraceLv, err = logging.ParseLevel(m.viper.GetString("logging.security.stacktrace_level"))
-	if err == nil {
-		logConfig.Security.StacktraceLevel = logging.SetOptional(stacktraceLv)
+	// Set environment from deployment config if not explicitly set
+	if config.Logging.Environment == "" {
+		config.Logging.Environment = config.Deployment.Environment.String()
 	}
 
-	logConfig.Audit.Enabled = logging.SetOptional(m.viper.GetBool("logging.audit.enabled"))
-	logConfig.Audit.ShowCaller = logging.SetOptional(m.viper.GetBool("logging.audit.show_caller"))
-	logConfig.Audit.ShowStacktrace = logging.SetOptional(m.viper.GetBool("logging.audit.show_stacktrace"))
-	stacktraceLv, err = logging.ParseLevel(m.viper.GetString("logging.audit.stacktrace_level"))
-	if err == nil {
-		logConfig.Audit.StacktraceLevel = logging.SetOptional(stacktraceLv)
-	}
-
-	appSinkConfigs := m.viper.Get("logging.app.sinks")
-	if appSinkConfigs != nil {
-		if sinksList, ok := appSinkConfigs.([]interface{}); ok {
-			for _, sinkCfg := range sinksList {
-				if sinkMap, ok := sinkCfg.(map[string]interface{}); ok {
-					// Safe type assertions with nil checks
-					sinkTypeStr, ok := sinkMap["type"].(string)
-					if !ok {
-						m.verbosePrintlnf("invalid or missing app sink type")
-						continue
-					}
-
-					sinkEnabled, ok := sinkMap["enabled"].(bool)
-					if !ok {
-						m.verbosePrintlnf("invalid or missing app sink enabled flag")
-						continue
-					}
-
-					sinkLevelStr, ok := sinkMap["level"].(string)
-					if !ok {
-						m.verbosePrintlnf("invalid or missing app sink level")
-						continue
-					}
-
-					sinkFormatStr, ok := sinkMap["format"].(string)
-					if !ok {
-						sinkFormatStr = "json" // default format for sinks without explicit format
-					}
-
-					sinkType, err := logging.ParseSinkType(sinkTypeStr)
-					if err != nil {
-						m.verbosePrintlnf("invalid app sink type: %v", err)
-						continue
-					}
-
-					sinkFormat, err := logging.ParseFormat(sinkFormatStr)
-					if err != nil {
-						m.verbosePrintlnf("invalid app sink format: %v", err)
-						continue
-					}
-
-					sinkLevel, err := logging.ParseLevel(sinkLevelStr)
-					if err != nil {
-						m.verbosePrintlnf("invalid app sink level: %v", err)
-						continue
-					}
-
-					inSinkCfg := &logging.SinkConfig{
-						Type:    logging.SetRequired(sinkType),
-						Enabled: logging.SetRequired(sinkEnabled),
-						Level:   logging.SetOptional(sinkLevel),
-						Format:  logging.SetOptional(sinkFormat),
-					}
-
-					if sinkType == logging.SinkFile {
-						if filePath, ok := sinkMap["file_path"].(string); ok {
-							inSinkCfg.FilePath = logging.SetRequired(filePath)
-						} else {
-							m.verbosePrintlnf("invalid or missing file_path for file sink")
-							continue
-						}
-
-						if fileModeStr, ok := sinkMap["file_mode"].(string); ok {
-							fileMode, err := logging.ParseFileMode(fileModeStr)
-							if err != nil {
-								m.verbosePrintlnf("invalid app sink file mode: %v", err)
-								continue
-							}
-							inSinkCfg.FileMode = logging.SetOptional(fileMode)
-						}
-
-						if maxSizeMB, ok := sinkMap["max_size_mb"].(int); ok {
-							inSinkCfg.MaxSizeMB = logging.SetOptional(maxSizeMB)
-						}
-
-						if maxBackups, ok := sinkMap["max_backups"].(int); ok {
-							inSinkCfg.MaxBackups = logging.SetOptional(maxBackups)
-						}
-					} else if sinkType == logging.SinkLoki {
-						if lokiURL, ok := sinkMap["loki_url"].(string); ok {
-							inSinkCfg.LokiURL = logging.SetRequired(lokiURL)
-						} else {
-							m.verbosePrintlnf("invalid or missing loki_url for loki sink")
-							continue
-						}
-
-						if basicAuthUser, ok := sinkMap["basic_auth_user"].(string); ok {
-							inSinkCfg.BasicAuthUser = logging.SetOptional(basicAuthUser)
-						}
-
-						if basicAuthPass, ok := sinkMap["basic_auth_pass"].(string); ok {
-							inSinkCfg.BasicAuthPass = logging.SetOptional(basicAuthPass)
-						}
-
-						if batchSize, ok := sinkMap["batch_size"].(int); ok {
-							inSinkCfg.BatchSize = logging.SetOptional(batchSize)
-						}
-
-						if batchFlushPeriodMs, ok := sinkMap["batch_flush_period_ms"].(int); ok {
-							inSinkCfg.BatchFlushPeriodMs = logging.SetOptional(batchFlushPeriodMs)
-						}
-
-						if retryMaxCount, ok := sinkMap["retry_max_count"].(int); ok {
-							inSinkCfg.RetryMaxCount = logging.SetOptional(retryMaxCount)
-						}
-
-						if retryMinBackoffMs, ok := sinkMap["retry_min_backoff_ms"].(int); ok {
-							inSinkCfg.RetryMinBackoffMs = logging.SetOptional(retryMinBackoffMs)
-						}
-
-						if retryMaxBackoffMs, ok := sinkMap["retry_max_backoff_ms"].(int); ok {
-							inSinkCfg.RetryMaxBackoffMs = logging.SetOptional(retryMaxBackoffMs)
-						}
-
-						if compress, ok := sinkMap["compress"].(bool); ok {
-							inSinkCfg.Compress = logging.SetOptional(compress)
-						}
-
-						if breakerMaxRetries, ok := sinkMap["breaker_max_retries"].(int); ok {
-							inSinkCfg.BreakerMaxRetries = logging.SetOptional(breakerMaxRetries)
-						}
-
-						if breakerCooldownMs, ok := sinkMap["breaker_cooldown_ms"].(int); ok {
-							inSinkCfg.BreakerCooldownMs = logging.SetOptional(breakerCooldownMs)
-						}
-
-						if clientTimeoutMs, ok := sinkMap["client_timeout_ms"].(int); ok {
-							inSinkCfg.ClientTimeoutMs = logging.SetOptional(clientTimeoutMs)
-						}
-					}
-
-					err = logConfig.RegisterSink(logging.ChannelApp, inSinkCfg)
-					if err != nil {
-						m.verbosePrintlnf("failed to register app sink: %v", err)
-						return err
-					}
-				}
-			}
-		}
-	}
-
-	config.Logging = *logConfig
 	return nil
 }
 
@@ -421,13 +302,6 @@ func (m *ConfigManager) GetConfig() *Config {
 
 func (m *ConfigManager) GetViper() *viper.Viper {
 	return m.viper
-}
-
-func (m *ConfigManager) SetLogger(logger *logging.Logger) {
-	m.logger = logger
-	if logger != nil {
-		m.logger.App.Info("Logger injected into configuration manager")
-	}
 }
 
 func (m *ConfigManager) GetAllSettings() map[string]any {

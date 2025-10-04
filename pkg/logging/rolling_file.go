@@ -1,6 +1,7 @@
 package logging
 
 import (
+	"akashic/akashic/pkg/config"
 	"fmt"
 	"io"
 	"os"
@@ -85,14 +86,14 @@ func (w *RollingFileWriter) Close() error {
 func NewRollingFileWriter(path string, maxSizeMB, maxBackups int) (io.WriteCloser, error) {
 	if maxSizeMB == 0 {
 		// config not defined, use default value
-		maxSizeMB = DefaultMaxSizeMB
+		maxSizeMB = config.DefaultMaxSizeMB
 	} else if maxSizeMB < 1 {
 		// config is under lower bound, use lower bound
 		maxSizeMB = 1
 	}
 	if maxBackups == 0 {
 		// config not defined, use default value
-		maxBackups = DefaultMaxBackups
+		maxBackups = config.DefaultMaxBackups
 	} else if maxBackups < 1 {
 		// config is under lower bound, use lower bound
 		maxBackups = 1

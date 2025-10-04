@@ -2,6 +2,7 @@ package logging
 
 import (
 	"akashic/akashic/pkg/common"
+	"akashic/akashic/pkg/config"
 	"bytes"
 	"compress/gzip"
 	"encoding/json"
@@ -24,7 +25,7 @@ type LokiWriter struct {
 	url         string
 	user        string
 	pass        string
-	fixedLabels StaticLabel
+	fixedLabels config.StaticLabel
 
 	batchSize        int
 	batchFlushPeriod time.Duration
@@ -195,30 +196,30 @@ func (w *LokiWriter) flushLoop() {
 	}
 }
 
-func NewLokiWriter(cfg *SinkConfig, fixedLabels StaticLabel) (io.WriteCloser, error) {
-	if cfg.LokiURL.GetOrDefault() == "" {
+func NewLokiWriter(cfg *config.SinkConfig, fixedLabels config.StaticLabel) (io.WriteCloser, error) {
+	if cfg.LokiURL == "" {
 		return nil, fmt.Errorf("SinkConfig missing loki_url")
 	}
 	w := &LokiWriter{
-		url:         cfg.LokiURL.GetOrDefault(),
-		user:        cfg.BasicAuthUser.GetOrDefault(),
-		pass:        cfg.BasicAuthPass.GetOrDefault(),
+		url:         cfg.LokiURL,
+		user:        cfg.BasicAuthUser,
+		pass:        cfg.BasicAuthPass,
 		fixedLabels: fixedLabels,
 
-		batchSize:        ifZero(cfg.BatchSize.GetOrDefault(), DefaultBatchSize),
-		batchFlushPeriod: time.Duration(ifZero(cfg.BatchFlushPeriodMs.GetOrDefault(), DefaultBatchFlushPeriodMs)) * time.Millisecond,
-		retryMaxCount:    ifZero(cfg.RetryMaxCount.GetOrDefault(), DefaultRetryMaxCount),
-		retryMinBackoff:  time.Duration(ifZero(cfg.RetryMinBackoffMs.GetOrDefault(), DefaultRetryMinBackoffMs)) * time.Millisecond,
-		retryMaxBackoff:  time.Duration(ifZero(cfg.RetryMaxBackoffMs.GetOrDefault(), DefaultRetryMaxBackoffMs)) * time.Millisecond,
-		compress:         cfg.Compress.IfValidGet(DefaultCompress),
+		batchSize:        ifZero(cfg.BatchSize, config.DefaultBatchSize),
+		batchFlushPeriod: time.Duration(ifZero(cfg.BatchFlushPeriodMs, config.DefaultBatchFlushPeriodMs)) * time.Millisecond,
+		retryMaxCount:    ifZero(cfg.RetryMaxCount, config.DefaultRetryMaxCount),
+		retryMinBackoff:  time.Duration(ifZero(cfg.RetryMinBackoffMs, config.DefaultRetryMinBackoffMs)) * time.Millisecond,
+		retryMaxBackoff:  time.Duration(ifZero(cfg.RetryMaxBackoffMs, config.DefaultRetryMaxBackoffMs)) * time.Millisecond,
+		compress:         cfg.Compress,
 
 		mu:      sync.Mutex{},
 		buf:     make(map[string]LogLists),
 		timer:   nil,
 		quit:    make(chan struct{}),
 		flush:   make(chan struct{}, 1),
-		breaker: common.NewBreaker(cfg.BreakerMaxRetries.GetOrDefault(), time.Duration(cfg.BreakerCooldownMs.GetOrDefault())*time.Millisecond),
-		client:  &http.Client{Timeout: time.Duration(cfg.ClientTimeoutMs.GetOrDefault()) * time.Millisecond},
+		breaker: common.NewBreaker(ifZero(cfg.BreakerMaxRetries, config.DefaultBreakerMaxRetries), time.Duration(ifZero(cfg.BreakerCooldownMs, config.DefaultBreakerCooldownMs))*time.Millisecond),
+		client:  &http.Client{Timeout: time.Duration(ifZero(cfg.ClientTimeoutMs, config.DefaultClientTimeoutMs)) * time.Millisecond},
 	}
 	w.timer = time.NewTimer(w.batchFlushPeriod)
 	w.wg.Add(1)
@@ -235,15 +236,15 @@ func (w *LokiWriter) Write(p []byte) (n int, err error) {
 
 	// extract level string
 	var level string
-	switch jsonMap[DefaultLogLevelKey].(type) {
+	switch jsonMap[config.DefaultLogLevelKey].(type) {
 	case string:
-		level = jsonMap[DefaultLogLevelKey].(string)
+		level = jsonMap[config.DefaultLogLevelKey].(string)
 	default:
-		_, err = fmt.Fprintf(os.Stderr, "invalid log level json type (expected string): %v", jsonMap[DefaultLogLevelKey])
+		_, err = fmt.Fprintf(os.Stderr, "invalid log level json type (expected string): %v", jsonMap[config.DefaultLogLevelKey])
 		if err != nil {
 			return 0, err
 		}
-		return 0, fmt.Errorf("invalid log level json type (expected string): %v", jsonMap[DefaultLogLevelKey])
+		return 0, fmt.Errorf("invalid log level json type (expected string): %v", jsonMap[config.DefaultLogLevelKey])
 	}
 	if level == "" {
 		return 0, errors.New("loki log level missing")
@@ -253,9 +254,9 @@ func (w *LokiWriter) Write(p []byte) (n int, err error) {
 	line := string(bytes.TrimSpace(p))
 
 	// add log level to the key value
-	label := make(StaticLabel, len(w.fixedLabels)+1)
+	label := make(config.StaticLabel, len(w.fixedLabels)+1)
 	maps.Copy(label, w.fixedLabels)
-	label[DefaultLogLevelKey] = level
+	label[config.DefaultLogLevelKey] = level
 
 	// serialize key labels
 	urlEncoderBuf := url.Values{}

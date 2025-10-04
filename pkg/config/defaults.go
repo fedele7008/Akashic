@@ -54,6 +54,42 @@ const (
 	// Logging defaults
 	DefaultLoggingServiceName = "akashic"
 
+	// Logging sink defaults
+	DefaultLogLevel                  = LevelInfo
+	DefaultLogFormat                 = FormatJSON
+	DefaultFileMode                  = FileRolling
+	DefaultMaxSizeMB          int    = 100
+	DefaultMaxBackups         int    = 3
+	DefaultBasicAuthUser      string = ""
+	DefaultBasicAuthPass      string = ""
+	DefaultBatchSize          int    = 100
+	DefaultBatchFlushPeriodMs int    = 1000
+	DefaultRetryMaxCount      int    = 5
+	DefaultRetryMinBackoffMs  int    = 200
+	DefaultRetryMaxBackoffMs  int    = 2000
+	DefaultCompress           bool   = true
+	DefaultBreakerMaxRetries  int    = 1
+	DefaultBreakerCooldownMs  int    = 5000
+	DefaultClientTimeoutMs    int    = 10000
+
+	// Logging channel defaults
+	DefaultChannelEnabled  bool = true
+	DefaultShowCaller      bool = true
+	DefaultShowStacktrace  bool = true
+	DefaultStacktraceLevel      = LevelError
+
+	// Logging encoder defaults
+	DefaultTimestampKey  = "timestamp"
+	DefaultTimeFormat    = time.UnixDate
+	DefaultLogLevelKey   = "level"
+	DefaultNameKey       = "logging"
+	DefaultCallerKey     = "caller"
+	DefaultMessageKey    = "message"
+	DefaultStacktraceKey = "stacktrace"
+
+	// Logging config defaults
+	DefaultForceAuditAppend bool = true
+
 	// Deployment defaults
 	DefaultEnvironment = EnvDevelopment
 )
@@ -99,8 +135,35 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("session.cookie_name", DefaultCookieName)
 	v.SetDefault("session.cookie_path", DefaultCookiePath)
 
-	// Logging defaults - basic setup since we'll create the full logging config later
+	// Logging defaults
 	v.SetDefault("logging.service_name", DefaultLoggingServiceName)
+	v.SetDefault("logging.environment", DefaultEnvironment.String())
+	v.SetDefault("logging.force_audit_append", DefaultForceAuditAppend)
+
+	// Logging encoder defaults
+	v.SetDefault("logging.encoder.timestamp_key", DefaultTimestampKey)
+	v.SetDefault("logging.encoder.time_format", DefaultTimeFormat)
+	v.SetDefault("logging.encoder.level_key", DefaultLogLevelKey)
+	v.SetDefault("logging.encoder.name_key", DefaultNameKey)
+	v.SetDefault("logging.encoder.caller_key", DefaultCallerKey)
+	v.SetDefault("logging.encoder.message_key", DefaultMessageKey)
+	v.SetDefault("logging.encoder.stacktrace_key", DefaultStacktraceKey)
+
+	// Logging channel defaults
+	v.SetDefault("logging.app.enabled", DefaultChannelEnabled)
+	v.SetDefault("logging.app.show_caller", DefaultShowCaller)
+	v.SetDefault("logging.app.show_stacktrace", DefaultShowStacktrace)
+	v.SetDefault("logging.app.stacktrace_level", DefaultStacktraceLevel)
+
+	v.SetDefault("logging.security.enabled", DefaultChannelEnabled)
+	v.SetDefault("logging.security.show_caller", DefaultShowCaller)
+	v.SetDefault("logging.security.show_stacktrace", DefaultShowStacktrace)
+	v.SetDefault("logging.security.stacktrace_level", DefaultStacktraceLevel)
+
+	v.SetDefault("logging.audit.enabled", DefaultChannelEnabled)
+	v.SetDefault("logging.audit.show_caller", DefaultShowCaller)
+	v.SetDefault("logging.audit.show_stacktrace", DefaultShowStacktrace)
+	v.SetDefault("logging.audit.stacktrace_level", DefaultStacktraceLevel)
 
 	// Deployment defaults
 	v.SetDefault("deployment.environment", DefaultEnvironment.String())
