@@ -30,10 +30,12 @@ var configPaths = []string{
 }
 
 type ConfigManager struct {
-	viper       *viper.Viper
-	config      *Config
-	configMutex sync.RWMutex
-	IAkashic    common.AkashicApp
+	viper               *viper.Viper
+	config              *Config
+	configMutex         sync.RWMutex
+	cmd                 *cobra.Command
+	IAkashic            common.AkashicApp
+	loggerReconfigureFn func(cfg *LoggingConfig) error
 }
 
 func NewConfigManager(cmd *cobra.Command, app common.AkashicApp) (*ConfigManager, error) {
@@ -50,6 +52,7 @@ func NewConfigManager(cmd *cobra.Command, app common.AkashicApp) (*ConfigManager
 	// Create manager
 	m := &ConfigManager{
 		viper:    v,
+		cmd:      cmd,
 		IAkashic: app,
 	}
 
@@ -70,47 +73,6 @@ func NewConfigManager(cmd *cobra.Command, app common.AkashicApp) (*ConfigManager
 	v.SetEnvPrefix(EnvVarPrefix)
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
-
-	// Parse config file flag
-	configFile, err := GetFlagValue[string](cmd, ConfigFlag)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse config flag: %v", err)
-	}
-
-	// Setup config file paths
-	if configFile != "" {
-		v.SetConfigFile(configFile)
-		m.verbosePrintlnf("Using config file: %s", configFile)
-	} else {
-		v.SetConfigName(DefaultConfigFileName)
-		v.SetConfigType(DefaultConfigFileType)
-
-		// Handle environment variable expansion in config paths
-		for _, path := range configPaths {
-			expandedPath := os.ExpandEnv(path)
-			// Skip paths that still contain unexpanded variables (e.g., $HOME not set)
-			if strings.Contains(expandedPath, "$") {
-				m.verbosePrintlnf("Skipping config path with unexpanded variables: %s", path)
-				continue
-			}
-			v.AddConfigPath(expandedPath)
-		}
-	}
-
-	// Try to read config file with environment variable expansion
-	if err := m.readConfigWithEnvExpansion(); err != nil {
-		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
-			// Config file not found - this is OK, we'll use defaults and env vars
-			m.verbosePrintlnf("No config file found, using defaults and environment variables")
-		} else if configFile != "" {
-			// Config file specified but error reading it - report error
-			m.verbosePrintlnf("Failed to read config file:", configFile)
-			return nil, fmt.Errorf("failed to read config file %s: %v", configFile, err)
-		} else {
-			// Unknown error with default paths - warn but continue
-			m.verbosePrintlnf("Config file error: %v; using defaults and environment variables", err)
-		}
-	}
 
 	// Bind flags to viper
 	if err := BindPFlags(cmd, v); err != nil {
@@ -167,7 +129,7 @@ func (m *ConfigManager) readConfigWithEnvExpansion() error {
 
 // stringToLoggingEnumHookFunc returns a decode hook that converts strings to our logging enum types
 func stringToLoggingEnumHookFunc() mapstructure.DecodeHookFunc {
-	return func(f, t reflect.Type, data interface{}) (interface{}, error) {
+	return func(f, t reflect.Type, data any) (any, error) {
 		// Only process if source is string and target is one of our enum types
 		if f.Kind() != reflect.String {
 			return data, nil
@@ -193,7 +155,7 @@ func stringToLoggingEnumHookFunc() mapstructure.DecodeHookFunc {
 
 // stringToDurationHookFunc returns a decode hook that converts strings to time.Duration
 func stringToDurationHookFunc() mapstructure.DecodeHookFunc {
-	return func(f, t reflect.Type, data interface{}) (interface{}, error) {
+	return func(f, t reflect.Type, data any) (any, error) {
 		// Only process if source is string and target is time.Duration
 		if f.Kind() != reflect.String || t != reflect.TypeOf(time.Duration(0)) {
 			return data, nil
@@ -205,6 +167,48 @@ func stringToDurationHookFunc() mapstructure.DecodeHookFunc {
 }
 
 func (m *ConfigManager) LoadConfig() error {
+
+	// Parse config file flag
+	configFile, err := GetFlagValue[string](m.cmd, ConfigFlag)
+	if err != nil {
+		return fmt.Errorf("failed to parse config flag: %v", err)
+	}
+
+	// Setup config file paths
+	if configFile != "" {
+		m.viper.SetConfigFile(configFile)
+		m.verbosePrintlnf("Using config file: %s", configFile)
+	} else {
+		m.viper.SetConfigName(DefaultConfigFileName)
+		m.viper.SetConfigType(DefaultConfigFileType)
+
+		// Handle environment variable expansion in config paths
+		for _, path := range configPaths {
+			expandedPath := os.ExpandEnv(path)
+			// Skip paths that still contain unexpanded variables (e.g., $HOME not set)
+			if strings.Contains(expandedPath, "$") {
+				m.verbosePrintlnf("Skipping config path with unexpanded variables: %s", path)
+				continue
+			}
+			m.viper.AddConfigPath(expandedPath)
+		}
+	}
+
+	// Try to read config file with environment variable expansion
+	if err := m.readConfigWithEnvExpansion(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); ok {
+			// Config file not found - this is OK, we'll use defaults and env vars
+			m.verbosePrintlnf("No config file found, using defaults and environment variables")
+		} else if configFile != "" {
+			// Config file specified but error reading it - report error
+			m.verbosePrintlnf("Failed to read config file:", configFile)
+			return fmt.Errorf("failed to read config file %s: %v", configFile, err)
+		} else {
+			// Unknown error with default paths - warn but continue
+			m.verbosePrintlnf("Config file error: %v; using defaults and environment variables", err)
+		}
+	}
+
 	m.configMutex.Lock()
 	defer m.configMutex.Unlock()
 
@@ -240,6 +244,14 @@ func (m *ConfigManager) LoadConfig() error {
 	}
 
 	m.config = config
+
+	// if logger reconfigure function is set, call it
+	if m.loggerReconfigureFn != nil {
+		if err := m.loggerReconfigureFn(&m.config.Logging); err != nil {
+			return fmt.Errorf("failed to reconfigure logger: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -312,4 +324,8 @@ func (m *ConfigManager) verbosePrintlnf(format string, args ...any) {
 	if m.IAkashic != nil {
 		m.IAkashic.VerbosePrintlnf(format, args...)
 	}
+}
+
+func (m *ConfigManager) SetLoggerReconfigureFunction(f func(cfg *LoggingConfig) error) {
+	m.loggerReconfigureFn = f
 }

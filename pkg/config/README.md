@@ -43,7 +43,7 @@ type SimpleVerbosePrinter struct {
     verbose bool
 }
 
-func (s *SimpleVerbosePrinter) VerbosePrintlnf(format string, args ...interface{}) {
+func (s *SimpleVerbosePrinter) VerbosePrintlnf(format string, args ...any) {
     if s.verbose {
         fmt.Fprintf(os.Stderr, "[VERBOSE] "+format+"\n", args...)
     }
@@ -434,7 +434,7 @@ The configuration system uses interfaces to maintain clean architecture:
 ```go
 // VerbosePrinter interface allows loose coupling
 type VerbosePrinter interface {
-    VerbosePrintlnf(format string, args ...interface{})
+    VerbosePrintlnf(format string, args ...any)
 }
 
 // ConfigManager depends on interface, not concrete implementation

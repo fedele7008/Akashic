@@ -3,12 +3,13 @@ package akashic
 import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/server/auth"
+	"akashic/akashic/pkg/server/control"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -16,41 +17,65 @@ import (
 )
 
 type AkashicApp struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	Config    *config.ConfigManager
-	Logger    *logging.Logger
-	closerFns []func()
-	verbose   bool
+	ctx           context.Context
+	cancel        context.CancelFunc
+	Config        *config.ConfigManager
+	Logger        *logging.Logger
+	AuthServer    *auth.Server
+	ControlServer *control.Server
+	closerFns     []func()
+	verbose       bool
 }
 
 func NewAkashicApp() *AkashicApp {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AkashicApp{
-		ctx:       ctx,
-		cancel:    cancel,
-		Config:    nil,
-		Logger:    nil,
-		closerFns: make([]func(), 0),
+		ctx:           ctx,
+		cancel:        cancel,
+		Config:        nil,
+		Logger:        nil,
+		AuthServer:    nil,
+		ControlServer: nil,
+		closerFns:     make([]func(), 0),
 	}
 }
 
 func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	var err error
 
+	// Initialize configuration
 	app.Config, err = config.NewConfigManager(cmd, app)
 	if err != nil {
 		return fmt.Errorf("failed to initialize configuration: %v", err)
 	}
 
 	cfg := app.Config.GetConfig()
+
+	// Initialize logger
 	var loggerClose func()
 	app.Logger, loggerClose, err = logging.New(&cfg.Logging)
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %v", err)
 	}
-
 	app.AddCloser(loggerClose)
+
+	// feed reconfigure function to config manager (for config reloading)
+	app.Config.SetLoggerReconfigureFunction(app.Logger.Reconfigure)
+
+	// Create auth server (but don't start yet)
+	app.AuthServer = auth.New(
+		app.Config,
+		app.Logger,
+	)
+
+	// Create control server (but don't start yet)
+	app.ControlServer = control.New(
+		app.ctx,
+		app.AuthServer,
+		app.Config,
+		app.Logger,
+		app.cancel, // Pass cancel function for shutdown
+	)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
@@ -127,28 +152,83 @@ func (app *AkashicApp) PrintConfigYAML() {
 }
 
 func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
-	// THIS SHOULD RUN THE SERVER BUT FOR NOW JUST PRINT CONFIGURATION FOR TESTING PURPOSES
-	fmt.Println("Configuration values:")
-	app.PrintConfigYAML()
-
+	// Setup signal handlers for graceful shutdown
 	app.setupSignalHandlers()
 
-	app.Logger.App.Info("Server simulation started")
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
+	// Start control server (always starts)
+	app.Logger.App.Info("Starting control server",
+		zap.String("address", app.ControlServer.GetAddress()))
 
-	for {
-		select {
-		case <-app.ctx.Done():
-			app.Logger.App.Info("Shutdown signal received, stopping server")
-			if err := app.Close(); err != nil {
-				app.VerbosePrintlnf("Error during shutdown: %v", err)
-			}
-			fmt.Println("Graceful shutdown complete.")
-			return nil
-		case <-ticker.C:
-			app.Logger.App.Debug("Server tick")
-			fmt.Printf("Application running... (press Ctrl+C to exit)\n")
-		}
+	if err := app.ControlServer.Start(); err != nil {
+		return fmt.Errorf("failed to start control server: %v", err)
 	}
+
+	// Register control server cleanup
+	app.AddCloser(func() {
+		if err := app.ControlServer.Stop(); err != nil {
+			app.Logger.App.Error("Error stopping control server", zap.Error(err))
+		}
+	})
+
+	// Check --no-auto-start flag
+	noAutoStart, err := config.GetFlagValue[bool](cmd, config.NoAutoStartFlag)
+	if err != nil {
+		app.Logger.App.Warn("Failed to read no-auto-start flag, defaulting to auto-start", zap.Error(err))
+		noAutoStart = false
+	}
+
+	// Start auth server (unless --no-auto-start is set)
+	if !noAutoStart {
+		app.Logger.App.Info("Auto-starting auth server",
+			zap.String("requested-address", app.AuthServer.GetAddress()))
+
+		if err := app.ControlServer.GetStateManager().Start(app.ctx); err != nil {
+			app.Logger.App.Error("Failed to auto-start auth server", zap.Error(err))
+			// Don't fail - control server is still running, can start manually
+		}
+	} else {
+		app.Logger.App.Info("Auth server auto-start disabled (--no-auto-start flag)")
+		app.Logger.App.Info("Use control API to start: POST http://localhost:8081/auth/start")
+	}
+
+	// Register auth server cleanup
+	app.AddCloser(func() {
+		if app.AuthServer.IsRunning() {
+			if err := app.AuthServer.Stop(); err != nil {
+				app.Logger.App.Error("Error stopping auth server", zap.Error(err))
+			}
+		}
+	})
+
+	app.Logger.App.Info("Akashic server started successfully",
+		zap.String("control_api", fmt.Sprintf("http://%s", app.ControlServer.GetAddress())),
+		zap.String("auth_api", fmt.Sprintf("http://%s", app.AuthServer.GetAddress())),
+		zap.Bool("auth_running", app.AuthServer.IsRunning()))
+
+	fmt.Printf("\n")
+	fmt.Printf("=================================================\n")
+	fmt.Printf("  Akashic Server Running (PID:%v)\n", app.ControlServer.GetPID())
+	fmt.Printf("=================================================\n")
+	fmt.Printf("  Control API: http://%s\n", app.ControlServer.GetAddress())
+	fmt.Printf("  Auth API:    http://%s\n", app.AuthServer.GetAddress())
+	fmt.Printf("  Auth Status: %s\n", map[bool]string{true: "Running", false: "Stopped"}[app.AuthServer.IsRunning()])
+	fmt.Printf("=================================================\n")
+	fmt.Printf("  Press Ctrl+C to stop\n")
+	fmt.Printf("=================================================\n\n")
+
+	// Wait for shutdown signal
+	<-app.ctx.Done()
+
+	app.Logger.App.Info("Shutdown request received, starting graceful shutdown")
+
+	// Execute all closers (LIFO order)
+	if err := app.Close(); err != nil {
+		// try to log via logger (if logger is not closed yet)
+		app.Logger.App.Error("Errors during shutdown", zap.Error(err))
+		// print to stderr in case logger is closed
+		fmt.Fprintf(os.Stderr, "Error during shutdown: %v\n", err)
+	}
+
+	fmt.Println("Shutdown complete.")
+	return nil
 }

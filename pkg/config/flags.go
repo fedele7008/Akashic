@@ -23,6 +23,7 @@ const (
 	ConfigFlag
 	HostFlag
 	PortFlag
+	NoAutoStartFlag
 )
 
 var FlagEntities = map[FlagKey]FlagEntity[any]{
@@ -37,7 +38,7 @@ var FlagEntities = map[FlagKey]FlagEntity[any]{
 		Name:     "verbose",
 		HasShort: false,
 		Default:  false,
-		Desc:     "enable verbose logging (stderr)",
+		Desc:     "enable verbose output; prints to stderr until the logger initializes, then via the logger.",
 	},
 	HostFlag: {
 		Name:           "host",
@@ -54,6 +55,12 @@ var FlagEntities = map[FlagKey]FlagEntity[any]{
 		Default:        DefaultAuthPort,
 		Desc:           "akashic server port",
 		ViperConfigKey: "server.auth.port",
+	},
+	NoAutoStartFlag: {
+		Name:     "no-auto-start",
+		HasShort: false,
+		Default:  false,
+		Desc:     "do not automatically start the auth server on startup",
 	},
 }
 
