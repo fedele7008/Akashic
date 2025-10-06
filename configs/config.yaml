@@ -50,7 +50,7 @@ logging:
     enabled: true
     show_caller: true
     show_stacktrace: true
-    stacktrace_level: 2
+    stacktrace_level: "error" # debug, info, warn, error, fatal
     sinks:
       - type: "stdout" # stdout, stderr, file, loki
         enabled: true
@@ -71,7 +71,7 @@ logging:
     enabled: true
     show_caller: true
     show_stacktrace: true
-    stacktrace_level: 2
+    stacktrace_level: "error" # debug, info, warn, error, fatal
     sinks:
       - type: "stdout" # stdout, stderr, file, loki
         enabled: true
@@ -92,7 +92,7 @@ logging:
     enabled: true
     show_caller: true
     show_stacktrace: true
-    stacktrace_level: 2
+    stacktrace_level: "error" # debug, info, warn, error, fatal
     sinks:
       - type: "stdout" # stdout, stderr, file, loki
         enabled: true

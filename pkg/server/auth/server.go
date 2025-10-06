@@ -3,6 +3,7 @@ package auth
 import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/middleware"
 	"context"
 	"fmt"
 	"net"
@@ -69,8 +70,11 @@ func (s *Server) Start(ctx context.Context) error {
 	// Register routes
 	s.registerRoutes(mux)
 
+	// Build middleware chain
+	handler := s.buildMiddlewareChain(mux)
+
 	s.server = &http.Server{
-		Handler:      mux,
+		Handler:      handler,
 		BaseContext:  func(_ net.Listener) context.Context { return ctx },
 		ReadTimeout:  AuthServerReadTimeout,
 		WriteTimeout: AuthServerWriteTimeout,
@@ -137,4 +141,58 @@ func (s *Server) IsRunning() bool {
 // GetAddress returns the server address
 func (s *Server) GetAddress() string {
 	return fmt.Sprintf("%s:%d", s.config.GetConfig().Server.Auth.Host, s.config.GetConfig().Server.Auth.Port)
+}
+
+// buildMiddlewareChain builds the middleware chain for the auth server
+func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
+	cfg := s.config.GetConfig()
+	mwCfg := cfg.Middleware.Auth
+
+	// Build CORS config
+	var corsConfig *middleware.CORSConfig
+	if mwCfg.CORS.Enabled {
+		corsConfig = &middleware.CORSConfig{
+			AllowedOrigins:   mwCfg.CORS.AllowedOrigins,
+			AllowedMethods:   mwCfg.CORS.AllowedMethods,
+			AllowedHeaders:   mwCfg.CORS.AllowedHeaders,
+			ExposedHeaders:   mwCfg.CORS.ExposedHeaders,
+			AllowCredentials: mwCfg.CORS.AllowCredentials,
+			MaxAge:           mwCfg.CORS.MaxAge,
+		}
+	}
+
+	// Build rate limit config
+	var rateLimitConfig *middleware.RateLimitConfig
+	if mwCfg.RateLimit.Enabled {
+		rateLimitConfig = &middleware.RateLimitConfig{
+			RequestsPerWindow: mwCfg.RateLimit.RequestsPerWindow,
+			Window:            mwCfg.RateLimit.WindowDuration,
+			KeyFunc:           nil, // Use default (IP-based)
+			SkipFunc:          nil,
+		}
+	}
+
+	// Build size limit config
+	sizeLimitConfig := &middleware.SizeLimitConfig{
+		MaxBytes: mwCfg.MaxRequestSizeBytes,
+		SkipFunc: nil,
+	}
+
+	// Build timeout config
+	timeoutConfig := &middleware.TimeoutConfig{
+		Timeout:  mwCfg.RequestTimeout,
+		Message:  "Request Timeout",
+		SkipFunc: nil,
+	}
+
+	// Build the middleware chain
+	chain := middleware.AuthServerChain(
+		s.logger,
+		corsConfig,
+		rateLimitConfig,
+		sizeLimitConfig,
+		timeoutConfig,
+	)
+
+	return chain.Apply(handler)
 }

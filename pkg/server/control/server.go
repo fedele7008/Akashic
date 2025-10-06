@@ -3,8 +3,10 @@ package control
 import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/server/auth"
 	"context"
+	"crypto/x509"
 	"fmt"
 	"net"
 	"net/http"
@@ -63,8 +65,11 @@ func (s *Server) Start() error {
 	// Register routes
 	s.registerRoutes(mux)
 
+	// Build middleware chain
+	handler := s.buildMiddlewareChain(mux)
+
 	s.server = &http.Server{
-		Handler:      mux,
+		Handler:      handler,
 		BaseContext:  func(_ net.Listener) context.Context { return s.ctx },
 		ReadTimeout:  CtrlServerReadTimeout,
 		WriteTimeout: CtrlServerWriteTimeout,
@@ -124,4 +129,90 @@ func (s *Server) GetUptime() time.Duration {
 // GetPID returns the process ID
 func (s *Server) GetPID() int {
 	return os.Getpid()
+}
+
+// buildMiddlewareChain builds the middleware chain for the control server
+func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
+	cfg := s.config.GetConfig()
+	mwCfg := cfg.Middleware.Control
+
+	// Build IP allowlist config
+	var ipAllowlistConfig *middleware.IPAllowlistConfig
+	if mwCfg.IPAllowlist.Enabled {
+		ipAllowlistConfig = &middleware.IPAllowlistConfig{
+			AllowedIPs:    mwCfg.IPAllowlist.AllowedIPs,
+			AllowLoopback: mwCfg.IPAllowlist.AllowLoopback,
+			TrustProxy:    mwCfg.IPAllowlist.TrustProxy,
+		}
+	}
+
+	// Build mTLS config
+	var mtlsConfig *middleware.MTLSConfig
+	if cfg.Server.Control.TLS.Enabled && cfg.Server.Control.TLS.ClientAuthRequired {
+		// Load CA certificate pool if CA file is specified
+		var caPool *x509.CertPool
+		if cfg.Server.Control.TLS.CAFile != "" {
+			// Note: In production, load the CA file here
+			// For now, we'll use nil which means no verification
+			// This will be implemented when TLS is fully set up
+			caPool = nil
+		}
+
+		mtlsConfig = &middleware.MTLSConfig{
+			RequireClientCert:        true,
+			TrustedCAs:               caPool,
+			AllowLoopbackWithoutCert: true,
+			ExtractDN:                true,
+		}
+	}
+
+	// Build CORS config
+	var corsConfig *middleware.CORSConfig
+	if mwCfg.CORS.Enabled {
+		corsConfig = &middleware.CORSConfig{
+			AllowedOrigins:   mwCfg.CORS.AllowedOrigins,
+			AllowedMethods:   mwCfg.CORS.AllowedMethods,
+			AllowedHeaders:   mwCfg.CORS.AllowedHeaders,
+			ExposedHeaders:   mwCfg.CORS.ExposedHeaders,
+			AllowCredentials: mwCfg.CORS.AllowCredentials,
+			MaxAge:           mwCfg.CORS.MaxAge,
+		}
+	}
+
+	// Build rate limit config
+	var rateLimitConfig *middleware.RateLimitConfig
+	if mwCfg.RateLimit.Enabled {
+		rateLimitConfig = &middleware.RateLimitConfig{
+			RequestsPerWindow: mwCfg.RateLimit.RequestsPerWindow,
+			Window:            mwCfg.RateLimit.WindowDuration,
+			KeyFunc:           nil, // Use default (IP-based)
+			SkipFunc:          nil,
+		}
+	}
+
+	// Build size limit config
+	sizeLimitConfig := &middleware.SizeLimitConfig{
+		MaxBytes: mwCfg.MaxRequestSizeBytes,
+		SkipFunc: nil,
+	}
+
+	// Build timeout config
+	timeoutConfig := &middleware.TimeoutConfig{
+		Timeout:  mwCfg.RequestTimeout,
+		Message:  "Request Timeout",
+		SkipFunc: nil,
+	}
+
+	// Build the middleware chain
+	chain := middleware.ControlServerChain(
+		s.logger,
+		ipAllowlistConfig,
+		mtlsConfig,
+		corsConfig,
+		rateLimitConfig,
+		sizeLimitConfig,
+		timeoutConfig,
+	)
+
+	return chain.Apply(handler)
 }

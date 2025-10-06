@@ -254,6 +254,8 @@ type Config struct {
 	Session SessionConfig `mapstructure:"session" yaml:"session"`
 	// Logging configuration (multi-sink system)
 	Logging LoggingConfig `mapstructure:"logging" yaml:"logging"`
+	// Middleware configuration for both servers
+	Middleware MiddlewareConfig `mapstructure:"middleware" yaml:"middleware"`
 	// General deployment settings
 	Deployment DeploymentConfig `mapstructure:"deployment" yaml:"deployment"`
 }
@@ -364,6 +366,80 @@ type SessionConfig struct {
 type DeploymentConfig struct {
 	// Environment (development, staging, production)
 	Environment Environment `mapstructure:"environment" yaml:"environment"`
+}
+
+// MiddlewareConfig contains middleware configuration for both servers
+type MiddlewareConfig struct {
+	// Auth server middleware configuration
+	Auth AuthMiddlewareConfig `mapstructure:"auth" yaml:"auth"`
+	// Control server middleware configuration
+	Control ControlMiddlewareConfig `mapstructure:"control" yaml:"control"`
+}
+
+// AuthMiddlewareConfig defines middleware settings for the Auth Server
+type AuthMiddlewareConfig struct {
+	// CORS configuration
+	CORS CORSMiddlewareConfig `mapstructure:"cors" yaml:"cors"`
+	// Rate limiting configuration
+	RateLimit RateLimitMiddlewareConfig `mapstructure:"rate_limit" yaml:"rate_limit"`
+	// Request size limit in bytes (default: 5MB)
+	MaxRequestSizeBytes int64 `mapstructure:"max_request_size_bytes" yaml:"max_request_size_bytes"`
+	// Request timeout duration
+	RequestTimeout time.Duration `mapstructure:"request_timeout" yaml:"request_timeout"`
+}
+
+// ControlMiddlewareConfig defines middleware settings for the Control Server
+type ControlMiddlewareConfig struct {
+	// IP allowlist for access control
+	IPAllowlist IPAllowlistMiddlewareConfig `mapstructure:"ip_allowlist" yaml:"ip_allowlist"`
+	// CORS configuration
+	CORS CORSMiddlewareConfig `mapstructure:"cors" yaml:"cors"`
+	// Rate limiting configuration
+	RateLimit RateLimitMiddlewareConfig `mapstructure:"rate_limit" yaml:"rate_limit"`
+	// Request size limit in bytes (default: 1MB)
+	MaxRequestSizeBytes int64 `mapstructure:"max_request_size_bytes" yaml:"max_request_size_bytes"`
+	// Request timeout duration
+	RequestTimeout time.Duration `mapstructure:"request_timeout" yaml:"request_timeout"`
+}
+
+// CORSMiddlewareConfig defines CORS settings
+type CORSMiddlewareConfig struct {
+	// Enabled determines if CORS is enabled
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// AllowedOrigins is a list of allowed origins (use ["*"] for all)
+	AllowedOrigins []string `mapstructure:"allowed_origins" yaml:"allowed_origins"`
+	// AllowedMethods is a list of allowed HTTP methods
+	AllowedMethods []string `mapstructure:"allowed_methods" yaml:"allowed_methods"`
+	// AllowedHeaders is a list of allowed request headers
+	AllowedHeaders []string `mapstructure:"allowed_headers" yaml:"allowed_headers"`
+	// ExposedHeaders is a list of headers exposed to the client
+	ExposedHeaders []string `mapstructure:"exposed_headers" yaml:"exposed_headers"`
+	// AllowCredentials indicates whether credentials are allowed
+	AllowCredentials bool `mapstructure:"allow_credentials" yaml:"allow_credentials"`
+	// MaxAge is the preflight cache duration in seconds
+	MaxAge int `mapstructure:"max_age" yaml:"max_age"`
+}
+
+// RateLimitMiddlewareConfig defines rate limiting settings
+type RateLimitMiddlewareConfig struct {
+	// Enabled determines if rate limiting is enabled
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// RequestsPerWindow is the max number of requests allowed in the time window
+	RequestsPerWindow int `mapstructure:"requests_per_window" yaml:"requests_per_window"`
+	// WindowDuration is the time window for rate limiting
+	WindowDuration time.Duration `mapstructure:"window_duration" yaml:"window_duration"`
+}
+
+// IPAllowlistMiddlewareConfig defines IP allowlist settings
+type IPAllowlistMiddlewareConfig struct {
+	// Enabled determines if IP allowlisting is enabled
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// AllowedIPs is a list of allowed IP addresses or CIDR ranges
+	AllowedIPs []string `mapstructure:"allowed_ips" yaml:"allowed_ips"`
+	// AllowLoopback determines if loopback addresses are always allowed
+	AllowLoopback bool `mapstructure:"allow_loopback" yaml:"allow_loopback"`
+	// TrustProxy determines if X-Forwarded-For header should be used
+	TrustProxy bool `mapstructure:"trust_proxy" yaml:"trust_proxy"`
 }
 
 // ValidateLoggingConfig validates the logging configuration

@@ -92,6 +92,24 @@ const (
 
 	// Deployment defaults
 	DefaultEnvironment = EnvDevelopment
+
+	// Middleware defaults - Auth Server
+	DefaultAuthMaxRequestSizeBytes int64         = 5 * 1024 * 1024 // 5MB
+	DefaultAuthRequestTimeout      time.Duration = 30 * time.Second
+	DefaultAuthCORSMaxAge                        = 3600 // 1 hour
+
+	// Middleware defaults - Control Server
+	DefaultControlMaxRequestSizeBytes int64         = 1 * 1024 * 1024 // 1MB
+	DefaultControlRequestTimeout      time.Duration = 60 * time.Second
+	DefaultControlCORSMaxAge                        = 7200 // 2 hours
+
+	// Rate limit defaults
+	DefaultRateLimitRequestsPerWindow = 100
+	DefaultRateLimitWindowDuration    = 1 * time.Minute
+
+	// IP allowlist defaults
+	DefaultIPAllowLoopback = true
+	DefaultIPTrustProxy    = false
 )
 
 // setDefaults sets default values in viper before unmarshaling
@@ -167,4 +185,36 @@ func setDefaults(v *viper.Viper) {
 
 	// Deployment defaults
 	v.SetDefault("deployment.environment", DefaultEnvironment.String())
+
+	// Middleware defaults - Auth Server
+	v.SetDefault("middleware.auth.max_request_size_bytes", DefaultAuthMaxRequestSizeBytes)
+	v.SetDefault("middleware.auth.request_timeout", DefaultAuthRequestTimeout)
+	v.SetDefault("middleware.auth.cors.enabled", false) // Disabled by default, must be configured
+	v.SetDefault("middleware.auth.cors.allowed_origins", []string{})
+	v.SetDefault("middleware.auth.cors.allowed_methods", []string{"GET", "POST", "OPTIONS"})
+	v.SetDefault("middleware.auth.cors.allowed_headers", []string{"Content-Type", "Authorization", "X-Request-ID"})
+	v.SetDefault("middleware.auth.cors.exposed_headers", []string{"X-Request-ID"})
+	v.SetDefault("middleware.auth.cors.allow_credentials", true)
+	v.SetDefault("middleware.auth.cors.max_age", DefaultAuthCORSMaxAge)
+	v.SetDefault("middleware.auth.rate_limit.enabled", false) // Disabled by default
+	v.SetDefault("middleware.auth.rate_limit.requests_per_window", DefaultRateLimitRequestsPerWindow)
+	v.SetDefault("middleware.auth.rate_limit.window_duration", DefaultRateLimitWindowDuration)
+
+	// Middleware defaults - Control Server
+	v.SetDefault("middleware.control.max_request_size_bytes", DefaultControlMaxRequestSizeBytes)
+	v.SetDefault("middleware.control.request_timeout", DefaultControlRequestTimeout)
+	v.SetDefault("middleware.control.ip_allowlist.enabled", false) // Disabled by default
+	v.SetDefault("middleware.control.ip_allowlist.allowed_ips", []string{})
+	v.SetDefault("middleware.control.ip_allowlist.allow_loopback", DefaultIPAllowLoopback)
+	v.SetDefault("middleware.control.ip_allowlist.trust_proxy", DefaultIPTrustProxy)
+	v.SetDefault("middleware.control.cors.enabled", false) // Disabled by default
+	v.SetDefault("middleware.control.cors.allowed_origins", []string{})
+	v.SetDefault("middleware.control.cors.allowed_methods", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"})
+	v.SetDefault("middleware.control.cors.allowed_headers", []string{"Content-Type", "Authorization", "X-Request-ID", "X-Client-Cert-DN"})
+	v.SetDefault("middleware.control.cors.exposed_headers", []string{"X-Request-ID"})
+	v.SetDefault("middleware.control.cors.allow_credentials", true)
+	v.SetDefault("middleware.control.cors.max_age", DefaultControlCORSMaxAge)
+	v.SetDefault("middleware.control.rate_limit.enabled", false) // Disabled by default
+	v.SetDefault("middleware.control.rate_limit.requests_per_window", DefaultRateLimitRequestsPerWindow)
+	v.SetDefault("middleware.control.rate_limit.window_duration", DefaultRateLimitWindowDuration)
 }
