@@ -136,6 +136,26 @@ func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
 	cfg := s.config.GetConfig()
 	mwCfg := cfg.Middleware.Control
 
+	// Build security headers config
+	securityHeadersConfig := &middleware.SecurityHeadersConfig{
+		XFrameOptions:         middleware.XFrameOptions(mwCfg.SecurityHeaders.XFrameOptions),
+		XSSProtection:         middleware.XSSProtectionPolicy(mwCfg.SecurityHeaders.XSSProtection),
+		HSTSMaxAge:            mwCfg.SecurityHeaders.HSTSMaxAge,
+		HSTSIncludeSubDomains: mwCfg.SecurityHeaders.HSTSIncludeSubDomains,
+		HSTSPreload:           mwCfg.SecurityHeaders.HSTSPreload,
+		ContentSecurityPolicy: mwCfg.SecurityHeaders.ContentSecurityPolicy,
+		RemoveServerHeader:    mwCfg.SecurityHeaders.RemoveServerHeader,
+		CustomHeaders:         make(map[string]string),
+	}
+
+	// Build logging config
+	loggingConfig := &middleware.LoggingConfig{
+		SkipPaths: make(map[string]bool),
+	}
+	for _, path := range mwCfg.Logging.SkipPaths {
+		loggingConfig.SkipPaths[path] = true
+	}
+
 	// Build IP allowlist config
 	var ipAllowlistConfig *middleware.IPAllowlistConfig
 	if mwCfg.IPAllowlist.Enabled {
@@ -206,6 +226,8 @@ func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
 	// Build the middleware chain
 	chain := middleware.ControlServerChain(
 		s.logger,
+		securityHeadersConfig,
+		loggingConfig,
 		ipAllowlistConfig,
 		mtlsConfig,
 		corsConfig,

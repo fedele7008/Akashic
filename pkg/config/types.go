@@ -378,10 +378,14 @@ type MiddlewareConfig struct {
 
 // AuthMiddlewareConfig defines middleware settings for the Auth Server
 type AuthMiddlewareConfig struct {
+	// Security headers configuration
+	SecurityHeaders SecurityHeadersMiddlewareConfig `mapstructure:"security_headers" yaml:"security_headers"`
 	// CORS configuration
 	CORS CORSMiddlewareConfig `mapstructure:"cors" yaml:"cors"`
 	// Rate limiting configuration
 	RateLimit RateLimitMiddlewareConfig `mapstructure:"rate_limit" yaml:"rate_limit"`
+	// Logging configuration
+	Logging LoggingMiddlewareConfig `mapstructure:"logging" yaml:"logging"`
 	// Request size limit in bytes (default: 5MB)
 	MaxRequestSizeBytes int64 `mapstructure:"max_request_size_bytes" yaml:"max_request_size_bytes"`
 	// Request timeout duration
@@ -390,12 +394,16 @@ type AuthMiddlewareConfig struct {
 
 // ControlMiddlewareConfig defines middleware settings for the Control Server
 type ControlMiddlewareConfig struct {
+	// Security headers configuration
+	SecurityHeaders SecurityHeadersMiddlewareConfig `mapstructure:"security_headers" yaml:"security_headers"`
 	// IP allowlist for access control
 	IPAllowlist IPAllowlistMiddlewareConfig `mapstructure:"ip_allowlist" yaml:"ip_allowlist"`
 	// CORS configuration
 	CORS CORSMiddlewareConfig `mapstructure:"cors" yaml:"cors"`
 	// Rate limiting configuration
 	RateLimit RateLimitMiddlewareConfig `mapstructure:"rate_limit" yaml:"rate_limit"`
+	// Logging configuration
+	Logging LoggingMiddlewareConfig `mapstructure:"logging" yaml:"logging"`
 	// Request size limit in bytes (default: 1MB)
 	MaxRequestSizeBytes int64 `mapstructure:"max_request_size_bytes" yaml:"max_request_size_bytes"`
 	// Request timeout duration
@@ -440,6 +448,30 @@ type IPAllowlistMiddlewareConfig struct {
 	AllowLoopback bool `mapstructure:"allow_loopback" yaml:"allow_loopback"`
 	// TrustProxy determines if X-Forwarded-For header should be used
 	TrustProxy bool `mapstructure:"trust_proxy" yaml:"trust_proxy"`
+}
+
+// SecurityHeadersMiddlewareConfig defines security headers settings
+type SecurityHeadersMiddlewareConfig struct {
+	// XFrameOptions defines the X-Frame-Options policy (DENY, SAMEORIGIN)
+	XFrameOptions string `mapstructure:"x_frame_options" yaml:"x_frame_options"`
+	// XSSProtection defines the X-XSS-Protection policy (0, 1, 1; mode=block)
+	XSSProtection string `mapstructure:"x_xss_protection" yaml:"x_xss_protection"`
+	// HSTSMaxAge is the max-age for HSTS header in seconds (0 disables)
+	HSTSMaxAge int `mapstructure:"hsts_max_age" yaml:"hsts_max_age"`
+	// HSTSIncludeSubDomains determines if HSTS applies to subdomains
+	HSTSIncludeSubDomains bool `mapstructure:"hsts_include_subdomains" yaml:"hsts_include_subdomains"`
+	// HSTSPreload determines if HSTS preload directive is included
+	HSTSPreload bool `mapstructure:"hsts_preload" yaml:"hsts_preload"`
+	// ContentSecurityPolicy defines the CSP header value (empty disables)
+	ContentSecurityPolicy string `mapstructure:"content_security_policy" yaml:"content_security_policy"`
+	// RemoveServerHeader determines if Server header should be removed
+	RemoveServerHeader bool `mapstructure:"remove_server_header" yaml:"remove_server_header"`
+}
+
+// LoggingMiddlewareConfig defines logging middleware settings
+type LoggingMiddlewareConfig struct {
+	// SkipPaths are paths to skip logging (e.g., /health for high-frequency checks)
+	SkipPaths []string `mapstructure:"skip_paths" yaml:"skip_paths"`
 }
 
 // ValidateLoggingConfig validates the logging configuration

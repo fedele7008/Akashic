@@ -184,7 +184,7 @@ func buildChannelCore(cfg *config.LoggingConfig, ch config.Channel, consoleEnc, 
 			maps.Copy(labels, sinkCfg.LokiLabels)
 			lokiWriter, err := NewLokiWriter(sinkCfg, labels)
 			if err != nil {
-				return nil, nil, fmt.Errorf("%s: %w", ch.String(), err)
+				return nil, nil, fmt.Errorf("%s: %v", ch.String(), err)
 			}
 			closers = append(closers, lokiWriter)
 			cores = append(cores, zapcore.NewCore(*jsonEnc, zapcore.AddSync(lokiWriter), enabler))

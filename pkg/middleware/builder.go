@@ -37,6 +37,8 @@ func (cb *ChainBuilder) Apply(handler http.Handler) http.Handler {
 // AuthServerChain builds the standard middleware chain for Auth Server
 func AuthServerChain(
 	logger *logging.Logger,
+	securityHeadersConfig *SecurityHeadersConfig,
+	loggingConfig *LoggingConfig,
 	corsConfig *CORSConfig,
 	rateLimitConfig *RateLimitConfig,
 	sizeLimitConfig *SizeLimitConfig,
@@ -48,15 +50,19 @@ func AuthServerChain(
 	builder.Add(RequestID())
 
 	// 2. Logging
-	builder.Add(Logging(logger, &LoggingConfig{
-		SkipPaths: map[string]bool{}, // Can skip /health if needed
-	}))
+	if loggingConfig == nil {
+		loggingConfig = &LoggingConfig{SkipPaths: map[string]bool{}}
+	}
+	builder.Add(Logging(logger, loggingConfig))
 
 	// 3. Recovery (catch panics from anything below)
 	builder.Add(Recovery(logger))
 
 	// 4. Security Headers
-	builder.Add(SecurityHeaders(DefaultSecurityHeadersConfig()))
+	if securityHeadersConfig == nil {
+		securityHeadersConfig = DefaultSecurityHeadersConfig()
+	}
+	builder.Add(SecurityHeaders(securityHeadersConfig))
 
 	// 5. CORS
 	if corsConfig != nil {
@@ -88,6 +94,8 @@ func AuthServerChain(
 // ControlServerChain builds the standard middleware chain for Control Server
 func ControlServerChain(
 	logger *logging.Logger,
+	securityHeadersConfig *SecurityHeadersConfig,
+	loggingConfig *LoggingConfig,
 	ipAllowlistConfig *IPAllowlistConfig,
 	mtlsConfig *MTLSConfig,
 	corsConfig *CORSConfig,
@@ -101,15 +109,19 @@ func ControlServerChain(
 	builder.Add(RequestID())
 
 	// 2. Logging
-	builder.Add(Logging(logger, &LoggingConfig{
-		SkipPaths: map[string]bool{"/health": true}, // Skip health checks
-	}))
+	if loggingConfig == nil {
+		loggingConfig = &LoggingConfig{SkipPaths: map[string]bool{"/health": true}}
+	}
+	builder.Add(Logging(logger, loggingConfig))
 
 	// 3. Recovery (catch panics from anything below)
 	builder.Add(Recovery(logger))
 
 	// 4. Security Headers
-	builder.Add(SecurityHeaders(DefaultSecurityHeadersConfig()))
+	if securityHeadersConfig == nil {
+		securityHeadersConfig = DefaultSecurityHeadersConfig()
+	}
+	builder.Add(SecurityHeaders(securityHeadersConfig))
 
 	// 5. IP Allowlist (for deployment mode enforcement)
 	if ipAllowlistConfig != nil {

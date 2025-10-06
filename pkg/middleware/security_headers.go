@@ -1,14 +1,27 @@
 package middleware
 
 import (
+	"fmt"
 	"net/http"
 )
 
 // SecurityHeadersConfig holds configuration for security headers
 type SecurityHeadersConfig struct {
+	// XFrameOptions defines the X-Frame-Options policy
+	XFrameOptions XFrameOptions
+
+	// XSSProtection defines the X-XSS-Protection policy
+	XSSProtection XSSProtectionPolicy
+
 	// HSTSMaxAge is the max-age for HSTS header (in seconds)
 	// Only applied if HTTPS is detected. 0 disables HSTS
 	HSTSMaxAge int
+
+	// HSTSIncludeSubDomains determines if HSTS applies to subdomains
+	HSTSIncludeSubDomains bool
+
+	// HSTSPreload determines if HSTS preload directive is included
+	HSTSPreload bool
 
 	// ContentSecurityPolicy defines the CSP header value
 	// Empty string means no CSP header
@@ -24,7 +37,11 @@ type SecurityHeadersConfig struct {
 // DefaultSecurityHeadersConfig returns sensible defaults
 func DefaultSecurityHeadersConfig() *SecurityHeadersConfig {
 	return &SecurityHeadersConfig{
+		XFrameOptions:         XFrameOptionsDeny,
+		XSSProtection:         XSSProtectionBlock,
 		HSTSMaxAge:            31536000, // 1 year
+		HSTSIncludeSubDomains: true,
+		HSTSPreload:           false, // Must be manually enabled after adding to preload list
 		ContentSecurityPolicy: "default-src 'self'",
 		RemoveServerHeader:    true,
 		CustomHeaders:         make(map[string]string),
@@ -39,20 +56,28 @@ func SecurityHeaders(config *SecurityHeadersConfig) Middleware {
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Disable browser to guess the content-type
+			// X-Content-Type-Options: prevent MIME type sniffing
 			w.Header().Set("X-Content-Type-Options", "nosniff")
-			// Disable my web server's content is displayed in iframes
-			w.Header().Set("X-Frame-Options", "DENY")
-			// For old browsers, use XSS filter feature if they still support it - blocks loading html if it contains suspicious script
-			w.Header().Set("X-XSS-Protection", "1; mode=block")
 
-			// Add HSTS only for HTTPS requests
+			// X-Frame-Options: control framing policy
+			w.Header().Set("X-Frame-Options", config.XFrameOptions.String())
+
+			// X-XSS-Protection: enable XSS filtering for legacy browsers
+			w.Header().Set("X-XSS-Protection", config.XSSProtection.String())
+
+			// HSTS: enforce HTTPS (only for HTTPS requests)
 			if config.HSTSMaxAge > 0 && r.TLS != nil {
-				w.Header().Set("Strict-Transport-Security",
-					"max-age="+string(rune(config.HSTSMaxAge))+"; includeSubDomains")
+				hstsValue := fmt.Sprintf("max-age=%d", config.HSTSMaxAge)
+				if config.HSTSIncludeSubDomains {
+					hstsValue += "; includeSubDomains"
+				}
+				if config.HSTSPreload {
+					hstsValue += "; preload"
+				}
+				w.Header().Set("Strict-Transport-Security", hstsValue)
 			}
 
-			// Add CSP if configured
+			// Content-Security-Policy: control resource loading
 			if config.ContentSecurityPolicy != "" {
 				w.Header().Set("Content-Security-Policy", config.ContentSecurityPolicy)
 			}
@@ -70,4 +95,18 @@ func SecurityHeaders(config *SecurityHeadersConfig) Middleware {
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// Validate validates the security headers configuration
+func (c *SecurityHeadersConfig) Validate() error {
+	if err := c.XFrameOptions.Validate(); err != nil {
+		return fmt.Errorf("security headers config: %v", err)
+	}
+	if err := c.XSSProtection.Validate(); err != nil {
+		return fmt.Errorf("security headers config: %v", err)
+	}
+	if c.HSTSMaxAge < 0 {
+		return fmt.Errorf("security headers config: HSTS max age cannot be negative")
+	}
+	return nil
 }

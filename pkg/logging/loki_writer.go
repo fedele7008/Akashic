@@ -95,10 +95,10 @@ func (w *LokiWriter) pushWithRetry(payload map[string]any) error {
 		if w.compress {
 			gz = gzip.NewWriter(&buf)
 			if _, err := gz.Write(b); err != nil {
-				errs = append(errs, fmt.Errorf("[attempt-%v] failed to compress logs: %w", i+1, err))
+				errs = append(errs, fmt.Errorf("[attempt-%v] failed to compress logs: %v", i+1, err))
 			}
 			if err := gz.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("[attempt-%v] failed to close gzip writer: %w", i+1, err))
+				errs = append(errs, fmt.Errorf("[attempt-%v] failed to close gzip writer: %v", i+1, err))
 				break
 			}
 			body = &buf
@@ -131,10 +131,10 @@ func (w *LokiWriter) pushWithRetry(payload map[string]any) error {
 		resp, doErr := w.client.Do(req)
 		if doErr != nil && resp != nil && resp.Body != nil {
 			if _, err = io.Copy(io.Discard, resp.Body); err != nil {
-				errs = append(errs, fmt.Errorf("[attempt-%v] error reading response body: %w", i+1, err))
+				errs = append(errs, fmt.Errorf("[attempt-%v] error reading response body: %v", i+1, err))
 			}
 			if err = resp.Body.Close(); err != nil {
-				errs = append(errs, fmt.Errorf("[attempt-%v] error closing response body: %w", i+1, err))
+				errs = append(errs, fmt.Errorf("[attempt-%v] error closing response body: %v", i+1, err))
 				break
 			}
 		}
@@ -146,7 +146,7 @@ func (w *LokiWriter) pushWithRetry(payload map[string]any) error {
 
 		// report error occurred during http request
 		if doErr != nil {
-			errs = append(errs, fmt.Errorf("[attempt-%v] network error: %w", i+1, doErr))
+			errs = append(errs, fmt.Errorf("[attempt-%v] network error: %v", i+1, doErr))
 		}
 		time.Sleep(backoff)
 		if backoff < w.retryMaxBackoff {

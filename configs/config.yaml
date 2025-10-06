@@ -109,5 +109,86 @@ logging:
         level: "debug"
         loki_url: "${AKASHIC_LOKI_API_URL}"
         compress: true
+middleware:
+  # Auth Server Middleware (OAuth/OIDC endpoints - public-facing)
+  auth:
+    # Security Headers - HTTP security headers for browser protection
+    security_headers:
+      x_frame_options: "DENY"  # DENY | SAMEORIGIN - prevents clickjacking
+      x_xss_protection: "1; mode=block"  # 0 | 1 | 1; mode=block - XSS filter for legacy browsers
+      hsts_max_age: 31536000  # seconds (1 year) - HTTPS enforcement duration, 0 disables
+      hsts_include_subdomains: true  # apply HSTS to all subdomains
+      hsts_preload: false  # include in browser preload lists (requires manual submission)
+      content_security_policy: "default-src 'self'"  # CSP policy - restricts resource loading
+      remove_server_header: true  # remove Server header to prevent fingerprinting
+
+    # CORS - Cross-Origin Resource Sharing (for SPA/web clients)
+    cors:
+      enabled: false  # MUST be explicitly enabled and configured
+      allowed_origins: []  # ["https://app.example.com", "https://admin.example.com"]
+      # allowed_origins: ["*"]  # WARNING: Allow all origins (not recommended for production)
+      allowed_methods: ["GET", "POST", "OPTIONS"]
+      allowed_headers: ["Content-Type", "Authorization", "X-Request-ID"]
+      exposed_headers: ["X-Request-ID"]
+      allow_credentials: true  # allow cookies/auth headers
+      max_age: 3600  # preflight cache duration in seconds (1 hour)
+
+    # Rate Limiting - Prevent abuse and DoS attacks
+    rate_limit:
+      enabled: false  # disabled by default - enable for production
+      requests_per_window: 100  # max requests allowed per window
+      window_duration: "1m"  # time window: 1m, 5m, 1h, etc.
+
+    # Logging - Request/response logging configuration
+    logging:
+      skip_paths: [] # ["/health"] - paths to skip logging
+
+    # Request Limits
+    max_request_size_bytes: 5242880  # 5MB - max request body size
+    request_timeout: "30s"  # request processing timeout
+
+  # Control Server Middleware (Admin/management API - restricted access)
+  control:
+    # Security Headers - same options as auth server
+    security_headers:
+      x_frame_options: "DENY"
+      x_xss_protection: "1; mode=block"
+      hsts_max_age: 31536000
+      hsts_include_subdomains: true
+      hsts_preload: false
+      content_security_policy: "default-src 'self'"
+      remove_server_header: true
+
+    # IP Allowlist - Restrict access by IP address
+    ip_allowlist:
+      enabled: false  # disabled by default
+      allowed_ips: []  # ["192.168.1.0/24", "10.0.0.5"] - IPs and CIDR ranges
+      allow_loopback: true  # always allow 127.0.0.1 and ::1
+      trust_proxy: false  # trust X-Forwarded-For header (only if behind proxy)
+
+    # CORS - for BFF or admin UI access
+    cors:
+      enabled: false  # disabled by default
+      allowed_origins: []  # ["https://admin.example.com"]
+      allowed_methods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"]
+      allowed_headers: ["Content-Type", "Authorization", "X-Request-ID", "X-Client-Cert-DN"]
+      exposed_headers: ["X-Request-ID"]
+      allow_credentials: true
+      max_age: 7200  # 2 hours
+
+    # Rate Limiting - More permissive for admin clients
+    rate_limit:
+      enabled: false
+      requests_per_window: 200  # higher limit for admin operations
+      window_duration: "1m"
+
+    # Logging
+    logging:
+      skip_paths: [] # ["/health"] - paths to skip logging
+
+    # Request Limits
+    max_request_size_bytes: 1048576  # 1MB - smaller for control operations
+    request_timeout: "60s"  # longer timeout for admin operations
+
 deployment:
   environment: "development"  # development, staging, production

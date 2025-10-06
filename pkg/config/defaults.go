@@ -187,8 +187,15 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("deployment.environment", DefaultEnvironment.String())
 
 	// Middleware defaults - Auth Server
-	v.SetDefault("middleware.auth.max_request_size_bytes", DefaultAuthMaxRequestSizeBytes)
-	v.SetDefault("middleware.auth.request_timeout", DefaultAuthRequestTimeout)
+	// Security headers
+	v.SetDefault("middleware.auth.security_headers.x_frame_options", "DENY")
+	v.SetDefault("middleware.auth.security_headers.x_xss_protection", "1; mode=block")
+	v.SetDefault("middleware.auth.security_headers.hsts_max_age", 31536000)
+	v.SetDefault("middleware.auth.security_headers.hsts_include_subdomains", true)
+	v.SetDefault("middleware.auth.security_headers.hsts_preload", false)
+	v.SetDefault("middleware.auth.security_headers.content_security_policy", "default-src 'self'")
+	v.SetDefault("middleware.auth.security_headers.remove_server_header", true)
+	// CORS
 	v.SetDefault("middleware.auth.cors.enabled", false) // Disabled by default, must be configured
 	v.SetDefault("middleware.auth.cors.allowed_origins", []string{})
 	v.SetDefault("middleware.auth.cors.allowed_methods", []string{"GET", "POST", "OPTIONS"})
@@ -196,17 +203,31 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("middleware.auth.cors.exposed_headers", []string{"X-Request-ID"})
 	v.SetDefault("middleware.auth.cors.allow_credentials", true)
 	v.SetDefault("middleware.auth.cors.max_age", DefaultAuthCORSMaxAge)
+	// Rate limiting
 	v.SetDefault("middleware.auth.rate_limit.enabled", false) // Disabled by default
 	v.SetDefault("middleware.auth.rate_limit.requests_per_window", DefaultRateLimitRequestsPerWindow)
 	v.SetDefault("middleware.auth.rate_limit.window_duration", DefaultRateLimitWindowDuration)
+	// Logging
+	v.SetDefault("middleware.auth.logging.skip_paths", []string{})
+	// Request limits
+	v.SetDefault("middleware.auth.max_request_size_bytes", DefaultAuthMaxRequestSizeBytes)
+	v.SetDefault("middleware.auth.request_timeout", DefaultAuthRequestTimeout)
 
 	// Middleware defaults - Control Server
-	v.SetDefault("middleware.control.max_request_size_bytes", DefaultControlMaxRequestSizeBytes)
-	v.SetDefault("middleware.control.request_timeout", DefaultControlRequestTimeout)
+	// Security headers
+	v.SetDefault("middleware.control.security_headers.x_frame_options", "DENY")
+	v.SetDefault("middleware.control.security_headers.x_xss_protection", "1; mode=block")
+	v.SetDefault("middleware.control.security_headers.hsts_max_age", 31536000)
+	v.SetDefault("middleware.control.security_headers.hsts_include_subdomains", true)
+	v.SetDefault("middleware.control.security_headers.hsts_preload", false)
+	v.SetDefault("middleware.control.security_headers.content_security_policy", "default-src 'self'")
+	v.SetDefault("middleware.control.security_headers.remove_server_header", true)
+	// IP allowlist
 	v.SetDefault("middleware.control.ip_allowlist.enabled", false) // Disabled by default
 	v.SetDefault("middleware.control.ip_allowlist.allowed_ips", []string{})
 	v.SetDefault("middleware.control.ip_allowlist.allow_loopback", DefaultIPAllowLoopback)
 	v.SetDefault("middleware.control.ip_allowlist.trust_proxy", DefaultIPTrustProxy)
+	// CORS
 	v.SetDefault("middleware.control.cors.enabled", false) // Disabled by default
 	v.SetDefault("middleware.control.cors.allowed_origins", []string{})
 	v.SetDefault("middleware.control.cors.allowed_methods", []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"})
@@ -214,7 +235,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("middleware.control.cors.exposed_headers", []string{"X-Request-ID"})
 	v.SetDefault("middleware.control.cors.allow_credentials", true)
 	v.SetDefault("middleware.control.cors.max_age", DefaultControlCORSMaxAge)
+	// Rate limiting
 	v.SetDefault("middleware.control.rate_limit.enabled", false) // Disabled by default
 	v.SetDefault("middleware.control.rate_limit.requests_per_window", DefaultRateLimitRequestsPerWindow)
 	v.SetDefault("middleware.control.rate_limit.window_duration", DefaultRateLimitWindowDuration)
+	// Logging
+	v.SetDefault("middleware.control.logging.skip_paths", []string{"/health"})
+	// Request limits
+	v.SetDefault("middleware.control.max_request_size_bytes", DefaultControlMaxRequestSizeBytes)
+	v.SetDefault("middleware.control.request_timeout", DefaultControlRequestTimeout)
 }
