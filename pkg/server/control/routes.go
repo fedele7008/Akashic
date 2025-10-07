@@ -21,4 +21,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 
 	// Server control
 	mux.HandleFunc("/server/quit", s.handleServerQuit)
+
+	// Bootstrap routes (only active when bootstrap needed)
+	mux.HandleFunc("/bootstrap/status", s.handleBootstrapStatus)
+	mux.HandleFunc("/bootstrap/token", requireCLI(s.requireBootstrapMode(s.handleGetBootstrapToken)))
+	mux.HandleFunc("/bootstrap/token/regenerate", requireCLI(s.requireBootstrapMode(s.handleRegenerateToken)))
+	mux.HandleFunc("/bootstrap/root", s.requireBootstrapMode(s.handleCreateRootUser))
 }

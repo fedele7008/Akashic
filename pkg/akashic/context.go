@@ -1,15 +1,22 @@
 package akashic
 
 import (
-	"akashic/akashic/pkg/config"
-	"akashic/akashic/pkg/logging"
-	"akashic/akashic/pkg/server/auth"
-	"akashic/akashic/pkg/server/control"
 	"context"
 	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
+
+	authpkg "akashic/akashic/pkg/auth"
+	"akashic/akashic/pkg/bootstrap"
+	"akashic/akashic/pkg/config"
+	"akashic/akashic/pkg/database/gormdb"
+	"akashic/akashic/pkg/database/redis"
+	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/repository"
+	"akashic/akashic/pkg/server/auth"
+	"akashic/akashic/pkg/server/control"
 
 	"github.com/spf13/cobra"
 	"go.uber.org/zap"
@@ -17,14 +24,18 @@ import (
 )
 
 type AkashicApp struct {
-	ctx           context.Context
-	cancel        context.CancelFunc
-	Config        *config.ConfigManager
-	Logger        *logging.Logger
-	AuthServer    *auth.Server
-	ControlServer *control.Server
-	closerFns     []func()
-	verbose       bool
+	ctx            context.Context
+	cancel         context.CancelFunc
+	Config         *config.ConfigManager
+	Logger         *logging.Logger
+	DB             *gormdb.DB
+	Redis          *redis.Client
+	BootstrapMgr   *bootstrap.Manager
+	AuthServer     *auth.Server
+	ControlServer  *control.Server
+	closerFns      []func()
+	verbose        bool
+	bootstrapToken string // Stored for console display
 }
 
 func NewAkashicApp() *AkashicApp {
@@ -62,6 +73,101 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// feed reconfigure function to config manager (for config reloading)
 	app.Config.SetLoggerReconfigureFunction(app.Logger.Reconfigure)
 
+	// Initialize PostgreSQL with GORM
+	app.Logger.App.Info("Initializing database connections")
+	app.DB, err = gormdb.New(&gormdb.Config{
+		Host:            cfg.Database.Postgres.Host,
+		Port:            cfg.Database.Postgres.Port,
+		Database:        cfg.Database.Postgres.Database,
+		Username:        cfg.Database.Postgres.Username,
+		Password:        cfg.Database.Postgres.Password,
+		SSLMode:         cfg.Database.Postgres.SSLMode,
+		MaxConns:        cfg.Database.Postgres.MaxConnections,
+		MaxIdleConns:    cfg.Database.Postgres.MaxIdleConnections,
+		ConnLifetime:    cfg.Database.Postgres.ConnectionLifetime,
+		ConnMaxIdleTime: 30 * time.Minute,
+	}, app.Logger.App)
+	if err != nil {
+		return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+	}
+	app.AddCloser(func() {
+		if err := app.DB.Close(); err != nil {
+			app.Logger.App.Error("Error closing PostgreSQL connection", zap.Error(err))
+		}
+	})
+
+	// Initialize Redis
+	app.Redis, err = redis.New(&redis.Config{
+		Host:         cfg.Database.Redis.Host,
+		Port:         cfg.Database.Redis.Port,
+		Password:     cfg.Database.Redis.Password,
+		DB:           cfg.Database.Redis.DB,
+		PoolSize:     cfg.Database.Redis.PoolSize,
+		MinIdleConns: 2,
+		MaxRetries:   3,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	}, app.Logger.App)
+	if err != nil {
+		return fmt.Errorf("failed to connect to Redis: %w", err)
+	}
+	app.AddCloser(func() {
+		if err := app.Redis.Close(); err != nil {
+			app.Logger.App.Error("Error closing Redis connection", zap.Error(err))
+		}
+	})
+
+	// Run automatic database migrations with GORM
+	app.Logger.App.Info("Running automatic database migrations")
+	if err := app.DB.AutoMigrate(); err != nil {
+		return fmt.Errorf("failed to run auto-migration: %w", err)
+	}
+
+	// Initialize repositories
+	bootstrapRepo := repository.NewBootstrapRepository(app.DB, app.Logger.App)
+	userRepo := repository.NewUserRepository(app.DB, app.Logger.App)
+
+	// Initialize bootstrap system
+	tokenMgr := bootstrap.NewTokenManager(app.Redis, cfg.Bootstrap.TokenTTL, app.Logger.Security)
+	passwordPolicy := &authpkg.PasswordPolicy{
+		MinLength:        cfg.Bootstrap.Password.MinLength,
+		RequireUppercase: cfg.Bootstrap.Password.RequireUppercase,
+		RequireLowercase: true,
+		RequireNumber:    cfg.Bootstrap.Password.RequireNumber,
+		RequireSpecial:   cfg.Bootstrap.Password.RequireSpecial,
+	}
+
+	app.BootstrapMgr = bootstrap.NewManager(
+		bootstrapRepo,
+		userRepo,
+		tokenMgr,
+		passwordPolicy,
+		app.Logger.Security,
+	)
+
+	// Check if bootstrap is needed
+	needsBootstrap, err := app.BootstrapMgr.NeedsBootstrap(app.ctx)
+	if err != nil {
+		return fmt.Errorf("failed to check bootstrap status: %w", err)
+	}
+
+	if needsBootstrap {
+		app.Logger.App.Warn("Bootstrap required - no root user configured")
+		app.Logger.Security.Warn("BOOTSTRAP MODE ACTIVE - Root user not configured")
+
+		// Generate bootstrap token
+		token, err := app.BootstrapMgr.InitializeBootstrap(app.ctx)
+		if err != nil {
+			return fmt.Errorf("failed to initialize bootstrap: %w", err)
+		}
+
+		app.bootstrapToken = token
+		app.Logger.Security.Info("Bootstrap token generated", zap.Duration("ttl", cfg.Bootstrap.TokenTTL))
+	} else {
+		app.Logger.App.Info("Bootstrap complete - root user configured")
+	}
+
 	// Create auth server (but don't start yet)
 	app.AuthServer = auth.New(
 		app.Config,
@@ -76,6 +182,9 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		app.Logger,
 		app.cancel, // Pass cancel function for shutdown
 	)
+
+	// Set bootstrap manager on control server
+	app.ControlServer.SetBootstrapManager(app.BootstrapMgr)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
@@ -213,6 +322,28 @@ func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Auth API:    http://%s\n", app.AuthServer.GetAddress())
 	fmt.Printf("  Auth Status: %s\n", map[bool]string{true: "Running", false: "Stopped"}[app.AuthServer.IsRunning()])
 	fmt.Printf("=================================================\n")
+
+	// Display bootstrap information if needed
+	if app.bootstrapToken != "" {
+		fmt.Printf("\n")
+		fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+		fmt.Printf("  BOOTSTRAP MODE ACTIVE\n")
+		fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+		fmt.Printf("\n")
+		fmt.Printf("  Root user not configured. Please create one.\n")
+		fmt.Printf("\n")
+		fmt.Printf("  Bootstrap Token:\n")
+		fmt.Printf("  %s\n", app.bootstrapToken)
+		fmt.Printf("\n")
+		fmt.Printf("  Methods:\n")
+		fmt.Printf("  1. Web: Use BFF to submit token + credentials\n")
+		fmt.Printf("  2. CLI: akashic bootstrap create-root\n")
+		fmt.Printf("\n")
+		fmt.Printf("  Token expires in: %v\n", app.Config.GetConfig().Bootstrap.TokenTTL)
+		fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
+		fmt.Printf("\n")
+	}
+
 	fmt.Printf("  Press Ctrl+C to stop\n")
 	fmt.Printf("=================================================\n\n")
 

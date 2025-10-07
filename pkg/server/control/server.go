@@ -1,6 +1,7 @@
 package control
 
 import (
+	"akashic/akashic/pkg/bootstrap"
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
@@ -22,6 +23,7 @@ type Server struct {
 	server       *http.Server
 	logger       *logging.Logger
 	stateManager *StateManager
+	bootstrapMgr *bootstrap.Manager // Bootstrap manager (set after initialization)
 	config       *config.ConfigManager
 	startedAt    time.Time
 	shutdownFn   context.CancelFunc // Function to trigger app shutdown
@@ -114,6 +116,11 @@ func (s *Server) Stop() error {
 // GetStateManager returns the state manager
 func (s *Server) GetStateManager() *StateManager {
 	return s.stateManager
+}
+
+// SetBootstrapManager sets the bootstrap manager (called during app initialization)
+func (s *Server) SetBootstrapManager(mgr *bootstrap.Manager) {
+	s.bootstrapMgr = mgr
 }
 
 // GetAddress returns the server address

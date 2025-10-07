@@ -30,7 +30,7 @@ const (
 	DefaultPostgresDatabase           = "akashic"
 	DefaultPostgresUsername           = "" // Empty - must be set via env var or config
 	DefaultPostgresPassword           = "" // Empty - must be set via env var or config
-	DefaultPostgresSSLMode            = "require"
+	DefaultPostgresSSLMode            = "disable" // disable for dev, require for production
 	DefaultPostgresMaxConnections     = 100
 	DefaultPostgresMaxIdleConnections = 10
 	DefaultPostgresConnectionLifetime = 1 * time.Hour
@@ -92,6 +92,13 @@ const (
 
 	// Deployment defaults
 	DefaultEnvironment = EnvDevelopment
+
+	// Bootstrap defaults
+	DefaultBootstrapTokenTTL          = 1 * time.Hour
+	DefaultBootstrapPasswordMinLength = 12
+	DefaultBootstrapRequireUppercase  = true
+	DefaultBootstrapRequireNumber     = true
+	DefaultBootstrapRequireSpecial    = true
 
 	// Middleware defaults - Auth Server
 	DefaultAuthMaxRequestSizeBytes int64         = 5 * 1024 * 1024 // 5MB

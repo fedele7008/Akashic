@@ -258,6 +258,8 @@ type Config struct {
 	Middleware MiddlewareConfig `mapstructure:"middleware" yaml:"middleware"`
 	// General deployment settings
 	Deployment DeploymentConfig `mapstructure:"deployment" yaml:"deployment"`
+	// Bootstrap configuration for initial setup
+	Bootstrap BootstrapConfig `mapstructure:"bootstrap" yaml:"bootstrap"`
 }
 
 // ServerConfig contains basic server settings
@@ -366,6 +368,26 @@ type SessionConfig struct {
 type DeploymentConfig struct {
 	// Environment (development, staging, production)
 	Environment Environment `mapstructure:"environment" yaml:"environment"`
+}
+
+// BootstrapConfig contains bootstrap system configuration
+type BootstrapConfig struct {
+	// TokenTTL is the time-to-live for bootstrap tokens (default: 1h)
+	TokenTTL time.Duration `mapstructure:"token_ttl" yaml:"token_ttl"`
+	// Password policy configuration
+	Password PasswordPolicyConfig `mapstructure:"password" yaml:"password"`
+}
+
+// PasswordPolicyConfig defines password strength requirements
+type PasswordPolicyConfig struct {
+	// MinLength is the minimum password length (default: 12)
+	MinLength int `mapstructure:"min_length" yaml:"min_length"`
+	// RequireUppercase requires at least one uppercase letter
+	RequireUppercase bool `mapstructure:"require_uppercase" yaml:"require_uppercase"`
+	// RequireNumber requires at least one number
+	RequireNumber bool `mapstructure:"require_number" yaml:"require_number"`
+	// RequireSpecial requires at least one special character
+	RequireSpecial bool `mapstructure:"require_special" yaml:"require_special"`
 }
 
 // MiddlewareConfig contains middleware configuration for both servers

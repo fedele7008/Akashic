@@ -71,6 +71,11 @@ services:
     profiles:
       - obs
       
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 25000:8080/tcp
 
 networks:
   default:

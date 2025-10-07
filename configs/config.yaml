@@ -18,7 +18,7 @@ database:
     database: ${AKASHIC_DATABASE_POSTGRES_DB}
     username: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
     password: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
-    ssl_mode: "require"
+    ssl_mode: "disable"  # Use "disable" for development, "require" for production
     max_connections: 100
     max_idle_connections: 10
     connection_lifetime: "1h"
@@ -192,3 +192,14 @@ middleware:
 
 deployment:
   environment: "development"  # development, staging, production
+
+bootstrap:
+  # Bootstrap token time-to-live (regeneration invalidates old token)
+  token_ttl: "1h"  # 1 hour default
+
+  # Password policy for root user creation
+  password:
+    min_length: 12  # Minimum password length
+    require_uppercase: true  # Require at least one uppercase letter
+    require_number: true  # Require at least one number
+    require_special: true  # Require at least one special character
