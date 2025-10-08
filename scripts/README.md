@@ -2,9 +2,32 @@
 
 Utility scripts for Akashic development.
 
-## Database Management
+**⚠️ WARNING: Reset scripts DELETE DATA and should ONLY be used in development!**
 
-### Reset Database (Development Only)
+## Reset Scripts
+
+### Complete System Reset
+
+Resets ALL data stores: PostgreSQL, LDAP, and Redis in one command.
+
+```bash
+./scripts/reset-all-dev.sh
+```
+
+**What it does:**
+1. PostgreSQL: Drops and recreates database
+2. LDAP: Deletes all organizational units and users
+3. Redis: Flushes all sessions and cache
+
+**Requires:** Type `YES` (in capitals) to confirm
+
+**Use when:** Starting completely fresh for testing
+
+---
+
+### Individual Reset Scripts
+
+#### Reset PostgreSQL Database
 
 Completely resets the PostgreSQL database, deleting all data and schema.
 
@@ -12,7 +35,29 @@ Completely resets the PostgreSQL database, deleting all data and schema.
 ./scripts/reset-db-dev.sh
 ```
 
-**Warning:** This is destructive and should only be used in development!
+**Use when:** Testing database migrations only
+
+#### Reset LDAP Directory
+
+Deletes all organizational units and user entries from LDAP.
+
+```bash
+./scripts/reset-ldap-dev.sh
+```
+
+**What it deletes:**
+- `ou=users,dc=akashic,dc=local` (and all user entries)
+- `ou=groups,dc=akashic,dc=local` (and all group entries)
+
+**What remains:**
+- Base DN: `dc=akashic,dc=local`
+- Admin user: `cn=admin,dc=akashic,dc=local`
+
+**Use when:** Testing LDAP user creation or bootstrap flow
+
+---
+
+## Database Management
 
 ### Fix Dirty Migration State
 
@@ -52,13 +97,69 @@ The migration system now:
 ## Quick Start After Fresh Clone
 
 ```bash
-# 1. Start database services
-docker-compose up -d postgres redis
+# 1. Start all services
+docker compose up -d
 
-# 2. Run Akashic (migrations run automatically on first start)
-go run cmd/akashic/main.go run --verbose
+# 2. Run Akashic (migrations and LDAP structure created automatically)
+./build/akashic run --verbose
 
-# 3. Bootstrap will be displayed in console
+# 3. Bootstrap token will be displayed in console
+```
+
+## Usage Examples
+
+### Testing Bootstrap Flow (Complete)
+
+```bash
+# 1. Reset everything to fresh state
+./scripts/reset-all-dev.sh
+# Type: YES
+
+# 2. Start server (auto-creates LDAP structure and generates bootstrap token)
+./build/akashic run --verbose
+
+# 3. Get bootstrap status
+curl http://localhost:8081/bootstrap/status | jq
+
+# 4. Create root user
+curl -X POST http://localhost:8081/bootstrap/user \
+  -H "Content-Type: application/json" \
+  -d '{
+    "bootstrap_token": "YOUR_TOKEN_HERE",
+    "username": "admin",
+    "email": "admin@example.com",
+    "password": "SecurePass123"
+  }' | jq
+
+# 5. Verify user created in LDAP
+docker exec akashic-ldap ldapsearch -x -H ldap://localhost \
+  -D "cn=admin,dc=akashic,dc=local" \
+  -w "$AKASHIC_LDAP_ADMIN_PASSWORD" \
+  -b "ou=users,dc=akashic,dc=local" "(uid=admin)"
+```
+
+### Testing LDAP Auto-Initialization
+
+```bash
+# 1. Reset only LDAP
+./scripts/reset-ldap-dev.sh
+# Type: yes
+
+# 2. Verify LDAP structure deleted
+docker exec akashic-ldap ldapsearch -x -H ldap://localhost \
+  -D "cn=admin,dc=akashic,dc=local" \
+  -w "$AKASHIC_LDAP_ADMIN_PASSWORD" \
+  -b "dc=akashic,dc=local" "(objectClass=organizationalUnit)" dn
+
+# 3. Start server (OUs auto-created)
+./build/akashic run --verbose
+# Look for: "organizational unit created successfully"
+
+# 4. Verify structure exists
+docker exec akashic-ldap ldapsearch -x -H ldap://localhost \
+  -D "cn=admin,dc=akashic,dc=local" \
+  -w "$AKASHIC_LDAP_ADMIN_PASSWORD" \
+  -b "dc=akashic,dc=local" "(objectClass=organizationalUnit)" dn
 ```
 
 ## Troubleshooting

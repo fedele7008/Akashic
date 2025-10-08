@@ -101,13 +101,32 @@ const (
 	DefaultBootstrapRequireSpecial    = true
 
 	// LDAP server defaults
-	DefaultLDAPEnabled     = true
-	DefaultLDAPHost        = "127.0.0.1"
-	DefaultLDAPPort        = 389
-	DefaultLDAPBaseDN      = "dc=akashic,dc=local"
-	DefaultLDAPTLSEnabled  = false
-	DefaultLDAPCertFile    = "./certs/ldap.crt"
-	DefaultLDAPKeyFile     = "./certs/ldap.key"
+	DefaultLDAPHost              = "ldap" // Docker service name
+	DefaultLDAPPort              = 389
+	DefaultLDAPBaseDN            = "dc=akashic,dc=local"
+	DefaultLDAPBindDN            = "cn=admin,dc=akashic,dc=local"
+	DefaultLDAPBindPassword      = "" // Must be set via env var
+	DefaultLDAPUseTLS            = false
+	DefaultLDAPTLSSkipVerify     = false
+	DefaultLDAPUserSearchBase    = "ou=users,dc=akashic,dc=local"
+	DefaultLDAPUserSearchFilter  = "(uid={username})"
+	DefaultLDAPUserObjectClass   = "inetOrgPerson"
+	DefaultLDAPUsernameAttr      = "uid"
+	DefaultLDAPEmailAttr         = "mail"
+	DefaultLDAPDisplayNameAttr   = "cn"
+
+	// LDAP RBAC defaults
+	DefaultLDAPRBACRootGroup     = "cn=akashic-root,ou=groups,dc=akashic,dc=local"
+	DefaultLDAPRBACAdminGroup    = "cn=akashic-admins,ou=groups,dc=akashic,dc=local"
+	DefaultLDAPRBACUserGroup     = "cn=akashic-users,ou=groups,dc=akashic,dc=local"
+	DefaultLDAPRBACDefaultType   = "user"
+
+	// LDAP Deprovisioning defaults
+	DefaultLDAPDeprovisioningEnabled              = true
+	DefaultLDAPDeprovisioningSyncInterval         = 1 * time.Hour
+	DefaultLDAPDeprovisioningRootDeletionThreshold  = 0 * time.Second // Immediate
+	DefaultLDAPDeprovisioningAdminDeletionThreshold = 720 * time.Hour  // 30 days
+	DefaultLDAPDeprovisioningUserDeletionThreshold  = 2160 * time.Hour // 90 days
 
 	// Middleware defaults - Auth Server
 	DefaultAuthMaxRequestSizeBytes int64         = 5 * 1024 * 1024 // 5MB
@@ -210,13 +229,32 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("bootstrap.password.require_special", DefaultBootstrapRequireSpecial)
 
 	// LDAP server defaults
-	v.SetDefault("ldap.enabled", DefaultLDAPEnabled)
 	v.SetDefault("ldap.host", DefaultLDAPHost)
 	v.SetDefault("ldap.port", DefaultLDAPPort)
 	v.SetDefault("ldap.base_dn", DefaultLDAPBaseDN)
-	v.SetDefault("ldap.tls.enabled", DefaultLDAPTLSEnabled)
-	v.SetDefault("ldap.tls.cert_file", DefaultLDAPCertFile)
-	v.SetDefault("ldap.tls.key_file", DefaultLDAPKeyFile)
+	v.SetDefault("ldap.bind_dn", DefaultLDAPBindDN)
+	v.SetDefault("ldap.bind_password", DefaultLDAPBindPassword)
+	v.SetDefault("ldap.use_tls", DefaultLDAPUseTLS)
+	v.SetDefault("ldap.tls_skip_verify", DefaultLDAPTLSSkipVerify)
+	v.SetDefault("ldap.user_search_base", DefaultLDAPUserSearchBase)
+	v.SetDefault("ldap.user_search_filter", DefaultLDAPUserSearchFilter)
+	v.SetDefault("ldap.user_object_class", DefaultLDAPUserObjectClass)
+	v.SetDefault("ldap.username_attr", DefaultLDAPUsernameAttr)
+	v.SetDefault("ldap.email_attr", DefaultLDAPEmailAttr)
+	v.SetDefault("ldap.display_name_attr", DefaultLDAPDisplayNameAttr)
+
+	// LDAP RBAC defaults
+	v.SetDefault("ldap.rbac.root_group", DefaultLDAPRBACRootGroup)
+	v.SetDefault("ldap.rbac.admin_group", DefaultLDAPRBACAdminGroup)
+	v.SetDefault("ldap.rbac.user_group", DefaultLDAPRBACUserGroup)
+	v.SetDefault("ldap.rbac.default_type", DefaultLDAPRBACDefaultType)
+
+	// LDAP Deprovisioning defaults
+	v.SetDefault("ldap.deprovisioning.enabled", DefaultLDAPDeprovisioningEnabled)
+	v.SetDefault("ldap.deprovisioning.sync_interval", DefaultLDAPDeprovisioningSyncInterval)
+	v.SetDefault("ldap.deprovisioning.root_deletion_threshold", DefaultLDAPDeprovisioningRootDeletionThreshold)
+	v.SetDefault("ldap.deprovisioning.admin_deletion_threshold", DefaultLDAPDeprovisioningAdminDeletionThreshold)
+	v.SetDefault("ldap.deprovisioning.user_deletion_threshold", DefaultLDAPDeprovisioningUserDeletionThreshold)
 
 	// Middleware defaults - Auth Server
 	// Security headers

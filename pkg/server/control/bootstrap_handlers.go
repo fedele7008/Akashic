@@ -244,18 +244,20 @@ func (s *Server) handleCreateRootUser(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Security.Info("Root user created successfully via control API",
 		zap.String("user_id", user.ID.String()),
-		zap.String("username", user.Username),
-		zap.String("email", user.Email))
+		zap.String("ldap_dn", user.LdapDN),
+		zap.String("username", req.Username),
+		zap.String("email", req.Email))
 
 	// Return user info (without password hash)
 	response.WriteJSON(w, http.StatusCreated, response.Success(map[string]any{
 		"user": map[string]any{
 			"uid":        user.ID,
-			"username":   user.Username,
-			"email":      user.Email,
+			"ldap_dn":    user.LdapDN,
+			"username":   req.Username,
+			"email":      req.Email,
 			"user_type":  user.UserType,
 			"created_at": user.CreatedAt,
 		},
-		"message": "Root user created successfully - bootstrap complete",
+		"message": "Root user created successfully - bootstrap complete. NOTE: User must exist in LDAP.",
 	}))
 }

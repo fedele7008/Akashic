@@ -2,6 +2,7 @@ package repository
 
 import (
 	"akashic/akashic/pkg/database/akashic_postgres"
+	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/models"
 	"context"
 	"fmt"
@@ -14,35 +15,83 @@ import (
 
 // UserRepository handles user data access
 type UserRepository struct {
-	db     *akashic_postgres.DB
-	logger *zap.Logger
+	db         *akashic_postgres.DB
+	ldapClient *ldap.Client
+	logger     *zap.Logger
 }
 
 // NewUserRepository creates a new user repository
-func NewUserRepository(db *akashic_postgres.DB, logger *zap.Logger) *UserRepository {
+func NewUserRepository(db *akashic_postgres.DB, ldapClient *ldap.Client, logger *zap.Logger) *UserRepository {
 	return &UserRepository{
-		db:     db,
-		logger: logger,
+		db:         db,
+		ldapClient: ldapClient,
+		logger:     logger,
 	}
 }
 
-// CreateUser creates a new user in the database
-func (r *UserRepository) CreateUser(ctx context.Context, req *models.CreateUserRequest, passwordHash string) (*models.User, error) {
+// CreateFromLDAP creates a user from LDAP information (JIT provisioning)
+// This is called during first login when user exists in LDAP but not in PostgreSQL
+func (r *UserRepository) CreateFromLDAP(ctx context.Context, ldapDN string, userType models.UserType) (*models.User, error) {
 	user := &models.User{
-		Username:     req.Username,
-		Email:        req.Email,
-		PasswordHash: passwordHash,
-		UserType:     req.UserType,
-		IsDisabled:   false,
+		LdapDN:          ldapDN,
+		UserType:        userType,
+		IsDisabled:      false,
+		MissingIdentity: false,
 	}
 
 	if err := r.db.WithContext(ctx).Create(user).Error; err != nil {
-		return nil, fmt.Errorf("failed to create user: %v", err)
+		return nil, fmt.Errorf("failed to create user from LDAP: %v", err)
 	}
 
-	r.logger.Info("User created successfully",
+	r.logger.Info("User created from LDAP (JIT provisioning)",
 		zap.String("user_id", user.ID.String()),
-		zap.String("username", user.Username),
+		zap.String("ldap_dn", ldapDN),
+		zap.String("user_type", string(user.UserType)))
+
+	return user, nil
+}
+
+// CreateUser creates a user in both LDAP and PostgreSQL (for bootstrap - root user creation)
+// This method creates the user in LDAP first, then creates the PostgreSQL record.
+// The password is provided in plaintext and will be hashed by LDAP.
+func (r *UserRepository) CreateUser(ctx context.Context, req *models.CreateUserRequest, password string) (*models.User, error) {
+	// Step 1: Create user in LDAP first
+	r.logger.Info("Creating user in LDAP",
+		zap.String("username", req.Username),
+		zap.String("email", req.Email))
+
+	ldapDN, err := r.ldapClient.CreateUser(req.Username, req.Email, req.Username, password)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create user in LDAP: %w", err)
+	}
+
+	r.logger.Info("User created in LDAP successfully",
+		zap.String("username", req.Username),
+		zap.String("ldap_dn", ldapDN))
+
+	// Step 2: Create PostgreSQL record with the LDAP DN
+	user := &models.User{
+		LdapDN:          ldapDN,
+		UserType:        req.UserType,
+		IsDisabled:      false,
+		MissingIdentity: false,
+	}
+
+	if err := r.db.WithContext(ctx).Create(user).Error; err != nil {
+		// TODO: Consider rolling back LDAP creation
+		// For now, we leave the LDAP entry and fail the operation
+		// The deprovisioning service will eventually clean it up
+		r.logger.Error("Failed to create user in database after LDAP creation",
+			zap.String("username", req.Username),
+			zap.String("ldap_dn", ldapDN),
+			zap.Error(err))
+		return nil, fmt.Errorf("failed to create user in database: %w", err)
+	}
+
+	r.logger.Info("User created successfully in both LDAP and database",
+		zap.String("user_id", user.ID.String()),
+		zap.String("username", req.Username),
+		zap.String("ldap_dn", ldapDN),
 		zap.String("user_type", string(user.UserType)))
 
 	return user, nil
@@ -61,27 +110,14 @@ func (r *UserRepository) GetUserByID(ctx context.Context, id uuid.UUID) (*models
 	return &user, nil
 }
 
-// GetUserByUsername retrieves a user by username
-func (r *UserRepository) GetUserByUsername(ctx context.Context, username string) (*models.User, error) {
+// GetUserByLdapDN retrieves a user by their LDAP Distinguished Name
+func (r *UserRepository) GetUserByLdapDN(ctx context.Context, ldapDN string) (*models.User, error) {
 	var user models.User
-	if err := r.db.WithContext(ctx).Where("username = ?", username).First(&user).Error; err != nil {
+	if err := r.db.WithContext(ctx).Where("ldap_dn = ?", ldapDN).First(&user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, models.ErrUserNotFound
 		}
-		return nil, fmt.Errorf("failed to get user: %v", err)
-	}
-
-	return &user, nil
-}
-
-// GetUserByEmail retrieves a user by email
-func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*models.User, error) {
-	var user models.User
-	if err := r.db.WithContext(ctx).Where("email = ?", email).First(&user).Error; err != nil {
-		if err == gorm.ErrRecordNotFound {
-			return nil, models.ErrUserNotFound
-		}
-		return nil, fmt.Errorf("failed to get user: %v", err)
+		return nil, fmt.Errorf("failed to get user by LDAP DN: %v", err)
 	}
 
 	return &user, nil
@@ -102,22 +138,33 @@ func (r *UserRepository) GetRootUser(ctx context.Context) (*models.User, error) 
 	return &user, nil
 }
 
-// UpdatePassword updates a user's password
-func (r *UserRepository) UpdatePassword(ctx context.Context, userID uuid.UUID, newPasswordHash string) error {
+// Note: Password management is handled by LDAP, not by this repository
+// Passwords are stored in LDAP and updated through LDAP operations
+
+// RestoreIdentity clears the MissingIdentity flags for a user
+// This is called when a user who was marked as missing is found again in LDAP
+func (r *UserRepository) RestoreIdentity(ctx context.Context, userID uuid.UUID) error {
+	updateData := map[string]interface{}{
+		"missing_identity":       false,
+		"missing_identity_since": nil,
+	}
+
 	result := r.db.WithContext(ctx).
 		Model(&models.User{}).
 		Where("id = ?", userID).
-		Update("password_hash", newPasswordHash)
+		Updates(updateData)
 
 	if result.Error != nil {
-		return fmt.Errorf("failed to update password: %v", result.Error)
+		return fmt.Errorf("failed to restore user identity: %v", result.Error)
 	}
 
 	if result.RowsAffected == 0 {
 		return models.ErrUserNotFound
 	}
 
-	r.logger.Info("Password updated successfully", zap.String("user_id", userID.String()))
+	r.logger.Info("User identity restored",
+		zap.String("user_id", userID.String()))
+
 	return nil
 }
 

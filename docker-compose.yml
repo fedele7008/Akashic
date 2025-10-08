@@ -77,6 +77,46 @@ services:
     ports:
       - 25000:8080/tcp
 
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: akashic-ldap
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: ${AKASHIC_LDAP_ORGANISATION:-Akashic}
+      LDAP_DOMAIN: ${AKASHIC_LDAP_DOMAIN:-akashic.local}
+      LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
+      LDAP_CONFIG_PASSWORD: ${AKASHIC_LDAP_CONFIG_PASSWORD}
+      LDAP_RFC2307BIS_SCHEMA: "true"
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "true"
+      LDAP_TLS: "false"
+    ports:
+      - "${AKASHIC_LDAP_HOST_PORT:-389}:389"
+      - "${AKASHIC_LDAP_LDAPS_HOST_PORT:-636}:636"
+    volumes:
+      - ldap_data:/var/lib/ldap
+      - ldap_config:/etc/ldap/slapd.d
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=akashic,dc=local -D cn=admin,dc=akashic,dc=local -w $${AKASHIC_LDAP_ADMIN_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - ldap
+
+  phpldapadmin:
+    image: osixia/phpldapadmin:0.9.0
+    container_name: akashic-phpldapadmin
+    restart: unless-stopped
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: ldap
+      PHPLDAPADMIN_HTTPS: "false"
+    ports:
+      - "${AKASHIC_PHPLDAPADMIN_HOST_PORT:-8090}:80"
+    depends_on:
+      - ldap
+    profiles:
+      - ldap
+
 networks:
   default:
     name: akashic-net
@@ -86,3 +126,5 @@ volumes:
   redis_data:
   loki_data:
   grafana_data:
+  ldap_data:
+  ldap_config:

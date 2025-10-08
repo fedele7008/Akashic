@@ -12,6 +12,7 @@ import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/database/akashic_postgres"
 	"akashic/akashic/pkg/database/akashic_redis"
+	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/auth"
@@ -23,35 +24,39 @@ import (
 )
 
 type AkashicApp struct {
-	ctx            context.Context
-	cancel         context.CancelFunc
-	Config         *config.ConfigManager
-	Logger         *logging.Logger
-	DB             *akashic_postgres.DB
-	Redis          *akashic_redis.Client
-	BootstrapMgr   *bootstrap.Manager
-	AuthServer     *auth.Server
-	ControlServer  *control.Server
-	closerFns      []func()
-	verbose        bool
-	bootstrapToken string // Stored for console display
+	ctx                   context.Context
+	cancel                context.CancelFunc
+	Config                *config.ConfigManager
+	Logger                *logging.Logger
+	DB                    *akashic_postgres.DB
+	Redis                 *akashic_redis.Client
+	LDAPClient            *ldap.Client
+	DeprovisioningService *ldap.DeprovisioningService
+	BootstrapMgr          *bootstrap.Manager
+	AuthServer            *auth.Server
+	ControlServer         *control.Server
+	closerFns             []func()
+	verbose               bool
+	bootstrapToken        string // Stored for console display
 }
 
 func NewAkashicApp() *AkashicApp {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AkashicApp{
-		ctx:            ctx,
-		cancel:         cancel,
-		Config:         nil,
-		Logger:         nil,
-		DB:             nil,
-		Redis:          nil,
-		BootstrapMgr:   nil,
-		AuthServer:     nil,
-		ControlServer:  nil,
-		closerFns:      make([]func(), 0),
-		verbose:        false,
-		bootstrapToken: "",
+		ctx:                   ctx,
+		cancel:                cancel,
+		Config:                nil,
+		Logger:                nil,
+		DB:                    nil,
+		Redis:                 nil,
+		LDAPClient:            nil,
+		DeprovisioningService: nil,
+		BootstrapMgr:          nil,
+		AuthServer:            nil,
+		ControlServer:         nil,
+		closerFns:             make([]func(), 0),
+		verbose:               false,
+		bootstrapToken:        "",
 	}
 }
 
@@ -101,6 +106,36 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		}
 	})
 
+	// Initialize LDAP client
+	app.Logger.App.Info("Initializing LDAP client")
+	app.LDAPClient = ldap.New(&cfg.LDAP, app.Logger)
+
+	if err := app.LDAPClient.Connect(); err != nil {
+		return fmt.Errorf("failed to connect to LDAP server: %v", err)
+	}
+	app.AddCloser(func() {
+		if err := app.LDAPClient.Close(); err != nil {
+			app.Logger.App.Error("Error closing LDAP connection", zap.Error(err))
+		}
+	})
+
+	// Test LDAP connection
+	app.Logger.App.Info("Testing LDAP connection")
+	if err := app.LDAPClient.TestConnection(); err != nil {
+		return fmt.Errorf("LDAP connection test failed - Akashic cannot start without LDAP: %v", err)
+	}
+	app.Logger.App.Info("LDAP connection verified successfully")
+
+	// Initialize LDAP directory structure (similar to GORM AutoMigrate)
+	app.Logger.App.Info("Initializing LDAP directory structure")
+	if err := app.LDAPClient.InitializeStructure(); err != nil {
+		return fmt.Errorf("failed to initialize LDAP structure: %v", err)
+	}
+
+	// Initialize RBAC service
+	app.Logger.App.Info("Initializing RBAC service")
+	rbacService := ldap.NewRBACService(app.LDAPClient, app.Logger.App)
+
 	// Run automatic database migrations with GORM
 	if err := app.DB.AutoMigrate(); err != nil {
 		return fmt.Errorf("failed to run auto-migration: %v", err)
@@ -108,7 +143,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 
 	// Initialize repositories
 	bootstrapRepo := repository.NewBootstrapRepository(app.DB, app.Logger.App)
-	userRepo := repository.NewUserRepository(app.DB, app.Logger.App)
+	userRepo := repository.NewUserRepository(app.DB, app.LDAPClient, app.Logger.App)
 
 	// Initialize bootstrap system
 	tokenMgr := bootstrap.NewTokenManager(app.Redis, cfg.Bootstrap.TokenTTL, app.Logger.Security)
@@ -125,10 +160,32 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		userRepo,
 		tokenMgr,
 		passwordPolicy,
+		rbacService,
 		app.Logger.Security,
 	)
 
-	// Check if bootstrap is needed
+	// Initialize deprovisioning service (BEFORE bootstrap check)
+	// This ensures root user sync happens before we check bootstrap status
+	app.Logger.App.Info("Initializing LDAP deprovisioning service")
+	app.DeprovisioningService = ldap.NewDeprovisioningService(
+		app.LDAPClient,
+		rbacService,
+		app.DB.DB, // Pass the underlying gorm.DB
+		bootstrapRepo,
+		app.Logger,
+		&app.Config.GetConfig().LDAP.Deprovisioning,
+	)
+
+	// Run initial deprovisioning reconciliation to sync root users
+	// This may auto-provision root users from LDAP or delete missing root users
+	app.Logger.App.Info("Running initial LDAP reconciliation")
+	if err := app.DeprovisioningService.Reconcile(); err != nil {
+		app.Logger.App.Warn("Initial LDAP reconciliation failed",
+			zap.Error(err))
+		// Don't fail startup - continue but log the error
+	}
+
+	// NOW check if bootstrap is needed (after reconciliation)
 	needsBootstrap, err := app.BootstrapMgr.NeedsBootstrap(app.ctx)
 	if err != nil {
 		return fmt.Errorf("failed to check bootstrap status: %v", err)
@@ -243,6 +300,20 @@ func (app *AkashicApp) PrintConfigYAML() {
 func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 	// Setup signal handlers for graceful shutdown
 	app.setupSignalHandlers()
+
+	// Start deprovisioning service
+	app.Logger.App.Info("Starting LDAP deprovisioning service")
+	if err := app.DeprovisioningService.Start(); err != nil {
+		app.Logger.App.Warn("Failed to start deprovisioning service", zap.Error(err))
+		// Don't fail - this is not critical for startup
+	}
+
+	// Register deprovisioning service cleanup
+	app.AddCloser(func() {
+		if err := app.DeprovisioningService.Stop(); err != nil {
+			app.Logger.App.Error("Error stopping deprovisioning service", zap.Error(err))
+		}
+	})
 
 	// Start control server (always starts)
 	app.Logger.App.Info("Starting control server",

@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"akashic/akashic/pkg/auth"
+	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/repository"
 	"context"
@@ -17,6 +18,7 @@ type Manager struct {
 	userRepo       *repository.UserRepository
 	tokenMgr       *TokenManager
 	passwordPolicy *auth.PasswordPolicy
+	rbacService    *ldap.RBACService
 	logger         *zap.Logger
 }
 
@@ -26,6 +28,7 @@ func NewManager(
 	userRepo *repository.UserRepository,
 	tokenMgr *TokenManager,
 	passwordPolicy *auth.PasswordPolicy,
+	rbacService *ldap.RBACService,
 	logger *zap.Logger,
 ) *Manager {
 	return &Manager{
@@ -33,6 +36,7 @@ func NewManager(
 		userRepo:       userRepo,
 		tokenMgr:       tokenMgr,
 		passwordPolicy: passwordPolicy,
+		rbacService:    rbacService,
 		logger:         logger,
 	}
 }
@@ -130,21 +134,32 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 	// Step 6: Force user type to root
 	req.UserType = models.UserTypeRoot
 
-	// Step 7: Hash password
-	passwordHash, err := auth.HashPassword(req.Password)
-	if err != nil {
-		m.logger.Error("Failed to hash password", zap.Error(err))
-		return nil, fmt.Errorf("failed to hash password: %v", err)
-	}
-
-	// Step 8: Create user in database
-	user, err := m.userRepo.CreateUser(ctx, req, passwordHash)
+	// Step 7: Create user in LDAP and database
+	// Note: Password is passed in plaintext to the repository, which will
+	// pass it to LDAP. LDAP will hash and store it securely.
+	user, err := m.userRepo.CreateUser(ctx, req, req.Password)
 	if err != nil {
 		m.logger.Error("Failed to create root user",
 			zap.String("username", req.Username),
 			zap.String("email", req.Email),
 			zap.Error(err))
 		return nil, fmt.Errorf("failed to create root user: %v", err)
+	}
+
+	// Step 8: Assign root user to RBAC group
+	if err := m.rbacService.AssignUserType(user.LdapDN, models.UserTypeRoot); err != nil {
+		m.logger.Error("Failed to assign root user to RBAC group",
+			zap.String("user_id", user.ID.String()),
+			zap.String("ldap_dn", user.LdapDN),
+			zap.Error(err))
+		// Log warning but don't fail - user was created successfully
+		// They can be manually added to the group later if needed
+		m.logger.Warn("Root user created but not added to RBAC group - manual intervention may be required")
+	} else {
+		m.logger.Info("Root user assigned to RBAC group",
+			zap.String("user_id", user.ID.String()),
+			zap.String("ldap_dn", user.LdapDN),
+			zap.String("user_type", string(models.UserTypeRoot)))
 	}
 
 	// Step 9: Mark bootstrap as complete
@@ -165,13 +180,15 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 
 	m.logger.Info("Root user created successfully - bootstrap complete",
 		zap.String("user_id", user.ID.String()),
-		zap.String("username", user.Username),
-		zap.String("email", user.Email))
+		zap.String("ldap_dn", user.LdapDN),
+		zap.String("username", req.Username),
+		zap.String("email", req.Email))
 
 	// Log to security channel
 	m.logger.Info("SECURITY: Root account created",
 		zap.String("user_id", user.ID.String()),
-		zap.String("username", user.Username))
+		zap.String("ldap_dn", user.LdapDN),
+		zap.String("username", req.Username))
 
 	return user, nil
 }

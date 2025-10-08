@@ -31,17 +31,19 @@ func (ut UserType) IsValid() bool {
 }
 
 // User represents a user account in the system
+// Identity information (username, email, password) is stored in LDAP
+// This table only stores Akashic-specific metadata and authorization data
 type User struct {
-	ID           uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"uid"`
-	Username     string     `gorm:"uniqueIndex;not null;size:255" json:"username"`
-	Email        string     `gorm:"uniqueIndex;not null;size:255" json:"email"`
-	PasswordHash string     `gorm:"not null;size:255" json:"-"` // Never serialize password hash
-	UserType     UserType   `gorm:"type:varchar(50);not null;index" json:"user_type"`
-	IsDisabled   bool       `gorm:"default:false;not null;index" json:"is_disabled"`
-	DisabledAt   *time.Time `gorm:"index" json:"disabled_at,omitempty"`
-	DisabledBy   *uuid.UUID `gorm:"type:uuid" json:"disabled_by,omitempty"`
-	CreatedAt    time.Time  `gorm:"autoCreateTime;not null" json:"created_at"`
-	UpdatedAt    time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
+	ID                   uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"uid"`
+	LdapDN               string     `gorm:"uniqueIndex;not null;size:512" json:"ldap_dn"` // Distinguished Name in LDAP
+	UserType             UserType   `gorm:"type:varchar(50);not null;index" json:"user_type"`
+	IsDisabled           bool       `gorm:"default:false;not null;index" json:"is_disabled"`
+	DisabledAt           *time.Time `gorm:"index" json:"disabled_at,omitempty"`
+	DisabledBy           *uuid.UUID `gorm:"type:uuid" json:"disabled_by,omitempty"`
+	MissingIdentity      bool       `gorm:"default:false;not null;index" json:"missing_identity"`           // True if LDAP entry not found
+	MissingIdentitySince *time.Time `gorm:"index" json:"missing_identity_since,omitempty"`                   // When LDAP entry was first detected missing
+	CreatedAt            time.Time  `gorm:"autoCreateTime;not null" json:"created_at"`
+	UpdatedAt            time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }
 
 // TableName specifies the table name for GORM

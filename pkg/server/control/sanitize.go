@@ -188,16 +188,19 @@ func SanitizeConfig(cfg *config.Config) map[string]any {
 
 	// LDAP configuration (hide credentials)
 	sanitized["ldap"] = map[string]any{
-		"enabled": cfg.LDAP.Enabled,
-		"host":    cfg.LDAP.Host,
-		"port":    cfg.LDAP.Port,
-		"base_dn": cfg.LDAP.BaseDN,
-		"tls": map[string]any{
-			"enabled":   cfg.LDAP.TLS.Enabled,
-			"cert_file": cfg.LDAP.TLS.CertFile,
-			"key_file":  cfg.LDAP.TLS.KeyFile,
-		},
-		"external": getSanitizedExternalLdap(cfg.LDAP.External),
+		"host":               cfg.LDAP.Host,
+		"port":               cfg.LDAP.Port,
+		"base_dn":            cfg.LDAP.BaseDN,
+		"bind_dn":            cfg.LDAP.BindDN,
+		"bind_password":      redactedPlaceholder,
+		"use_tls":            cfg.LDAP.UseTLS,
+		"tls_skip_verify":    cfg.LDAP.TLSSkipVerify,
+		"user_search_base":   cfg.LDAP.UserSearchBase,
+		"user_search_filter": cfg.LDAP.UserSearchFilter,
+		"user_object_class":  cfg.LDAP.UserObjectClass,
+		"username_attr":      cfg.LDAP.UsernameAttr,
+		"email_attr":         cfg.LDAP.EmailAttr,
+		"display_name_attr":  cfg.LDAP.DisplayNameAttr,
 	}
 
 	return sanitized
@@ -236,19 +239,4 @@ func getSanitizedSinks(chCfg *config.ChannelConfig) []map[string]any {
 		}
 	}
 	return sinksCfg
-}
-
-func getSanitizedExternalLdap(cfg *config.ExternalLDAPConfig) map[string]any {
-	if cfg == nil {
-		return map[string]any{}
-	}
-	return map[string]any{
-		"host":            cfg.Host,
-		"port":            cfg.Port,
-		"base_dn":         cfg.BaseDN,
-		"bind_dn":         cfg.BindDN,
-		"bind_password":   redactedPlaceholder,
-		"use_tls":         cfg.UseTLS,
-		"skip_tls_verify": cfg.SkipTLSVerify,
-	}
 }

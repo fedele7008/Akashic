@@ -204,34 +204,49 @@ bootstrap:
     require_number: true  # Require at least one number
     require_special: false  # Require at least one special character
 
-# LDAP Server Configuration
-# Akashic runs an embedded LDAP server by default as a fallback directory service
+# LDAP Configuration
+# Configure connection to LDAP server (embedded or external)
+# For embedded: Use "ldap" as host (Docker service name)
+# For external: Use your LDAP server hostname/IP
 ldap:
-  # Enable/disable the embedded LDAP server
-  enabled: true
-
-  # LDAP server binding address
-  host: "127.0.0.1"  # Localhost only by default for security
-
-  # LDAP port (389 for LDAP, 636 for LDAPS)
-  port: 389
-
-  # Base Distinguished Name for the LDAP directory
+  # Connection settings
+  host: localhost  # Docker service name for embedded, or "ldap.company.com" for external
+  port: 389     # 389 for LDAP, 636 for LDAPS
   base_dn: "dc=akashic,dc=local"
 
-  # TLS/LDAPS configuration
-  tls:
-    enabled: false  # Set to true for LDAPS (port 636)
-    cert_file: "./certs/ldap.crt"
-    key_file: "./certs/ldap.key"
+  # Bind credentials (admin account for Akashic to use)
+  bind_dn: "cn=admin,dc=akashic,dc=local"
+  bind_password: "${AKASHIC_LDAP_ADMIN_PASSWORD}"
 
-  # External LDAP Configuration (optional)
-  # When configured, Akashic will use this external LDAP instead of embedded server
-  # external:
-  #   host: "ldap.example.com"
-  #   port: 389
-  #   base_dn: "dc=example,dc=com"
-  #   bind_dn: "cn=admin,dc=example,dc=com"
-  #   bind_password: "${AKASHIC_LDAP_BIND_PASSWORD}"
-  #   use_tls: true
-  #   skip_tls_verify: false
+  # TLS settings
+  use_tls: false           # Set to true for LDAPS (port 636)
+  tls_skip_verify: false   # Set to true for dev/self-signed certs (INSECURE)
+
+  # User search configuration
+  user_search_base: "ou=users,dc=akashic,dc=local"
+  user_search_filter: "(uid={username})"  # {username} is replaced with actual username
+  user_object_class: "inetOrgPerson"
+
+  # Attribute mapping (LDAP attribute names)
+  username_attr: "uid"           # Attribute containing username
+  email_attr: "mail"             # Attribute containing email
+  display_name_attr: "cn"        # Attribute containing display name
+
+  # RBAC (Role-Based Access Control) configuration
+  rbac:
+    # LDAP groups for different user types
+    root_group: "cn=akashic-root,ou=groups,dc=akashic,dc=local"
+    admin_group: "cn=akashic-admins,ou=groups,dc=akashic,dc=local"
+    user_group: "cn=akashic-users,ou=groups,dc=akashic,dc=local"
+    # Default user type when no group membership found (user/admin/root)
+    default_type: "user"
+
+  # Deprovisioning configuration
+  deprovisioning:
+    enabled: true
+    sync_interval: "1h"           # How often to check for missing LDAP entries
+
+    # Deletion thresholds when LDAP entry is missing
+    root_deletion_threshold: "0s"     # Root accounts deleted immediately
+    admin_deletion_threshold: "720h"  # Admin accounts after 30 days
+    user_deletion_threshold: "2160h"  # Regular users after 90 days

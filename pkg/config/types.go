@@ -426,48 +426,102 @@ type PasswordPolicyConfig struct {
 	RequireSpecial bool `mapstructure:"require_special" yaml:"require_special"`
 }
 
-// LDAPConfig contains LDAP server configuration
+// LDAPConfig contains unified LDAP server configuration
+// Works for both embedded (Docker) and external LDAP servers
 type LDAPConfig struct {
-	// Enabled controls whether the embedded LDAP server is enabled (default: true)
-	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
-	// Host is the address to bind the LDAP server (default: "127.0.0.1")
+	// Host is the LDAP server address
+	// Embedded: "ldap" (Docker service name)
+	// External: "ldap.company.com" or IP address
 	Host string `mapstructure:"host" yaml:"host"`
+
 	// Port is the LDAP port number (default: 389, LDAPS: 636)
 	Port int `mapstructure:"port" yaml:"port"`
+
 	// BaseDN is the base distinguished name for the LDAP directory
 	BaseDN string `mapstructure:"base_dn" yaml:"base_dn"`
-	// TLS configuration for LDAPS
-	TLS LDAPTLSConfig `mapstructure:"tls" yaml:"tls"`
-	// External LDAP client configuration (optional - overrides embedded server)
-	External *ExternalLDAPConfig `mapstructure:"external" yaml:"external,omitempty"`
-}
 
-// LDAPTLSConfig defines TLS settings for LDAPS
-type LDAPTLSConfig struct {
-	// Enabled controls whether LDAPS is enabled (default: false)
-	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
-	// CertFile path to the server certificate file
-	CertFile string `mapstructure:"cert_file" yaml:"cert_file"`
-	// KeyFile path to the server private key file
-	KeyFile string `mapstructure:"key_file" yaml:"key_file"`
-}
-
-// ExternalLDAPConfig defines connection to external LDAP server
-type ExternalLDAPConfig struct {
-	// Host is the external LDAP server address
-	Host string `mapstructure:"host" yaml:"host"`
-	// Port is the external LDAP server port
-	Port int `mapstructure:"port" yaml:"port"`
-	// BaseDN is the base DN for external LDAP
-	BaseDN string `mapstructure:"base_dn" yaml:"base_dn"`
 	// BindDN is the DN to bind as for authentication
+	// Example: "cn=admin,dc=akashic,dc=local"
 	BindDN string `mapstructure:"bind_dn" yaml:"bind_dn"`
+
 	// BindPassword is the password for the bind DN
 	BindPassword string `mapstructure:"bind_password" yaml:"bind_password"`
-	// UseTLS enables TLS for external LDAP connection
+
+	// UseTLS enables TLS/LDAPS connection
 	UseTLS bool `mapstructure:"use_tls" yaml:"use_tls"`
-	// SkipTLSVerify skips TLS certificate verification (insecure)
-	SkipTLSVerify bool `mapstructure:"skip_tls_verify" yaml:"skip_tls_verify"`
+
+	// TLSSkipVerify skips TLS certificate verification (insecure - dev only)
+	TLSSkipVerify bool `mapstructure:"tls_skip_verify" yaml:"tls_skip_verify"`
+
+	// UserSearchBase is the base DN for user searches
+	// Example: "ou=users,dc=akashic,dc=local"
+	UserSearchBase string `mapstructure:"user_search_base" yaml:"user_search_base"`
+
+	// UserSearchFilter is the LDAP filter for finding users
+	// Use {username} as placeholder. Example: "(uid={username})"
+	UserSearchFilter string `mapstructure:"user_search_filter" yaml:"user_search_filter"`
+
+	// UserObjectClass is the object class for user entries
+	// Example: "inetOrgPerson"
+	UserObjectClass string `mapstructure:"user_object_class" yaml:"user_object_class"`
+
+	// UsernameAttr is the LDAP attribute for username
+	// Example: "uid"
+	UsernameAttr string `mapstructure:"username_attr" yaml:"username_attr"`
+
+	// EmailAttr is the LDAP attribute for email
+	// Example: "mail"
+	EmailAttr string `mapstructure:"email_attr" yaml:"email_attr"`
+
+	// DisplayNameAttr is the LDAP attribute for display name
+	// Example: "cn"
+	DisplayNameAttr string `mapstructure:"display_name_attr" yaml:"display_name_attr"`
+
+	// RBAC contains role-based access control configuration
+	RBAC LDAPRBACConfig `mapstructure:"rbac" yaml:"rbac"`
+
+	// Deprovisioning contains user deprovisioning configuration
+	Deprovisioning LDAPDeprovisioningConfig `mapstructure:"deprovisioning" yaml:"deprovisioning"`
+}
+
+// LDAPRBACConfig contains LDAP group-based RBAC configuration
+type LDAPRBACConfig struct {
+	// RootGroup is the LDAP group DN for root users
+	// Example: "cn=akashic-root,ou=groups,dc=akashic,dc=local"
+	RootGroup string `mapstructure:"root_group" yaml:"root_group"`
+
+	// AdminGroup is the LDAP group DN for admin users
+	// Example: "cn=akashic-admins,ou=groups,dc=akashic,dc=local"
+	AdminGroup string `mapstructure:"admin_group" yaml:"admin_group"`
+
+	// UserGroup is the LDAP group DN for regular users (optional - can be empty)
+	// Example: "cn=akashic-users,ou=groups,dc=akashic,dc=local"
+	UserGroup string `mapstructure:"user_group" yaml:"user_group"`
+
+	// DefaultType is the default user type when no group membership found
+	// Valid values: "user", "admin", "root" (typically should be "user")
+	DefaultType string `mapstructure:"default_type" yaml:"default_type"`
+}
+
+// LDAPDeprovisioningConfig contains differential deprovisioning thresholds
+type LDAPDeprovisioningConfig struct {
+	// Enabled enables the deprovisioning service
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+
+	// SyncInterval is how often to check for missing LDAP entries
+	SyncInterval time.Duration `mapstructure:"sync_interval" yaml:"sync_interval"`
+
+	// RootDeletionThreshold is time before deleting root user when LDAP entry missing
+	// Root accounts are critical, so this should be very short (e.g., 0s for immediate)
+	RootDeletionThreshold time.Duration `mapstructure:"root_deletion_threshold" yaml:"root_deletion_threshold"`
+
+	// AdminDeletionThreshold is time before deleting admin user when LDAP entry missing
+	// Example: "720h" (30 days)
+	AdminDeletionThreshold time.Duration `mapstructure:"admin_deletion_threshold" yaml:"admin_deletion_threshold"`
+
+	// UserDeletionThreshold is time before deleting regular user when LDAP entry missing
+	// Example: "2160h" (90 days)
+	UserDeletionThreshold time.Duration `mapstructure:"user_deletion_threshold" yaml:"user_deletion_threshold"`
 }
 
 // MiddlewareConfig contains middleware configuration for both servers
