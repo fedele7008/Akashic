@@ -37,11 +37,12 @@ const (
 )
 
 // New creates a new Control Server instance
-func New(ctx context.Context, authServer *auth.Server, config *config.ConfigManager, logger *logging.Logger, shutdownFn context.CancelFunc) *Server {
+func New(ctx context.Context, authServer *auth.Server, bootstrapMgr *bootstrap.Manager, config *config.ConfigManager, logger *logging.Logger, shutdownFn context.CancelFunc) *Server {
 	return &Server{
 		ctx:          ctx,
 		logger:       logger,
 		stateManager: NewStateManager(authServer, logger),
+		bootstrapMgr: bootstrapMgr,
 		config:       config,
 		shutdownFn:   shutdownFn,
 		startedAt:    time.Now(),
@@ -116,11 +117,6 @@ func (s *Server) Stop() error {
 // GetStateManager returns the state manager
 func (s *Server) GetStateManager() *StateManager {
 	return s.stateManager
-}
-
-// SetBootstrapManager sets the bootstrap manager (called during app initialization)
-func (s *Server) SetBootstrapManager(mgr *bootstrap.Manager) {
-	s.bootstrapMgr = mgr
 }
 
 // GetAddress returns the server address

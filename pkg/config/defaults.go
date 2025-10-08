@@ -100,6 +100,15 @@ const (
 	DefaultBootstrapRequireNumber     = true
 	DefaultBootstrapRequireSpecial    = true
 
+	// LDAP server defaults
+	DefaultLDAPEnabled     = true
+	DefaultLDAPHost        = "127.0.0.1"
+	DefaultLDAPPort        = 389
+	DefaultLDAPBaseDN      = "dc=akashic,dc=local"
+	DefaultLDAPTLSEnabled  = false
+	DefaultLDAPCertFile    = "./certs/ldap.crt"
+	DefaultLDAPKeyFile     = "./certs/ldap.key"
+
 	// Middleware defaults - Auth Server
 	DefaultAuthMaxRequestSizeBytes int64         = 5 * 1024 * 1024 // 5MB
 	DefaultAuthRequestTimeout      time.Duration = 30 * time.Second
@@ -192,6 +201,22 @@ func setDefaults(v *viper.Viper) {
 
 	// Deployment defaults
 	v.SetDefault("deployment.environment", DefaultEnvironment.String())
+
+	// Bootstrap defaults
+	v.SetDefault("bootstrap.token_ttl", DefaultBootstrapTokenTTL)
+	v.SetDefault("bootstrap.password.min_length", DefaultBootstrapPasswordMinLength)
+	v.SetDefault("bootstrap.password.require_uppercase", DefaultBootstrapRequireUppercase)
+	v.SetDefault("bootstrap.password.require_number", DefaultBootstrapRequireNumber)
+	v.SetDefault("bootstrap.password.require_special", DefaultBootstrapRequireSpecial)
+
+	// LDAP server defaults
+	v.SetDefault("ldap.enabled", DefaultLDAPEnabled)
+	v.SetDefault("ldap.host", DefaultLDAPHost)
+	v.SetDefault("ldap.port", DefaultLDAPPort)
+	v.SetDefault("ldap.base_dn", DefaultLDAPBaseDN)
+	v.SetDefault("ldap.tls.enabled", DefaultLDAPTLSEnabled)
+	v.SetDefault("ldap.tls.cert_file", DefaultLDAPCertFile)
+	v.SetDefault("ldap.tls.key_file", DefaultLDAPKeyFile)
 
 	// Middleware defaults - Auth Server
 	// Security headers

@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"akashic/akashic/pkg/database/gormdb"
+	"akashic/akashic/pkg/database/akashic_postgres"
 	"akashic/akashic/pkg/models"
 	"context"
 	"fmt"
@@ -22,12 +22,12 @@ type BootstrapStatus struct {
 
 // BootstrapRepository handles bootstrap status data access
 type BootstrapRepository struct {
-	db     *gormdb.DB
+	db     *akashic_postgres.DB
 	logger *zap.Logger
 }
 
 // NewBootstrapRepository creates a new bootstrap repository
-func NewBootstrapRepository(db *gormdb.DB, logger *zap.Logger) *BootstrapRepository {
+func NewBootstrapRepository(db *akashic_postgres.DB, logger *zap.Logger) *BootstrapRepository {
 	return &BootstrapRepository{
 		db:     db,
 		logger: logger,
@@ -44,7 +44,7 @@ func (r *BootstrapRepository) GetStatus(ctx context.Context) (*BootstrapStatus, 
 			r.logger.Error("Bootstrap status row not found - database may not be initialized")
 			return nil, fmt.Errorf("bootstrap status not found - run migrations first")
 		}
-		return nil, fmt.Errorf("failed to get bootstrap status: %w", err)
+		return nil, fmt.Errorf("failed to get bootstrap status: %v", err)
 	}
 
 	return &BootstrapStatus{
@@ -62,21 +62,21 @@ func (r *BootstrapRepository) MarkComplete(ctx context.Context, rootUserID uuid.
 	result := r.db.WithContext(ctx).
 		Model(&models.BootstrapStatus{}).
 		Where("id = ? AND is_complete = ?", true, false).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"is_complete":  true,
 			"completed_at": &now,
 			"root_user_id": &rootUserID,
 		})
 
 	if result.Error != nil {
-		return fmt.Errorf("failed to mark bootstrap complete: %w", result.Error)
+		return fmt.Errorf("failed to mark bootstrap complete: %v", result.Error)
 	}
 
 	if result.RowsAffected == 0 {
 		// Check if already completed
 		status, err := r.GetStatus(ctx)
 		if err != nil {
-			return fmt.Errorf("failed to verify bootstrap status: %w", err)
+			return fmt.Errorf("failed to verify bootstrap status: %v", err)
 		}
 
 		if status.IsComplete {
@@ -111,12 +111,12 @@ func (r *BootstrapRepository) Reset(ctx context.Context) error {
 	if err := r.db.WithContext(ctx).
 		Model(&models.BootstrapStatus{}).
 		Where("id = ?", true).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"is_complete":  false,
 			"completed_at": nil,
 			"root_user_id": nil,
 		}).Error; err != nil {
-		return fmt.Errorf("failed to reset bootstrap status: %w", err)
+		return fmt.Errorf("failed to reset bootstrap status: %v", err)
 	}
 
 	r.logger.Warn("Bootstrap status reset successfully")

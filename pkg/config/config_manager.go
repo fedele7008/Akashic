@@ -240,7 +240,7 @@ func (m *ConfigManager) LoadConfig() error {
 
 	// Validate configuration
 	if err := validateConfig(config); err != nil {
-		return fmt.Errorf("configuration validation failed: %v", err)
+		return err
 	}
 
 	m.config = config
@@ -273,34 +273,34 @@ func (m *ConfigManager) postProcessConfig(config *Config) error {
 func validateConfig(config *Config) error {
 	// Basic validation
 	if config.Server.Auth.Host == "" {
-		return fmt.Errorf("server.auth.host is required")
+		return fmt.Errorf("missing config: server.auth.host is required")
 	}
 	if config.Server.Auth.Port <= 0 || config.Server.Auth.Port > 65535 {
-		return fmt.Errorf("server.auth.port must be between 1 and 65535")
+		return fmt.Errorf("missing config: server.auth.port must be between 1 and 65535")
 	}
 	if config.Server.Control.Host == "" {
-		return fmt.Errorf("server.control.host is required")
+		return fmt.Errorf("missing config: server.control.host is required")
 	}
 	if config.Server.Control.Port <= 0 || config.Server.Control.Port > 65535 {
-		return fmt.Errorf("server.control.port must be between 1 and 65535")
+		return fmt.Errorf("missing config: server.control.port must be between 1 and 65535")
 	}
 
 	// Database validation
 	if config.Database.Postgres.Host == "" {
-		return fmt.Errorf("database.postgres.host is required")
+		return fmt.Errorf("missing config: database.postgres.host is required")
 	}
 	if config.Database.Postgres.Database == "" {
-		return fmt.Errorf("database.postgres.database is required")
+		return fmt.Errorf("missing config: database.postgres.database is required")
 	}
 	if config.Database.Postgres.Username == "" {
-		return fmt.Errorf("database.postgres.username is required")
+		return fmt.Errorf("missing config: database.postgres.username is required")
 	}
 	if config.Database.Postgres.Password == "" {
-		return fmt.Errorf("database.postgres.password is required")
+		return fmt.Errorf("missing config: database.postgres.password is required")
 	}
 
 	if config.Database.Redis.Host == "" {
-		return fmt.Errorf("database.redis.host is required")
+		return fmt.Errorf("missing config: database.redis.host is required")
 	}
 
 	return nil

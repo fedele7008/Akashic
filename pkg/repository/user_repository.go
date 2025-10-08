@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"akashic/akashic/pkg/database/gormdb"
+	"akashic/akashic/pkg/database/akashic_postgres"
 	"akashic/akashic/pkg/models"
 	"context"
 	"fmt"
@@ -14,12 +14,12 @@ import (
 
 // UserRepository handles user data access
 type UserRepository struct {
-	db     *gormdb.DB
+	db     *akashic_postgres.DB
 	logger *zap.Logger
 }
 
 // NewUserRepository creates a new user repository
-func NewUserRepository(db *gormdb.DB, logger *zap.Logger) *UserRepository {
+func NewUserRepository(db *akashic_postgres.DB, logger *zap.Logger) *UserRepository {
 	return &UserRepository{
 		db:     db,
 		logger: logger,
@@ -33,12 +33,11 @@ func (r *UserRepository) CreateUser(ctx context.Context, req *models.CreateUserR
 		Email:        req.Email,
 		PasswordHash: passwordHash,
 		UserType:     req.UserType,
-		IsActive:     true,
 		IsDisabled:   false,
 	}
 
 	if err := r.db.WithContext(ctx).Create(user).Error; err != nil {
-		return nil, fmt.Errorf("failed to create user: %w", err)
+		return nil, fmt.Errorf("failed to create user: %v", err)
 	}
 
 	r.logger.Info("User created successfully",
@@ -56,7 +55,7 @@ func (r *UserRepository) GetUserByID(ctx context.Context, id uuid.UUID) (*models
 		if err == gorm.ErrRecordNotFound {
 			return nil, models.ErrUserNotFound
 		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
+		return nil, fmt.Errorf("failed to get user: %v", err)
 	}
 
 	return &user, nil
@@ -69,7 +68,7 @@ func (r *UserRepository) GetUserByUsername(ctx context.Context, username string)
 		if err == gorm.ErrRecordNotFound {
 			return nil, models.ErrUserNotFound
 		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
+		return nil, fmt.Errorf("failed to get user: %v", err)
 	}
 
 	return &user, nil
@@ -82,7 +81,7 @@ func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 		if err == gorm.ErrRecordNotFound {
 			return nil, models.ErrUserNotFound
 		}
-		return nil, fmt.Errorf("failed to get user: %w", err)
+		return nil, fmt.Errorf("failed to get user: %v", err)
 	}
 
 	return &user, nil
@@ -92,12 +91,12 @@ func (r *UserRepository) GetUserByEmail(ctx context.Context, email string) (*mod
 func (r *UserRepository) GetRootUser(ctx context.Context) (*models.User, error) {
 	var user models.User
 	if err := r.db.WithContext(ctx).
-		Where("user_type = ? AND is_active = ?", models.UserTypeRoot, true).
+		Where("user_type = ? AND is_disabled = ?", models.UserTypeRoot, false).
 		First(&user).Error; err != nil {
 		if err == gorm.ErrRecordNotFound {
 			return nil, nil // No root user exists (not an error during bootstrap)
 		}
-		return nil, fmt.Errorf("failed to get root user: %w", err)
+		return nil, fmt.Errorf("failed to get root user: %v", err)
 	}
 
 	return &user, nil
@@ -111,7 +110,7 @@ func (r *UserRepository) UpdatePassword(ctx context.Context, userID uuid.UUID, n
 		Update("password_hash", newPasswordHash)
 
 	if result.Error != nil {
-		return fmt.Errorf("failed to update password: %w", result.Error)
+		return fmt.Errorf("failed to update password: %v", result.Error)
 	}
 
 	if result.RowsAffected == 0 {
@@ -128,14 +127,14 @@ func (r *UserRepository) DisableUser(ctx context.Context, userID uuid.UUID, disa
 	result := r.db.WithContext(ctx).
 		Model(&models.User{}).
 		Where("id = ? AND is_disabled = ?", userID, false).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"is_disabled": true,
 			"disabled_at": &now,
 			"disabled_by": &disabledBy,
 		})
 
 	if result.Error != nil {
-		return fmt.Errorf("failed to disable user: %w", result.Error)
+		return fmt.Errorf("failed to disable user: %v", result.Error)
 	}
 
 	if result.RowsAffected == 0 {
@@ -154,14 +153,14 @@ func (r *UserRepository) EnableUser(ctx context.Context, userID uuid.UUID) error
 	result := r.db.WithContext(ctx).
 		Model(&models.User{}).
 		Where("id = ? AND is_disabled = ?", userID, true).
-		Updates(map[string]interface{}{
+		Updates(map[string]any{
 			"is_disabled": false,
 			"disabled_at": nil,
 			"disabled_by": nil,
 		})
 
 	if result.Error != nil {
-		return fmt.Errorf("failed to enable user: %w", result.Error)
+		return fmt.Errorf("failed to enable user: %v", result.Error)
 	}
 
 	if result.RowsAffected == 0 {
@@ -181,7 +180,7 @@ func (r *UserRepository) ListUsers(ctx context.Context, limit, offset int) ([]*m
 		Limit(limit).
 		Offset(offset).
 		Find(&users).Error; err != nil {
-		return nil, fmt.Errorf("failed to list users: %w", err)
+		return nil, fmt.Errorf("failed to list users: %v", err)
 	}
 
 	return users, nil

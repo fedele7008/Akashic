@@ -32,12 +32,11 @@ func (ut UserType) IsValid() bool {
 
 // User represents a user account in the system
 type User struct {
-	ID           uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"id"`
+	ID           uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"uid"`
 	Username     string     `gorm:"uniqueIndex;not null;size:255" json:"username"`
 	Email        string     `gorm:"uniqueIndex;not null;size:255" json:"email"`
 	PasswordHash string     `gorm:"not null;size:255" json:"-"` // Never serialize password hash
 	UserType     UserType   `gorm:"type:varchar(50);not null;index" json:"user_type"`
-	IsActive     bool       `gorm:"default:true;not null;index" json:"is_active"`
 	IsDisabled   bool       `gorm:"default:false;not null;index" json:"is_disabled"`
 	DisabledAt   *time.Time `gorm:"index" json:"disabled_at,omitempty"`
 	DisabledBy   *uuid.UUID `gorm:"type:uuid" json:"disabled_by,omitempty"`
@@ -91,16 +90,16 @@ type DisableUserRequest struct {
 
 // Common user-related errors
 var (
-	ErrUsernameRequired      = NewValidationError("username is required")
-	ErrEmailRequired         = NewValidationError("email is required")
-	ErrPasswordRequired      = NewValidationError("password is required")
-	ErrInvalidUserType       = NewValidationError("invalid user type")
-	ErrUserNotFound          = NewNotFoundError("user not found")
-	ErrUserAlreadyExists     = NewConflictError("user already exists")
-	ErrRootUserExists        = NewConflictError("root user already exists")
-	ErrRootUserCannotDelete  = NewForbiddenError("root user cannot be deleted")
-	ErrInvalidCredentials    = NewUnauthorizedError("invalid credentials")
-	ErrUserDisabled          = NewForbiddenError("user account is disabled")
+	ErrUsernameRequired     = NewValidationError("username is required")
+	ErrEmailRequired        = NewValidationError("email is required")
+	ErrPasswordRequired     = NewValidationError("password is required")
+	ErrInvalidUserType      = NewValidationError("invalid user type")
+	ErrUserNotFound         = NewNotFoundError("user not found")
+	ErrUserAlreadyExists    = NewConflictError("user already exists")
+	ErrRootUserExists       = NewConflictError("root user already exists")
+	ErrRootUserCannotDelete = NewForbiddenError("root user cannot be deleted")
+	ErrInvalidCredentials   = NewUnauthorizedError("invalid credentials")
+	ErrUserDisabled         = NewForbiddenError("user account is disabled")
 )
 
 // ValidationError represents a validation error

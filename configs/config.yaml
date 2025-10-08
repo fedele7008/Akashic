@@ -199,7 +199,39 @@ bootstrap:
 
   # Password policy for root user creation
   password:
-    min_length: 12  # Minimum password length
-    require_uppercase: true  # Require at least one uppercase letter
+    min_length: 8  # Minimum password length
+    require_uppercase: false  # Require at least one uppercase letter
     require_number: true  # Require at least one number
-    require_special: true  # Require at least one special character
+    require_special: false  # Require at least one special character
+
+# LDAP Server Configuration
+# Akashic runs an embedded LDAP server by default as a fallback directory service
+ldap:
+  # Enable/disable the embedded LDAP server
+  enabled: true
+
+  # LDAP server binding address
+  host: "127.0.0.1"  # Localhost only by default for security
+
+  # LDAP port (389 for LDAP, 636 for LDAPS)
+  port: 389
+
+  # Base Distinguished Name for the LDAP directory
+  base_dn: "dc=akashic,dc=local"
+
+  # TLS/LDAPS configuration
+  tls:
+    enabled: false  # Set to true for LDAPS (port 636)
+    cert_file: "./certs/ldap.crt"
+    key_file: "./certs/ldap.key"
+
+  # External LDAP Configuration (optional)
+  # When configured, Akashic will use this external LDAP instead of embedded server
+  # external:
+  #   host: "ldap.example.com"
+  #   port: 389
+  #   base_dn: "dc=example,dc=com"
+  #   bind_dn: "cn=admin,dc=example,dc=com"
+  #   bind_password: "${AKASHIC_LDAP_BIND_PASSWORD}"
+  #   use_tls: true
+  #   skip_tls_verify: false

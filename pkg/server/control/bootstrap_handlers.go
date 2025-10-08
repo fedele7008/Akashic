@@ -42,6 +42,8 @@ func (s *Server) requireBootstrapMode(next http.HandlerFunc) http.HandlerFunc {
 // Middleware: Require CLI user-agent (for token fetch/regenerate endpoints)
 func requireCLI(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		// TODO: Current implementation only checks for User-Agent header,
+		// however, this should be checking mTLS certificate instead in future
 		ua := r.Header.Get("User-Agent")
 		if !strings.Contains(ua, "akashic-cli/") {
 			response.WriteJSON(w, http.StatusForbidden,
@@ -58,7 +60,6 @@ func requireCLI(next http.HandlerFunc) http.HandlerFunc {
 // Returns the current bootstrap status
 func (s *Server) handleBootstrapStatus(w http.ResponseWriter, r *http.Request) {
 	s.logger.App.Debug("CTRL: Handling bootstrap status request")
-
 	if r.Method != http.MethodGet {
 		response.WriteJSON(w, response.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed, fmt.Sprintf("%s method not allowed", r.Method), map[string]any{
@@ -91,7 +92,6 @@ func (s *Server) handleBootstrapStatus(w http.ResponseWriter, r *http.Request) {
 // Returns the current bootstrap token
 func (s *Server) handleGetBootstrapToken(w http.ResponseWriter, r *http.Request) {
 	s.logger.App.Debug("CTRL: Handling get bootstrap token request (CLI)")
-
 	if r.Method != http.MethodGet {
 		response.WriteJSON(w, response.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed, fmt.Sprintf("%s method not allowed", r.Method), map[string]any{
@@ -159,7 +159,6 @@ func (s *Server) handleRegenerateToken(w http.ResponseWriter, r *http.Request) {
 // Creates the root user account
 func (s *Server) handleCreateRootUser(w http.ResponseWriter, r *http.Request) {
 	s.logger.App.Debug("CTRL: Handling create root user request")
-
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed, fmt.Sprintf("%s method not allowed", r.Method), map[string]any{
@@ -251,11 +250,10 @@ func (s *Server) handleCreateRootUser(w http.ResponseWriter, r *http.Request) {
 	// Return user info (without password hash)
 	response.WriteJSON(w, http.StatusCreated, response.Success(map[string]any{
 		"user": map[string]any{
-			"id":         user.ID,
+			"uid":        user.ID,
 			"username":   user.Username,
 			"email":      user.Email,
 			"user_type":  user.UserType,
-			"is_active":  user.IsActive,
 			"created_at": user.CreatedAt,
 		},
 		"message": "Root user created successfully - bootstrap complete",

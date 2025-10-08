@@ -2,6 +2,7 @@ package middleware
 
 import (
 	"akashic/akashic/pkg/logging"
+	"bytes"
 	"fmt"
 	"io"
 	"net/http"
@@ -49,7 +50,12 @@ func Logging(logger *logging.Logger, config *LoggingConfig) Middleware {
 				zap.String("proto", r.Proto),
 				zap.Dict("request_headers", headerFields(r.Header)...),
 				zap.String("body", func() string {
+					if r.Body == nil {
+						return ""
+					}
 					body, _ := io.ReadAll(r.Body)
+					// Restore the body so handlers can read it
+					r.Body = io.NopCloser(bytes.NewBuffer(body))
 					return string(body)
 				}()),
 				zap.Int64("request_size", r.ContentLength),
@@ -58,7 +64,7 @@ func Logging(logger *logging.Logger, config *LoggingConfig) Middleware {
 				zap.String("request_id", reqId),
 			}
 			// Log incoming request
-			logger.App.Info(fmt.Sprintf("REQUEST RECEIVED: %s [%s] %s<-%s (%d bytes) \"%s\" request-id: %s\n",
+			logger.App.Info(fmt.Sprintf("REQUEST RECEIVED: %s [%s] %s<-%s (%d bytes) \"%s\" request-id: %s",
 				r.Proto,
 				r.Method,
 				r.Host,
@@ -91,7 +97,7 @@ func Logging(logger *logging.Logger, config *LoggingConfig) Middleware {
 
 			// Log to appropriate channel based on status code
 			if rw.StatusCode() >= 500 {
-				logger.App.Error(fmt.Sprintf("RESPONSE SENT (SERVER ERROR): %s [%s:%v] %s->%s (%d bytes) \"%s\" request-id: %s\n",
+				logger.App.Error(fmt.Sprintf("RESPONSE SENT (SERVER ERROR): %s [%s:%v] %s->%s (%d bytes) \"%s\" request-id: %s",
 					r.Proto,
 					r.Method,
 					rw.StatusCode(),
@@ -101,7 +107,7 @@ func Logging(logger *logging.Logger, config *LoggingConfig) Middleware {
 					r.URL.Path,
 					reqId), outField...)
 			} else if rw.StatusCode() >= 400 {
-				logger.App.Warn(fmt.Sprintf("RESPONSE SENT (CLIENT ERROR): %s [%s:%v] %s->%s (%d bytes) \"%s\" request-id: %s\n",
+				logger.App.Warn(fmt.Sprintf("RESPONSE SENT (CLIENT ERROR): %s [%s:%v] %s->%s (%d bytes) \"%s\" request-id: %s",
 					r.Proto,
 					r.Method,
 					rw.StatusCode(),
@@ -111,7 +117,7 @@ func Logging(logger *logging.Logger, config *LoggingConfig) Middleware {
 					r.URL.Path,
 					reqId), outField...)
 			} else {
-				logger.App.Info(fmt.Sprintf("RESPONSE SENT: %s [%s:%v] %s->%s (%d bytes) \"%s\" request-id: %s\n",
+				logger.App.Info(fmt.Sprintf("RESPONSE SENT: %s [%s:%v] %s->%s (%d bytes) \"%s\" request-id: %s",
 					r.Proto,
 					r.Method,
 					rw.StatusCode(),

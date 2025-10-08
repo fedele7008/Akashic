@@ -24,7 +24,7 @@ const (
 func HashPassword(password string) (string, error) {
 	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
 	if err != nil {
-		return "", fmt.Errorf("failed to hash password: %w", err)
+		return "", fmt.Errorf("failed to hash password: %v", err)
 	}
 	return string(hash), nil
 }
@@ -36,7 +36,7 @@ func VerifyPassword(hash, password string) error {
 		if err == bcrypt.ErrMismatchedHashAndPassword {
 			return ErrInvalidPassword
 		}
-		return fmt.Errorf("failed to verify password: %w", err)
+		return fmt.Errorf("failed to verify password: %v", err)
 	}
 	return nil
 }
@@ -221,8 +221,8 @@ func (e *ValidationError) Error() string {
 
 // Common auth-related errors
 var (
-	ErrInvalidPassword   = &ValidationError{Field: "password", Message: "invalid password"}
-	ErrEmailRequired     = &ValidationError{Field: "email", Message: "email is required"}
-	ErrUsernameRequired  = &ValidationError{Field: "username", Message: "username is required"}
-	ErrInvalidEmail      = &ValidationError{Field: "email", Message: "invalid email format"}
+	ErrInvalidPassword  = &ValidationError{Field: "password", Message: "invalid password"}
+	ErrEmailRequired    = &ValidationError{Field: "email", Message: "email is required"}
+	ErrUsernameRequired = &ValidationError{Field: "username", Message: "username is required"}
+	ErrInvalidEmail     = &ValidationError{Field: "email", Message: "invalid email format"}
 )

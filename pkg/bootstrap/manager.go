@@ -41,7 +41,7 @@ func NewManager(
 func (m *Manager) NeedsBootstrap(ctx context.Context) (bool, error) {
 	status, err := m.bootstrapRepo.GetStatus(ctx)
 	if err != nil {
-		return false, fmt.Errorf("failed to check bootstrap status: %w", err)
+		return false, fmt.Errorf("failed to check bootstrap status: %v", err)
 	}
 
 	needs := !status.IsComplete
@@ -68,7 +68,7 @@ func (m *Manager) InitializeBootstrap(ctx context.Context) (string, error) {
 	// Generate new token (replaces any existing token)
 	token, err := m.tokenMgr.Generate(ctx)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate bootstrap token: %w", err)
+		return "", fmt.Errorf("failed to generate bootstrap token: %v", err)
 	}
 
 	m.logger.Info("Bootstrap initialized successfully")
@@ -81,7 +81,7 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 	valid, err := m.tokenMgr.Validate(ctx, token)
 	if err != nil {
 		m.logger.Error("Token validation error", zap.Error(err))
-		return nil, fmt.Errorf("token validation failed: %w", err)
+		return nil, fmt.Errorf("token validation failed: %v", err)
 	}
 
 	if !valid {
@@ -108,7 +108,7 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 		m.logger.Warn("Invalid username in root user creation",
 			zap.String("username", req.Username),
 			zap.Error(err))
-		return nil, fmt.Errorf("username validation failed: %w", err)
+		return nil, fmt.Errorf("username validation failed: %v", err)
 	}
 
 	// Step 4: Validate email
@@ -116,7 +116,7 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 		m.logger.Warn("Invalid email in root user creation",
 			zap.String("email", req.Email),
 			zap.Error(err))
-		return nil, fmt.Errorf("email validation failed: %w", err)
+		return nil, fmt.Errorf("email validation failed: %v", err)
 	}
 
 	// Step 5: Validate password against policy
@@ -124,7 +124,7 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 		m.logger.Warn("Password policy violation in root user creation",
 			zap.String("username", req.Username),
 			zap.Error(err))
-		return nil, fmt.Errorf("password policy violation: %w", err)
+		return nil, fmt.Errorf("password policy violation: %v", err)
 	}
 
 	// Step 6: Force user type to root
@@ -134,7 +134,7 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 	passwordHash, err := auth.HashPassword(req.Password)
 	if err != nil {
 		m.logger.Error("Failed to hash password", zap.Error(err))
-		return nil, fmt.Errorf("failed to hash password: %w", err)
+		return nil, fmt.Errorf("failed to hash password: %v", err)
 	}
 
 	// Step 8: Create user in database
@@ -144,7 +144,7 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 			zap.String("username", req.Username),
 			zap.String("email", req.Email),
 			zap.Error(err))
-		return nil, fmt.Errorf("failed to create root user: %w", err)
+		return nil, fmt.Errorf("failed to create root user: %v", err)
 	}
 
 	// Step 9: Mark bootstrap as complete
@@ -177,16 +177,15 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 }
 
 // GetBootstrapStatus returns detailed bootstrap status information
-func (m *Manager) GetBootstrapStatus(ctx context.Context) (map[string]interface{}, error) {
+func (m *Manager) GetBootstrapStatus(ctx context.Context) (map[string]any, error) {
 	status, err := m.bootstrapRepo.GetStatus(ctx)
 	if err != nil {
 		return nil, err
 	}
 
-	result := map[string]interface{}{
-		"needs_bootstrap": !status.IsComplete,
-		"is_complete":     status.IsComplete,
-		"created_at":      status.CreatedAt,
+	result := map[string]any{
+		"is_complete": status.IsComplete,
+		"created_at":  status.CreatedAt,
 	}
 
 	if status.IsComplete {

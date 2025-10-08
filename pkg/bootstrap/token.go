@@ -1,7 +1,7 @@
 package bootstrap
 
 import (
-	"akashic/akashic/pkg/database/redis"
+	"akashic/akashic/pkg/database/akashic_redis"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
@@ -21,13 +21,13 @@ const (
 
 // TokenManager handles bootstrap token generation and validation
 type TokenManager struct {
-	redis  *redis.Client
+	redis  *akashic_redis.Client
 	ttl    time.Duration
 	logger *zap.Logger
 }
 
 // NewTokenManager creates a new token manager
-func NewTokenManager(redis *redis.Client, ttl time.Duration, logger *zap.Logger) *TokenManager {
+func NewTokenManager(redis *akashic_redis.Client, ttl time.Duration, logger *zap.Logger) *TokenManager {
 	return &TokenManager{
 		redis:  redis,
 		ttl:    ttl,
@@ -40,12 +40,12 @@ func NewTokenManager(redis *redis.Client, ttl time.Duration, logger *zap.Logger)
 func (m *TokenManager) Generate(ctx context.Context) (string, error) {
 	token, err := generateSecureToken(tokenLength)
 	if err != nil {
-		return "", fmt.Errorf("failed to generate token: %w", err)
+		return "", fmt.Errorf("failed to generate token: %v", err)
 	}
 
 	// Store in Redis with TTL (atomic replacement of old token)
 	if err := m.redis.Set(ctx, tokenKey, token, m.ttl).Err(); err != nil {
-		return "", fmt.Errorf("failed to store token in redis: %w", err)
+		return "", fmt.Errorf("failed to store token in redis: %v", err)
 	}
 
 	m.logger.Info("Bootstrap token generated",
@@ -68,7 +68,7 @@ func (m *TokenManager) Validate(ctx context.Context, token string) (bool, error)
 			m.logger.Debug("Bootstrap token not found or expired")
 			return false, nil
 		}
-		return false, fmt.Errorf("failed to get token from redis: %w", err)
+		return false, fmt.Errorf("failed to get token from redis: %v", err)
 	}
 
 	// Constant-time comparison to prevent timing attacks
@@ -88,7 +88,7 @@ func (m *TokenManager) Get(ctx context.Context) (string, error) {
 		if err.Error() == "redis: nil" {
 			return "", fmt.Errorf("bootstrap token not found or expired")
 		}
-		return "", fmt.Errorf("failed to get token: %w", err)
+		return "", fmt.Errorf("failed to get token: %v", err)
 	}
 
 	// Get TTL for the token
@@ -105,7 +105,7 @@ func (m *TokenManager) Get(ctx context.Context) (string, error) {
 func (m *TokenManager) Delete(ctx context.Context) error {
 	deleted, err := m.redis.Del(ctx, tokenKey).Result()
 	if err != nil {
-		return fmt.Errorf("failed to delete token: %w", err)
+		return fmt.Errorf("failed to delete token: %v", err)
 	}
 
 	if deleted > 0 {
@@ -119,7 +119,7 @@ func (m *TokenManager) Delete(ctx context.Context) error {
 func (m *TokenManager) Exists(ctx context.Context) (bool, error) {
 	exists, err := m.redis.Exists(ctx, tokenKey).Result()
 	if err != nil {
-		return false, fmt.Errorf("failed to check token existence: %w", err)
+		return false, fmt.Errorf("failed to check token existence: %v", err)
 	}
 
 	return exists > 0, nil
@@ -129,7 +129,7 @@ func (m *TokenManager) Exists(ctx context.Context) (bool, error) {
 func (m *TokenManager) GetTTL(ctx context.Context) (time.Duration, error) {
 	ttl, err := m.redis.TTL(ctx, tokenKey).Result()
 	if err != nil {
-		return 0, fmt.Errorf("failed to get token TTL: %w", err)
+		return 0, fmt.Errorf("failed to get token TTL: %v", err)
 	}
 
 	if ttl < 0 {
@@ -143,7 +143,7 @@ func (m *TokenManager) GetTTL(ctx context.Context) (time.Duration, error) {
 func generateSecureToken(length int) (string, error) {
 	bytes := make([]byte, length)
 	if _, err := rand.Read(bytes); err != nil {
-		return "", fmt.Errorf("failed to generate random bytes: %w", err)
+		return "", fmt.Errorf("failed to generate random bytes: %v", err)
 	}
 
 	// Convert to hex string (doubles the length in characters)

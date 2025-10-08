@@ -1,6 +1,8 @@
-package redis
+package akashic_redis
 
 import (
+	"akashic/akashic/pkg/config"
+	"akashic/akashic/pkg/logging"
 	"context"
 	"fmt"
 	"time"
@@ -26,15 +28,29 @@ type Config struct {
 // Client wraps redis.Client with additional functionality
 type Client struct {
 	*redis.Client
-	logger *zap.Logger
+	logger *logging.Logger
 }
 
 // New creates a new Redis client connection
-func New(cfg *Config, logger *zap.Logger) (*Client, error) {
-	logger.Info("Connecting to Redis",
+func New(configMgr *config.ConfigManager, logger *logging.Logger) (*Client, error) {
+	mConfig := configMgr.GetConfig()
+	cfg := Config{
+		Host:         mConfig.Database.Redis.Host,
+		Port:         mConfig.Database.Redis.Port,
+		Password:     mConfig.Database.Redis.Password,
+		DB:           mConfig.Database.Redis.DB,
+		PoolSize:     mConfig.Database.Redis.PoolSize,
+		MinIdleConns: 2,
+		MaxRetries:   3,
+		DialTimeout:  5 * time.Second,
+		ReadTimeout:  3 * time.Second,
+		WriteTimeout: 3 * time.Second,
+	}
+
+	logger.App.Info("Connecting to Redis",
 		zap.String("host", cfg.Host),
 		zap.Int("port", cfg.Port),
-		zap.Int("db", cfg.DB))
+		zap.Int("database", cfg.DB))
 
 	rdb := redis.NewClient(&redis.Options{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
@@ -54,10 +70,10 @@ func New(cfg *Config, logger *zap.Logger) (*Client, error) {
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
 		rdb.Close()
-		return nil, fmt.Errorf("failed to ping redis: %w", err)
+		return nil, fmt.Errorf("failed to ping redis: %v", err)
 	}
 
-	logger.Info("Redis connection established successfully",
+	logger.App.Info("Redis connection established successfully",
 		zap.Int("pool_size", cfg.PoolSize),
 		zap.Int("min_idle_conns", cfg.MinIdleConns))
 
@@ -70,8 +86,8 @@ func (c *Client) Health(ctx context.Context) error {
 	defer cancel()
 
 	if err := c.Ping(ctx).Err(); err != nil {
-		c.logger.Warn("Redis health check failed", zap.Error(err))
-		return fmt.Errorf("redis health check failed: %w", err)
+		c.logger.App.Warn("Redis health check failed", zap.Error(err))
+		return fmt.Errorf("redis health check failed: %v", err)
 	}
 
 	return nil
@@ -79,7 +95,7 @@ func (c *Client) Health(ctx context.Context) error {
 
 // Close closes the Redis client connection
 func (c *Client) Close() error {
-	c.logger.Info("Closing Redis connection")
+	c.logger.App.Info("Closing Redis connection")
 	return c.Client.Close()
 }
 

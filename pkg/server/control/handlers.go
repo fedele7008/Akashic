@@ -162,6 +162,7 @@ func (s *Server) handleAuthStart(w http.ResponseWriter, r *http.Request) {
 
 // handleAuthStop stops the auth server
 func (s *Server) handleAuthStop(w http.ResponseWriter, r *http.Request) {
+	s.logger.App.Debug("CTRL: Handling authorization server stop request")
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed, fmt.Sprintf("%s method not allowed", r.Method), map[string]any{
@@ -216,6 +217,7 @@ func (s *Server) handleAuthStop(w http.ResponseWriter, r *http.Request) {
 
 // handleAuthRestart restarts the auth server
 func (s *Server) handleAuthRestart(w http.ResponseWriter, r *http.Request) {
+	s.logger.App.Debug("CTRL: Handling authorization server restart request")
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed, fmt.Sprintf("%s method not allowed", r.Method), map[string]any{
@@ -256,6 +258,7 @@ func (s *Server) handleAuthRestart(w http.ResponseWriter, r *http.Request) {
 
 // handleServerQuit triggers a graceful shutdown of the entire application
 func (s *Server) handleServerQuit(w http.ResponseWriter, r *http.Request) {
+	s.logger.App.Debug("CTRL: Handling akashic shutdown request")
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, response.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed, fmt.Sprintf("%s method not allowed", r.Method), map[string]any{

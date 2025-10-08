@@ -45,6 +45,14 @@ func ParseFileMode(s string) (FileMode, error) {
 	}
 }
 
+func (f FileMode) String() string {
+	return map[FileMode]string{
+		FileAppend:   "append",
+		FileTruncate: "truncate",
+		FileRolling:  "rolling",
+	}[f]
+}
+
 // UnmarshalText implements the encoding.TextUnmarshaler interface
 func (f *FileMode) UnmarshalText(text []byte) error {
 	mode, err := ParseFileMode(string(text))
@@ -78,6 +86,15 @@ func ParseSinkType(s string) (SinkType, error) {
 	default:
 		return -1, fmt.Errorf("unknown sink type: %s", s)
 	}
+}
+
+func (s SinkType) String() string {
+	return map[SinkType]string{
+		SinkStdout: "stdout",
+		SinkStderr: "stderr",
+		SinkFile:   "file",
+		SinkLoki:   "loki",
+	}[s]
 }
 
 // UnmarshalText implements the encoding.TextUnmarshaler interface
@@ -118,6 +135,16 @@ func ParseLevel(s string) (Level, error) {
 	}
 }
 
+func (l Level) String() string {
+	return map[Level]string{
+		LevelDebug: "debug",
+		LevelInfo:  "info",
+		LevelWarn:  "warn",
+		LevelError: "error",
+		LevelFatal: "fatal",
+	}[l]
+}
+
 // UnmarshalText implements the encoding.TextUnmarshaler interface
 func (l *Level) UnmarshalText(text []byte) error {
 	level, err := ParseLevel(string(text))
@@ -145,6 +172,13 @@ func ParseFormat(s string) (Format, error) {
 	default:
 		return FormatText, fmt.Errorf("unknown sink format: %s", s)
 	}
+}
+
+func (f Format) String() string {
+	return map[Format]string{
+		FormatText: "text",
+		FormatJSON: "json",
+	}[f]
 }
 
 // UnmarshalText implements the encoding.TextUnmarshaler interface
@@ -260,6 +294,8 @@ type Config struct {
 	Deployment DeploymentConfig `mapstructure:"deployment" yaml:"deployment"`
 	// Bootstrap configuration for initial setup
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap" yaml:"bootstrap"`
+	// LDAP server configuration
+	LDAP LDAPConfig `mapstructure:"ldap" yaml:"ldap"`
 }
 
 // ServerConfig contains basic server settings
@@ -388,6 +424,50 @@ type PasswordPolicyConfig struct {
 	RequireNumber bool `mapstructure:"require_number" yaml:"require_number"`
 	// RequireSpecial requires at least one special character
 	RequireSpecial bool `mapstructure:"require_special" yaml:"require_special"`
+}
+
+// LDAPConfig contains LDAP server configuration
+type LDAPConfig struct {
+	// Enabled controls whether the embedded LDAP server is enabled (default: true)
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// Host is the address to bind the LDAP server (default: "127.0.0.1")
+	Host string `mapstructure:"host" yaml:"host"`
+	// Port is the LDAP port number (default: 389, LDAPS: 636)
+	Port int `mapstructure:"port" yaml:"port"`
+	// BaseDN is the base distinguished name for the LDAP directory
+	BaseDN string `mapstructure:"base_dn" yaml:"base_dn"`
+	// TLS configuration for LDAPS
+	TLS LDAPTLSConfig `mapstructure:"tls" yaml:"tls"`
+	// External LDAP client configuration (optional - overrides embedded server)
+	External *ExternalLDAPConfig `mapstructure:"external" yaml:"external,omitempty"`
+}
+
+// LDAPTLSConfig defines TLS settings for LDAPS
+type LDAPTLSConfig struct {
+	// Enabled controls whether LDAPS is enabled (default: false)
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// CertFile path to the server certificate file
+	CertFile string `mapstructure:"cert_file" yaml:"cert_file"`
+	// KeyFile path to the server private key file
+	KeyFile string `mapstructure:"key_file" yaml:"key_file"`
+}
+
+// ExternalLDAPConfig defines connection to external LDAP server
+type ExternalLDAPConfig struct {
+	// Host is the external LDAP server address
+	Host string `mapstructure:"host" yaml:"host"`
+	// Port is the external LDAP server port
+	Port int `mapstructure:"port" yaml:"port"`
+	// BaseDN is the base DN for external LDAP
+	BaseDN string `mapstructure:"base_dn" yaml:"base_dn"`
+	// BindDN is the DN to bind as for authentication
+	BindDN string `mapstructure:"bind_dn" yaml:"bind_dn"`
+	// BindPassword is the password for the bind DN
+	BindPassword string `mapstructure:"bind_password" yaml:"bind_password"`
+	// UseTLS enables TLS for external LDAP connection
+	UseTLS bool `mapstructure:"use_tls" yaml:"use_tls"`
+	// SkipTLSVerify skips TLS certificate verification (insecure)
+	SkipTLSVerify bool `mapstructure:"skip_tls_verify" yaml:"skip_tls_verify"`
 }
 
 // MiddlewareConfig contains middleware configuration for both servers

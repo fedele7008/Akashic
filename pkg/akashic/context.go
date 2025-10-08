@@ -6,13 +6,12 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
-	"time"
 
 	authpkg "akashic/akashic/pkg/auth"
 	"akashic/akashic/pkg/bootstrap"
 	"akashic/akashic/pkg/config"
-	"akashic/akashic/pkg/database/gormdb"
-	"akashic/akashic/pkg/database/redis"
+	"akashic/akashic/pkg/database/akashic_postgres"
+	"akashic/akashic/pkg/database/akashic_redis"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/auth"
@@ -28,8 +27,8 @@ type AkashicApp struct {
 	cancel         context.CancelFunc
 	Config         *config.ConfigManager
 	Logger         *logging.Logger
-	DB             *gormdb.DB
-	Redis          *redis.Client
+	DB             *akashic_postgres.DB
+	Redis          *akashic_redis.Client
 	BootstrapMgr   *bootstrap.Manager
 	AuthServer     *auth.Server
 	ControlServer  *control.Server
@@ -41,13 +40,18 @@ type AkashicApp struct {
 func NewAkashicApp() *AkashicApp {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &AkashicApp{
-		ctx:           ctx,
-		cancel:        cancel,
-		Config:        nil,
-		Logger:        nil,
-		AuthServer:    nil,
-		ControlServer: nil,
-		closerFns:     make([]func(), 0),
+		ctx:            ctx,
+		cancel:         cancel,
+		Config:         nil,
+		Logger:         nil,
+		DB:             nil,
+		Redis:          nil,
+		BootstrapMgr:   nil,
+		AuthServer:     nil,
+		ControlServer:  nil,
+		closerFns:      make([]func(), 0),
+		verbose:        false,
+		bootstrapToken: "",
 	}
 }
 
@@ -68,6 +72,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return fmt.Errorf("failed to create logger: %v", err)
 	}
+	app.Logger.App.Info("logger created")
 	app.AddCloser(loggerClose)
 
 	// feed reconfigure function to config manager (for config reloading)
@@ -75,20 +80,9 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 
 	// Initialize PostgreSQL with GORM
 	app.Logger.App.Info("Initializing database connections")
-	app.DB, err = gormdb.New(&gormdb.Config{
-		Host:            cfg.Database.Postgres.Host,
-		Port:            cfg.Database.Postgres.Port,
-		Database:        cfg.Database.Postgres.Database,
-		Username:        cfg.Database.Postgres.Username,
-		Password:        cfg.Database.Postgres.Password,
-		SSLMode:         cfg.Database.Postgres.SSLMode,
-		MaxConns:        cfg.Database.Postgres.MaxConnections,
-		MaxIdleConns:    cfg.Database.Postgres.MaxIdleConnections,
-		ConnLifetime:    cfg.Database.Postgres.ConnectionLifetime,
-		ConnMaxIdleTime: 30 * time.Minute,
-	}, app.Logger.App)
+	app.DB, err = akashic_postgres.New(app.Config, app.Logger)
 	if err != nil {
-		return fmt.Errorf("failed to connect to PostgreSQL: %w", err)
+		return fmt.Errorf("failed to connect to PostgreSQL: %v", err)
 	}
 	app.AddCloser(func() {
 		if err := app.DB.Close(); err != nil {
@@ -97,20 +91,9 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	})
 
 	// Initialize Redis
-	app.Redis, err = redis.New(&redis.Config{
-		Host:         cfg.Database.Redis.Host,
-		Port:         cfg.Database.Redis.Port,
-		Password:     cfg.Database.Redis.Password,
-		DB:           cfg.Database.Redis.DB,
-		PoolSize:     cfg.Database.Redis.PoolSize,
-		MinIdleConns: 2,
-		MaxRetries:   3,
-		DialTimeout:  5 * time.Second,
-		ReadTimeout:  3 * time.Second,
-		WriteTimeout: 3 * time.Second,
-	}, app.Logger.App)
+	app.Redis, err = akashic_redis.New(app.Config, app.Logger)
 	if err != nil {
-		return fmt.Errorf("failed to connect to Redis: %w", err)
+		return fmt.Errorf("failed to connect to Redis: %v", err)
 	}
 	app.AddCloser(func() {
 		if err := app.Redis.Close(); err != nil {
@@ -119,9 +102,8 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	})
 
 	// Run automatic database migrations with GORM
-	app.Logger.App.Info("Running automatic database migrations")
 	if err := app.DB.AutoMigrate(); err != nil {
-		return fmt.Errorf("failed to run auto-migration: %w", err)
+		return fmt.Errorf("failed to run auto-migration: %v", err)
 	}
 
 	// Initialize repositories
@@ -149,7 +131,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// Check if bootstrap is needed
 	needsBootstrap, err := app.BootstrapMgr.NeedsBootstrap(app.ctx)
 	if err != nil {
-		return fmt.Errorf("failed to check bootstrap status: %w", err)
+		return fmt.Errorf("failed to check bootstrap status: %v", err)
 	}
 
 	if needsBootstrap {
@@ -159,7 +141,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		// Generate bootstrap token
 		token, err := app.BootstrapMgr.InitializeBootstrap(app.ctx)
 		if err != nil {
-			return fmt.Errorf("failed to initialize bootstrap: %w", err)
+			return fmt.Errorf("failed to initialize bootstrap: %v", err)
 		}
 
 		app.bootstrapToken = token
@@ -178,13 +160,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	app.ControlServer = control.New(
 		app.ctx,
 		app.AuthServer,
+		app.BootstrapMgr,
 		app.Config,
 		app.Logger,
 		app.cancel, // Pass cancel function for shutdown
 	)
-
-	// Set bootstrap manager on control server
-	app.ControlServer.SetBootstrapManager(app.BootstrapMgr)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
@@ -315,37 +295,33 @@ func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 		zap.Bool("auth_running", app.AuthServer.IsRunning()))
 
 	fmt.Printf("\n")
-	fmt.Printf("=================================================\n")
+	fmt.Printf("=======================================================================\n")
 	fmt.Printf("  Akashic Server Running (PID:%v)\n", app.ControlServer.GetPID())
-	fmt.Printf("=================================================\n")
+	fmt.Printf("=======================================================================\n")
 	fmt.Printf("  Control API: http://%s\n", app.ControlServer.GetAddress())
 	fmt.Printf("  Auth API:    http://%s\n", app.AuthServer.GetAddress())
 	fmt.Printf("  Auth Status: %s\n", map[bool]string{true: "Running", false: "Stopped"}[app.AuthServer.IsRunning()])
-	fmt.Printf("=================================================\n")
+	fmt.Printf("=======================================================================\n")
 
 	// Display bootstrap information if needed
 	if app.bootstrapToken != "" {
-		fmt.Printf("\n")
-		fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-		fmt.Printf("  BOOTSTRAP MODE ACTIVE\n")
-		fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-		fmt.Printf("\n")
+		fmt.Printf("  !! BOOTSTRAP MODE ACTIVE !!\n")
+		fmt.Printf("-----------------------------------------------------------------------\n")
 		fmt.Printf("  Root user not configured. Please create one.\n")
 		fmt.Printf("\n")
 		fmt.Printf("  Bootstrap Token:\n")
-		fmt.Printf("  %s\n", app.bootstrapToken)
+		fmt.Printf("    %s\n", app.bootstrapToken)
 		fmt.Printf("\n")
 		fmt.Printf("  Methods:\n")
 		fmt.Printf("  1. Web: Use BFF to submit token + credentials\n")
-		fmt.Printf("  2. CLI: akashic bootstrap create-root\n")
+		fmt.Printf("  2. CLI: akashic-cli bootstrap create-root --help\n")
 		fmt.Printf("\n")
 		fmt.Printf("  Token expires in: %v\n", app.Config.GetConfig().Bootstrap.TokenTTL)
-		fmt.Printf("!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!\n")
-		fmt.Printf("\n")
+		fmt.Printf("=======================================================================\n")
 	}
 
 	fmt.Printf("  Press Ctrl+C to stop\n")
-	fmt.Printf("=================================================\n\n")
+	fmt.Printf("=======================================================================\n\n")
 
 	// Wait for shutdown signal
 	<-app.ctx.Done()

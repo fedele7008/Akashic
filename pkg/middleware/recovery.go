@@ -29,7 +29,7 @@ func Recovery(logger *logging.Logger) Middleware {
 						zap.String("request_id", GetRequestID(r)),
 					}
 
-					logger.Security.Error(fmt.Sprintf("PANIC RECOVERY: request-id: %s\n", GetRequestID(r)), fields...)
+					logger.Security.Error(fmt.Sprintf("PANIC RECOVERY: request-id: %s", GetRequestID(r)), fields...)
 
 					// Return 500 Internal Server Error
 					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
