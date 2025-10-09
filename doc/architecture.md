@@ -252,31 +252,32 @@ ldap.tls_ca_file: ""  # Uses system CA pool
 
 ### Scenario 1: Default Full Stack (Recommended for New Users)
 
-**Services**: Web + BFF + Akashic + LDAP + PostgreSQL + Redis + (Optional: Loki/Grafana)
-
-```bash
-# .env configuration
-AKASHIC_USE_BUNDLED_LDAP=true
-AKASHIC_USE_BUNDLED_BFF=true
-AKASHIC_USE_BUNDLED_WEB=true
-AKASHIC_ENABLE_OBSERVABILITY=false
-```
+**Services**: Akashic + LDAP + phpLDAPadmin + PostgreSQL + Redis + Adminer
 
 **Deployment**:
 ```bash
 git clone https://github.com/your-org/akashic.git
 cd akashic
+cp .env.example .env
 docker-compose up -d
 ```
 
+**What Starts Automatically:**
+- ✅ PostgreSQL (database)
+- ✅ Redis (cache/sessions)
+- ✅ Akashic IDP (auth + control servers)
+- ✅ OpenLDAP (directory server)
+- ✅ phpLDAPadmin (LDAP management UI)
+- ✅ Adminer (database UI)
+
 **Network Flow**:
 ```
-User → Web (3000) → BFF → Akashic Control (8081, mTLS)
-User → Web (3000) → Akashic Auth (8080)
+User → Akashic Auth (8080, OAuth/OIDC)
+Admin → Akashic Control (8081, mTLS via CLI)
 Akashic → LDAP (389/636)
 ```
 
-**Use Case**: Development, testing, proof-of-concept
+**Use Case**: Development, testing, proof-of-concept, full authentication system
 
 ---
 
@@ -423,17 +424,17 @@ CLI → Akashic Control (8081) via mTLS
 
 ### Scenario 7: Full Stack with Observability
 
-**Services**: Web + BFF + Akashic + LDAP + PostgreSQL + Redis + Loki + Grafana
-
-```bash
-# .env configuration
-AKASHIC_ENABLE_OBSERVABILITY=true
-```
+**Services**: Akashic + LDAP + phpLDAPadmin + PostgreSQL + Redis + Adminer + Loki + Grafana
 
 **Deployment**:
 ```bash
 docker-compose --profile obs up -d
 ```
+
+**What Starts:**
+- ✅ All default services (Scenario 1)
+- ✅ Loki (log aggregation)
+- ✅ Grafana (visualization dashboard)
 
 **Access**:
 - Grafana Dashboard: `http://localhost:3000`
@@ -796,27 +797,39 @@ curl -X POST https://localhost:8081/config/reload \
 ### Quick Start Commands
 
 ```bash
-# Clone and run (default full stack)
+# Clone and run (default: includes LDAP)
 git clone https://github.com/your-org/akashic.git
 cd akashic
 cp .env.example .env
 docker-compose up -d
 
-# With observability
+# Services started by default:
+# - PostgreSQL, Redis, Akashic, LDAP, phpLDAPadmin, Adminer
+
+# Add observability (Loki + Grafana)
 docker-compose --profile obs up -d
 
-# BYOLDAP mode
-# Edit .env: AKASHIC_USE_BUNDLED_LDAP=false
-# Edit config.yaml: ldap.host, ldap.port
+# BYOLDAP mode (use external LDAP)
+# 1. Comment out 'ldap' and 'phpldapadmin' in docker-compose.yml
+# 2. Edit config.yaml: ldap.host, ldap.port, etc.
 docker-compose up -d
 
-# Check status
-curl http://localhost:8081/status
+# Check health
+curl http://localhost:8080/health
+
+# Check status via control server (requires mTLS)
+curl https://localhost:8081/status \
+  --cert certs/clients/cli.crt \
+  --key certs/clients/cli.key \
+  --cacert certs/ca/ca.crt
 
 # Create admin account
 curl -X POST http://localhost:8081/bootstrap/admin \
   -H "Content-Type: application/json" \
-  -d '{"username":"admin","password":"secure-password"}'
+  -d '{"username":"admin","password":"secure-password"}' \
+  --cert certs/clients/cli.crt \
+  --key certs/clients/cli.key \
+  --cacert certs/ca/ca.crt
 ```
 
 ### Troubleshooting

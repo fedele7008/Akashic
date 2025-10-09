@@ -3,7 +3,7 @@ server:
     host: "0.0.0.0"
     port: 8080
   control:
-    host: "127.0.0.1"
+    host: "0.0.0.0"  # Use 0.0.0.0 for Docker deployment, 127.0.0.1 for localhost-only
     port: 8081
     tls:
       enabled: true
@@ -13,8 +13,8 @@ server:
       client_auth_required: true
 database:
   postgres:
-    host: "localhost"
-    port: ${AKASHIC_DATABASE_POSTGRES_HOST_PORT}
+    host: "postgres"  # Docker Compose service name
+    port: 5432  # Internal container port
     database: ${AKASHIC_DATABASE_POSTGRES_DB}
     username: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
     password: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
@@ -23,8 +23,8 @@ database:
     max_idle_connections: 10
     connection_lifetime: "1h"
   redis:
-    host: "localhost"
-    port: 6379
+    host: "redis"  # Docker Compose service name
+    port: 6379  # Internal container port
     password: ${AKASHIC_DATABASE_REDIS_PASSWORD}
     db: 0
     pool_size: 10
@@ -63,7 +63,7 @@ logging:
         file_path: "./logs/app.log"
         file_mode: "rolling" # append, truncate, rolling
       - type: "loki"
-        enabled: true
+        enabled: false  # Enable when using --profile obs
         level: "debug"
         loki_url: "${AKASHIC_LOKI_API_URL}"
         compress: true
@@ -84,7 +84,7 @@ logging:
         file_path: "./logs/security.log"
         file_mode: "append" # append, truncate, rolling
       - type: "loki"
-        enabled: true
+        enabled: false  # Enable when using --profile obs
         level: "debug"
         loki_url: "${AKASHIC_LOKI_API_URL}"
         compress: true
@@ -105,7 +105,7 @@ logging:
         file_path: "./logs/audit.log"
         file_mode: "append" # append, truncate, rolling
       - type: "loki"
-        enabled: true
+        enabled: false  # Enable when using --profile obs
         level: "debug"
         loki_url: "${AKASHIC_LOKI_API_URL}"
         compress: true
@@ -210,16 +210,16 @@ bootstrap:
 # For external: Use your LDAP server hostname/IP
 ldap:
   # Connection settings
-  host: localhost  # Docker service name for embedded, or "ldap.company.com" for external
-  port: 389     # 389 for LDAP, 636 for LDAPS
+  host: ldap  # Docker service name for embedded, or "ldap.company.com" for external
+  port: 389   # 389 for LDAP, 636 for LDAPS
   base_dn: "dc=akashic,dc=local"
 
   # Bind credentials (admin account for Akashic to use)
   bind_dn: "cn=admin,dc=akashic,dc=local"
   bind_password: "${AKASHIC_LDAP_ADMIN_PASSWORD}"
 
-  # TLS settings (temporarily disabled due to Docker volume permission issues)
-  use_tls: true          # Set to true for LDAPS (port 636)
+  # TLS settings (disabled by default for easier setup)
+  use_tls: false         # Set to true for LDAPS (port 636)
   tls_skip_verify: true  # Set to false for proper certificate verification
   tls_ca_file: "./certs/ca/ca.crt"  # Path to CA cert for embedded LDAP with PKI
 

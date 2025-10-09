@@ -39,6 +39,16 @@ services:
         condition: service_healthy
     environment:
       TZ: ${AKASHIC_TZ:-UTC}
+      # Database configuration
+      AKASHIC_DATABASE_POSTGRES_HOST_PORT: ${AKASHIC_DATABASE_POSTGRES_HOST_PORT}
+      AKASHIC_DATABASE_POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
+      AKASHIC_DATABASE_POSTGRES_USERNAME: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
+      AKASHIC_DATABASE_POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
+      AKASHIC_DATABASE_REDIS_PASSWORD: ${AKASHIC_DATABASE_REDIS_PASSWORD}
+      # LDAP configuration
+      AKASHIC_LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
+      # Observability configuration (optional, for Loki sink)
+      AKASHIC_LOKI_API_URL: ${AKASHIC_LOKI_API_URL}
     ports:
       - "${AKASHIC_AUTH_SERVER_PORT:-8080}:8080"
       - "${AKASHIC_CONTROL_SERVER_PORT:-8081}:8081"
@@ -167,16 +177,53 @@ services:
       - default
 
   # ============================================================================
-  # OpenLDAP - Directory Server (LDAP Profile)
+  # LDAP Cert Prep - Copy certificates to Docker-managed volume
+  # ============================================================================
+  # This init container copies certificates from host to a Docker-managed volume
+  # to avoid permission issues with the LDAP container trying to chown files.
+  ldap-cert-prep:
+    image: busybox:latest
+    container_name: akashic-ldap-cert-prep
+    depends_on:
+      cert-init:
+        condition: service_completed_successfully
+    command: >
+      sh -c "
+      echo 'Preparing LDAP certificates...';
+      mkdir -p /certs-dest;
+      if [ -f /certs-source/ldap.crt ]; then
+        cp /certs-source/ldap.crt /certs-dest/ldap.crt;
+        cp /certs-source/ldap.key /certs-dest/ldap.key;
+        cp /certs-source/ca.crt /certs-dest/ca.crt;
+        chmod 644 /certs-dest/*.crt;
+        chmod 600 /certs-dest/*.key;
+        echo 'LDAP certificates prepared successfully';
+      else
+        echo 'No LDAP certificates found, skipping';
+      fi
+      "
+    volumes:
+      - ./certs/compat/ldap:/certs-source:ro
+      - ldap_certs:/certs-dest
+    networks:
+      - default
+
+  # ============================================================================
+  # OpenLDAP - Directory Server (Bundled by Default)
   # ============================================================================
   # Bundled LDAP server for user authentication and directory services.
-  # Can be replaced with external LDAP by setting AKASHIC_USE_BUNDLED_LDAP=false
+  # Starts by default with 'docker compose up -d'
+  #
+  # To use external LDAP instead:
+  #   1. Set AKASHIC_USE_BUNDLED_LDAP=false in .env
+  #   2. Comment out this service and phpldapadmin below
+  #   3. Update configs/config.yaml with external LDAP details
   ldap:
     image: osixia/openldap:1.5.0
     container_name: akashic-ldap
     restart: unless-stopped
     depends_on:
-      cert-init:
+      ldap-cert-prep:
         condition: service_completed_successfully
     environment:
       LDAP_ORGANISATION: ${AKASHIC_LDAP_ORGANISATION:-Akashic}
@@ -198,19 +245,17 @@ services:
     volumes:
       - ldap_data:/var/lib/ldap
       - ldap_config:/etc/ldap/slapd.d
-      - ./certs/compat/ldap:/container/service/slapd/assets/certs:ro
+      - ldap_certs:/container/service/slapd/assets/certs
     networks:
       - default
     healthcheck:
-      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=akashic,dc=local -D cn=admin,dc=akashic,dc=local -w $${AKASHIC_LDAP_ADMIN_PASSWORD} || exit 1"]
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=akashic,dc=local -D cn=admin,dc=akashic,dc=local -w $${LDAP_ADMIN_PASSWORD} || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 5
-    profiles:
-      - ldap
 
   # ============================================================================
-  # phpLDAPadmin - LDAP Web Management Interface (LDAP Profile)
+  # phpLDAPadmin - LDAP Web Management Interface (Bundled by Default)
   # ============================================================================
   phpldapadmin:
     image: osixia/phpldapadmin:0.9.0
@@ -227,8 +272,6 @@ services:
         condition: service_healthy
     networks:
       - default
-    profiles:
-      - ldap
 
 networks:
   default:
@@ -241,3 +284,4 @@ volumes:
   grafana_data:
   ldap_data:
   ldap_config:
+  ldap_certs:
