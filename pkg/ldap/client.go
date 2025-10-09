@@ -39,28 +39,33 @@ func New(cfg *config.LDAPConfig, logger *logging.Logger) *Client {
 // Connect establishes a connection to the LDAP server and performs bind
 func (c *Client) Connect() error {
 	var err error
-	addr := fmt.Sprintf("%s:%d", c.config.Host, c.config.Port)
+
+	// Build LDAP URL based on TLS configuration
+	var ldapURL string
+	if c.config.UseTLS {
+		ldapURL = fmt.Sprintf("ldaps://%s:%d", c.config.Host, c.config.Port)
+	} else {
+		ldapURL = fmt.Sprintf("ldap://%s:%d", c.config.Host, c.config.Port)
+	}
 
 	c.logger.App.Info("connecting to LDAP server",
-		zap.String("address", addr),
+		zap.String("url", ldapURL),
 		zap.Bool("tls", c.config.UseTLS),
 	)
 
-	// Connect to LDAP server
+	// Configure TLS if enabled
+	var tlsConfig *tls.Config
 	if c.config.UseTLS {
-		tlsConfig := &tls.Config{
+		tlsConfig = &tls.Config{
 			ServerName:         c.config.Host,
 			InsecureSkipVerify: c.config.TLSSkipVerify,
 		}
-		c.conn, err = ldap.DialTLS("tcp", addr, tlsConfig)
-		if err != nil {
-			return fmt.Errorf("failed to dial LDAPS: %v", err)
-		}
-	} else {
-		c.conn, err = ldap.Dial("tcp", addr)
-		if err != nil {
-			return fmt.Errorf("failed to dial LDAP: %v", err)
-		}
+	}
+
+	// Connect to LDAP server using DialURL (recommended method)
+	c.conn, err = ldap.DialURL(ldapURL, ldap.DialWithTLSConfig(tlsConfig))
+	if err != nil {
+		return fmt.Errorf("failed to connect to LDAP server: %v", err)
 	}
 
 	// Set connection timeout
@@ -634,11 +639,11 @@ func (c *Client) GetUserGroups(userDN string) ([]string, error) {
 		fmt.Sprintf("ou=groups,%s", c.config.BaseDN), // Search base
 		ldap.ScopeWholeSubtree,                       // Scope
 		ldap.NeverDerefAliases,                       // Deref
-		0,     // Size limit (0 = unlimited)
-		0,     // Time limit (0 = unlimited)
-		false, // Types only
-		fmt.Sprintf("(member=%s)", userDN), // Filter
-		[]string{"dn", "cn"}, // Attributes to return
+		0,                                            // Size limit (0 = unlimited)
+		0,                                            // Time limit (0 = unlimited)
+		false,                                        // Types only
+		fmt.Sprintf("(member=%s)", userDN),           // Filter
+		[]string{"dn", "cn"},                         // Attributes to return
 		nil,
 	)
 
@@ -648,7 +653,7 @@ func (c *Client) GetUserGroups(userDN string) ([]string, error) {
 			zap.String("user_dn", userDN),
 			zap.Error(err),
 		)
-		return nil, fmt.Errorf("failed to search for user groups: %w", err)
+		return nil, fmt.Errorf("failed to search for user groups: %v", err)
 	}
 
 	groups := make([]string, 0, len(sr.Entries))

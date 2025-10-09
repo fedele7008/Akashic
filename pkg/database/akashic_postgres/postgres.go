@@ -55,7 +55,7 @@ func New(configMgr *config.ConfigManager, akashicLogger *logging.Logger) (*DB, e
 		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, cfg.SSLMode,
 	)
 
-	akashicLogger.App.Info("Connecting to PostgreSQL with GORM",
+	akashicLogger.App.Info("Connecting to PostgreSQL",
 		zap.String("host", cfg.Host),
 		zap.Int("port", cfg.Port),
 		zap.String("database", cfg.Database),

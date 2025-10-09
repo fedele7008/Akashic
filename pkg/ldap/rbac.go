@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"akashic/akashic/pkg/models"
+
 	"go.uber.org/zap"
 )
 
@@ -31,7 +32,7 @@ func (r *RBACService) DetermineUserType(userDN string) (models.UserType, error) 
 		r.logger.Error("failed to get user groups for RBAC",
 			zap.String("user_dn", userDN),
 			zap.Error(err))
-		return "", fmt.Errorf("failed to get user groups: %w", err)
+		return "", fmt.Errorf("failed to get user groups: %v", err)
 	}
 
 	r.logger.Debug("checking RBAC group membership",

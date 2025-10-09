@@ -70,12 +70,12 @@ func (s *DeprovisioningService) Start() error {
 		zap.Duration("user_deletion_threshold", s.config.UserDeletionThreshold),
 	)
 
-	// Run initial sync
-	if err := s.Reconcile(); err != nil {
-		s.logger.App.Warn("initial deprovisioning sync failed",
-			zap.Error(err),
-		)
-	}
+	// Run initial sync (already ran once in initialization)
+	// if err := s.Reconcile(); err != nil {
+	// 	s.logger.App.Warn("initial deprovisioning sync failed",
+	// 		zap.Error(err),
+	// 	)
+	// }
 
 	// Start periodic sync
 	s.wg.Add(1)
@@ -213,7 +213,7 @@ func (s *DeprovisioningService) reconcileUser(
 				zap.String("ldap_dn", user.LdapDN),
 			)
 
-			if err := s.db.Model(user).Updates(map[string]interface{}{
+			if err := s.db.Model(user).Updates(map[string]any{
 				"missing_identity":       false,
 				"missing_identity_since": nil,
 			}).Error; err != nil {
@@ -240,7 +240,7 @@ func (s *DeprovisioningService) reconcileUser(
 			zap.String("ldap_dn", user.LdapDN),
 		)
 
-		if err := s.db.Model(user).Updates(map[string]interface{}{
+		if err := s.db.Model(user).Updates(map[string]any{
 			"missing_identity":       true,
 			"missing_identity_since": now,
 		}).Error; err != nil {
