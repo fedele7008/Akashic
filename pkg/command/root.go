@@ -19,6 +19,7 @@ func NewRootCmd() *cobra.Command {
 
 	// Add subcommands
 	rootCmd.AddCommand(NewRunCmd())
+	rootCmd.AddCommand(NewPKICmd())
 
 	return rootCmd
 }

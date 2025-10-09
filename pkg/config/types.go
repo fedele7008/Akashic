@@ -296,6 +296,8 @@ type Config struct {
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap" yaml:"bootstrap"`
 	// LDAP server configuration
 	LDAP LDAPConfig `mapstructure:"ldap" yaml:"ldap"`
+	// PKI (Public Key Infrastructure) configuration for certificate management
+	PKI PKIConfig `mapstructure:"pki" yaml:"pki"`
 }
 
 // ServerConfig contains basic server settings
@@ -453,6 +455,12 @@ type LDAPConfig struct {
 	// TLSSkipVerify skips TLS certificate verification (insecure - dev only)
 	TLSSkipVerify bool `mapstructure:"tls_skip_verify" yaml:"tls_skip_verify"`
 
+	// TLSCAFile is the path to the CA certificate for verifying LDAP server
+	// Optional - if empty, system certificate pool will be used
+	// For embedded LDAP with PKI: "./certs/ca/ca.crt"
+	// For external LDAP: path to their CA certificate
+	TLSCAFile string `mapstructure:"tls_ca_file" yaml:"tls_ca_file"`
+
 	// UserSearchBase is the base DN for user searches
 	// Example: "ou=users,dc=akashic,dc=local"
 	UserSearchBase string `mapstructure:"user_search_base" yaml:"user_search_base"`
@@ -522,6 +530,118 @@ type LDAPDeprovisioningConfig struct {
 	// UserDeletionThreshold is time before deleting regular user when LDAP entry missing
 	// Example: "2160h" (90 days)
 	UserDeletionThreshold time.Duration `mapstructure:"user_deletion_threshold" yaml:"user_deletion_threshold"`
+}
+
+// PKIConfig contains Public Key Infrastructure settings for certificate management
+type PKIConfig struct {
+	// Enabled determines if PKI management is enabled
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+
+	// CertsDir is the root directory for storing certificates and keys
+	// Default: "./certs"
+	CertsDir string `mapstructure:"certs_dir" yaml:"certs_dir"`
+
+	// CA contains Certificate Authority configuration
+	CA PKICAConfig `mapstructure:"ca" yaml:"ca"`
+
+	// Servers contains server certificate configuration
+	Servers PKIServersConfig `mapstructure:"servers" yaml:"servers"`
+
+	// Clients contains client certificate configuration
+	Clients PKIClientsConfig `mapstructure:"clients" yaml:"clients"`
+
+	// KeyType is the default key type to use (rsa or ecdsa)
+	KeyType string `mapstructure:"key_type" yaml:"key_type"`
+
+	// RSAKeySize is the default RSA key size (2048 or 4096)
+	RSAKeySize int `mapstructure:"rsa_key_size" yaml:"rsa_key_size"`
+
+	// ECDSACurve is the default ECDSA curve (P-256 or P-384)
+	ECDSACurve string `mapstructure:"ecdsa_curve" yaml:"ecdsa_curve"`
+}
+
+// PKICAConfig contains Certificate Authority specific settings
+type PKICAConfig struct {
+	// CertFile is the path to the CA certificate file
+	CertFile string `mapstructure:"cert_file" yaml:"cert_file"`
+
+	// KeyFile is the path to the CA private key file
+	KeyFile string `mapstructure:"key_file" yaml:"key_file"`
+
+	// ValidityYears is the validity period for the CA certificate
+	ValidityYears int `mapstructure:"validity_years" yaml:"validity_years"`
+
+	// CommonName is the CA certificate common name
+	CommonName string `mapstructure:"common_name" yaml:"common_name"`
+
+	// Organization is the CA certificate organization
+	Organization string `mapstructure:"organization" yaml:"organization"`
+
+	// Country is the CA certificate country code
+	Country string `mapstructure:"country" yaml:"country"`
+}
+
+// PKIServersConfig contains server certificate settings
+type PKIServersConfig struct {
+	// Control contains control server certificate configuration
+	Control PKIServerCertConfig `mapstructure:"control" yaml:"control"`
+
+	// Auth contains auth server certificate configuration
+	Auth PKIServerCertConfig `mapstructure:"auth" yaml:"auth"`
+
+	// LDAP contains LDAP server certificate configuration
+	LDAP PKIServerCertConfig `mapstructure:"ldap" yaml:"ldap"`
+
+	// DefaultValidityDays is the default validity period for server certificates
+	DefaultValidityDays int `mapstructure:"default_validity_days" yaml:"default_validity_days"`
+}
+
+// PKIServerCertConfig contains individual server certificate settings
+type PKIServerCertConfig struct {
+	// CertFile is the path to the server certificate file
+	CertFile string `mapstructure:"cert_file" yaml:"cert_file"`
+
+	// KeyFile is the path to the server private key file
+	KeyFile string `mapstructure:"key_file" yaml:"key_file"`
+
+	// DNSNames is the list of DNS names for the certificate (SANs)
+	DNSNames []string `mapstructure:"dns_names" yaml:"dns_names"`
+
+	// IPAddresses is the list of IP addresses for the certificate (SANs)
+	IPAddresses []string `mapstructure:"ip_addresses" yaml:"ip_addresses"`
+
+	// ValidityDays is the validity period for this certificate (overrides default)
+	ValidityDays int `mapstructure:"validity_days" yaml:"validity_days"`
+}
+
+// PKIClientsConfig contains client certificate settings
+type PKIClientsConfig struct {
+	// CLI contains CLI client certificate configuration
+	CLI PKIClientCertConfig `mapstructure:"cli" yaml:"cli"`
+
+	// BFF contains BFF client certificate configuration
+	BFF PKIClientCertConfig `mapstructure:"bff" yaml:"bff"`
+
+	// DefaultValidityDays is the default validity period for client certificates
+	DefaultValidityDays int `mapstructure:"default_validity_days" yaml:"default_validity_days"`
+}
+
+// PKIClientCertConfig contains individual client certificate settings
+type PKIClientCertConfig struct {
+	// CertFile is the path to the client certificate file
+	CertFile string `mapstructure:"cert_file" yaml:"cert_file"`
+
+	// KeyFile is the path to the client private key file
+	KeyFile string `mapstructure:"key_file" yaml:"key_file"`
+
+	// CommonName is the client certificate common name
+	CommonName string `mapstructure:"common_name" yaml:"common_name"`
+
+	// EmailAddress is the client certificate email address
+	EmailAddress string `mapstructure:"email_address" yaml:"email_address"`
+
+	// ValidityDays is the validity period for this certificate (overrides default)
+	ValidityDays int `mapstructure:"validity_days" yaml:"validity_days"`
 }
 
 // MiddlewareConfig contains middleware configuration for both servers

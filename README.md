@@ -481,6 +481,303 @@ akashic/
    - Control API: `http://localhost:8081`
    - Auth API: `http://localhost:8080`
 
+### PKI Setup (Secure Communication)
+
+Akashic supports TLS and mTLS (mutual TLS) for secure communication. This section shows you how to set up certificates for:
+- **Control Server**: TLS/mTLS for management API
+- **LDAP Server**: TLS for secure directory access
+- **Client Authentication**: mTLS certificates for CLI and BFF
+
+#### Quick Setup (Automated)
+
+Use the PKI setup script to automatically generate all required certificates:
+
+```bash
+# 1. Build the akashic binary (required for PKI commands)
+go build -o build/akashic ./cmd/akashic
+
+# 2. Run the PKI setup script
+chmod +x scripts/setup-pki.sh
+./scripts/setup-pki.sh
+```
+
+The script will:
+- Initialize a self-signed Certificate Authority (CA)
+- Generate server certificates (control, auth, ldap)
+- Generate client certificates (cli, bff)
+- Verify all certificates
+- Display certificate inventory and expiration status
+
+**Output:**
+```
+═══════════════════════════════════════════════
+  Akashic PKI Setup Script
+═══════════════════════════════════════════════
+
+✓ Found Akashic binary
+ℹ Initializing Certificate Authority...
+✓ Certificate Authority initialized
+
+ℹ Generating server certificates...
+  → Control server certificate
+  → Auth server certificate
+  → LDAP server certificate
+✓ Server certificates generated
+
+ℹ Generating client certificates...
+  → CLI client certificate
+  → BFF client certificate
+✓ Client certificates generated
+
+✓ Control server certificate verified
+✓ Auth server certificate verified
+✓ LDAP server certificate verified
+✓ CLI client certificate verified
+✓ BFF client certificate verified
+
+═══════════════════════════════════════════════
+  PKI setup complete!
+═══════════════════════════════════════════════
+```
+
+#### Generated Certificate Structure
+
+After running the script, you'll have:
+
+```
+certs/
+├── ca/
+│   ├── ca.crt              # CA certificate (public)
+│   └── ca.key              # CA private key (SECRET)
+├── servers/
+│   ├── control.crt         # Control server certificate
+│   ├── control.key         # Control server private key (SECRET)
+│   ├── auth.crt            # Auth server certificate
+│   ├── auth.key            # Auth server private key (SECRET)
+│   ├── ldap.crt            # LDAP server certificate
+│   └── ldap.key            # LDAP server private key (SECRET)
+└── clients/
+    ├── cli.crt             # CLI client certificate
+    ├── cli.key             # CLI client private key (SECRET)
+    ├── bff.crt             # BFF client certificate
+    └── bff.key             # BFF client private key (SECRET)
+```
+
+#### Configuration
+
+The default `configs/config.yaml` is already configured to use these certificate paths:
+
+```yaml
+server:
+  control:
+    tls:
+      enabled: true
+      cert_file: "./certs/servers/control.crt"
+      key_file: "./certs/servers/control.key"
+      ca_file: "./certs/ca/ca.crt"
+      client_auth_required: true  # mTLS enabled
+
+ldap:
+  use_tls: true
+  tls_skip_verify: false  # Proper verification with CA
+  tls_ca_file: "./certs/ca/ca.crt"
+```
+
+No configuration changes needed after running the setup script!
+
+#### Testing the Setup
+
+**Test Control Server mTLS:**
+
+```bash
+# This will fail (no client certificate)
+curl https://localhost:8081/status
+
+# This will succeed (with client certificate)
+curl --cert certs/clients/cli.crt \
+     --key certs/clients/cli.key \
+     --cacert certs/ca/ca.crt \
+     https://localhost:8081/status
+```
+
+**Expected Response:**
+```json
+{
+  "success": true,
+  "data": {
+    "server": "control",
+    "status": "running",
+    "uptime": "2h34m12s",
+    "auth_server_status": "running"
+  }
+}
+```
+
+**Test LDAP TLS Connection:**
+
+The LDAP client will automatically use the CA certificate for server verification when `use_tls: true` and `tls_ca_file` is set.
+
+```bash
+# Start the server (LDAP connection is tested on startup)
+./build/akashic run --verbose
+
+# Look for these log messages:
+# [INFO] loaded LDAP CA certificate for server verification
+# [INFO] LDAP connection test successful
+```
+
+#### Manual PKI Setup (Advanced)
+
+If you prefer manual control, use the `akashic pki` commands directly:
+
+```bash
+# 1. Initialize CA
+./build/akashic pki init --certs-dir ./certs
+
+# 2. Generate control server certificate
+./build/akashic pki generate-server \
+    --certs-dir ./certs \
+    --name control \
+    --dns localhost \
+    --dns control.akashic.local \
+    --ip 127.0.0.1
+
+# 3. Generate auth server certificate
+./build/akashic pki generate-server \
+    --certs-dir ./certs \
+    --name auth \
+    --dns localhost \
+    --dns auth.akashic.local \
+    --ip 0.0.0.0
+
+# 4. Generate LDAP server certificate
+./build/akashic pki generate-server \
+    --certs-dir ./certs \
+    --name ldap \
+    --dns ldap \
+    --dns ldap.akashic.local
+
+# 5. Generate CLI client certificate
+./build/akashic pki generate-client \
+    --certs-dir ./certs \
+    --name cli \
+    --common-name "Akashic CLI Client"
+
+# 6. Generate BFF client certificate
+./build/akashic pki generate-client \
+    --certs-dir ./certs \
+    --name bff \
+    --common-name "Akashic BFF Client"
+
+# 7. Verify certificates
+./build/akashic pki verify \
+    --certs-dir ./certs \
+    --cert ./certs/servers/control.crt
+
+# 8. List all certificates
+./build/akashic pki list --certs-dir ./certs
+
+# 9. Check expiration status
+./build/akashic pki check-expiry \
+    --certs-dir ./certs \
+    --warning-days 60
+```
+
+#### PKI Management
+
+**Regenerate all certificates:**
+```bash
+./scripts/setup-pki.sh --force
+```
+
+**Verify existing certificates:**
+```bash
+./scripts/setup-pki.sh --verify
+```
+
+**List certificate inventory:**
+```bash
+./scripts/setup-pki.sh --list
+```
+
+**Check certificate expiration:**
+```bash
+./scripts/setup-pki.sh --expiry
+```
+
+**Use custom paths:**
+```bash
+./scripts/setup-pki.sh \
+    --dir /path/to/certs \
+    --bin /path/to/akashic
+```
+
+#### Certificate Lifecycle
+
+**Certificate Validity:**
+- CA: 10 years
+- Server certificates: 1 year
+- Client certificates: 1 year
+
+**Renewal:**
+Certificates should be renewed before expiration. Use the `--force` flag to regenerate:
+
+```bash
+./scripts/setup-pki.sh --force
+```
+
+**Monitoring:**
+Set up automated monitoring to check certificate expiration:
+
+```bash
+# Add to crontab (check weekly)
+0 0 * * 0 /path/to/scripts/setup-pki.sh --expiry | mail -s "Akashic Certificate Status" admin@example.com
+```
+
+#### Security Notes
+
+1. **Never commit private keys to git**
+   - `certs/**/*.key` is already in `.gitignore`
+   - Only `.crt` files should be committed (if needed)
+
+2. **File permissions** are automatically set:
+   - Private keys: `0400` (read-only by owner)
+   - Certificates: `0644` (readable by all)
+
+3. **Development vs Production:**
+   - **Development**: Self-signed CA is acceptable
+   - **Production**: Consider using Let's Encrypt for public-facing endpoints
+   - **Internal mTLS**: Self-signed CA is recommended even in production
+
+#### Troubleshooting
+
+**Problem:** `curl: (60) SSL certificate problem: self signed certificate`
+**Solution:** Use `--cacert` flag to specify the CA certificate:
+```bash
+curl --cacert certs/ca/ca.crt https://localhost:8081/status
+```
+
+**Problem:** `curl: (35) error:1401E412:SSL routines:CONNECT_CR_FINISHED:sslv3 alert bad certificate`
+**Solution:** Ensure you're providing the client certificate with `--cert` and `--key`:
+```bash
+curl --cert certs/clients/cli.crt --key certs/clients/cli.key --cacert certs/ca/ca.crt https://localhost:8081/status
+```
+
+**Problem:** LDAP connection fails with "certificate verify failed"
+**Solution:** Check that `tls_ca_file` is set in `configs/config.yaml`:
+```yaml
+ldap:
+  use_tls: true
+  tls_skip_verify: false
+  tls_ca_file: "./certs/ca/ca.crt"
+```
+
+**Problem:** "failed to bind to 127.0.0.1:8081: address already in use"
+**Solution:** Kill existing server processes:
+```bash
+lsof -ti:8081 | xargs kill -9
+```
+
 ### Running Tests
 
 ```bash
@@ -862,6 +1159,283 @@ go run ./cmd/akashic run --host 0.0.0.0 --port 9090
 9. Rate Limiting
 10. Timeout
 11. → Handler
+
+---
+
+## Certificate & Key Requirements
+
+### Overview
+
+Akashic uses a comprehensive Public Key Infrastructure (PKI) for securing various communication channels. This section documents all certificates and cryptographic keys required for development and production deployments.
+
+### Certificate Hierarchy
+
+```
+Self-Signed CA (Development)
+├── Control Server Certificate (Server TLS)
+├── CLI Client Certificate (Client mTLS)
+├── BFF Client Certificate (Client mTLS)
+├── Auth Server Certificate (Server TLS)
+└── LDAP Server Certificate (Server TLS/LDAPS)
+```
+
+### Required Certificates
+
+#### 🔴 HIGH PRIORITY - Control Plane Security
+
+**1. Self-Signed CA (Certificate Authority)**
+- **Purpose**: Root of trust for all internal certificates
+- **Type**: X.509 CA certificate
+- **Key**: RSA 4096-bit or ECDSA P-384
+- **Validity**: 10 years
+- **Location**: `certs/ca/ca.crt` + `certs/ca/ca.key`
+- **Usage**: Sign all server and client certificates
+- **Status**: ⚠️ To be implemented
+
+**2. Control Server Certificate**
+- **Purpose**: TLS for control plane management API
+- **Type**: Server certificate
+- **Endpoint**: `https://127.0.0.1:8081`
+- **SANs**: `localhost`, `127.0.0.1`, `::1`
+- **Issued by**: Self-signed CA
+- **Config**: `server.control.tls.cert_file` in `config.yaml`
+- **Status**: ⚠️ Config exists, cert generation needed
+
+**3. CLI Client Certificate**
+- **Purpose**: mTLS authentication for `akashic-cli` tool
+- **Type**: Client certificate
+- **Usage**: Authenticate CLI to control server
+- **Issued by**: Self-signed CA
+- **Common Name**: `akashic-cli`
+- **Middleware**: Already implemented in `pkg/middleware/mtls.go`
+- **Status**: ⚠️ Middleware ready, cert generation needed
+
+**4. BFF Client Certificate**
+- **Purpose**: mTLS authentication for Backend-For-Frontend service
+- **Type**: Client certificate
+- **Usage**: Authenticate BFF to control server
+- **Issued by**: Self-signed CA
+- **Common Name**: `akashic-bff`
+- **Status**: ⚠️ To be implemented when BFF is built
+
+#### 🟡 MEDIUM PRIORITY - Public-Facing Services
+
+**5. Auth Server Certificate**
+- **Purpose**: HTTPS for OAuth/OIDC endpoints
+- **Type**: Server certificate
+- **Endpoint**: `https://auth.akashic.local:8080`
+- **SANs**: `auth.akashic.local`, additional domains
+- **Issued by**: Let's Encrypt (production) or Self-signed CA (dev)
+- **Config**: To be added to `config.yaml`
+- **Status**: ⚠️ To be implemented
+
+**6. LDAP Server Certificate**
+- **Purpose**: Secure LDAP communication (LDAPS)
+- **Type**: Server certificate
+- **Endpoint**: `ldaps://ldap:636`
+- **SANs**: `ldap`, `localhost`
+- **Issued by**: Self-signed CA
+- **Config**: `ldap.use_tls` in `config.yaml` (already exists)
+- **Current**: Uses `tls_skip_verify` - needs proper cert
+- **Status**: ⚠️ Config exists, proper cert verification needed
+
+#### 🟢 LOW PRIORITY - Optional Security
+
+**7. BFF Server Certificate**
+- **Purpose**: HTTPS for frontend gateway (production)
+- **Type**: Server certificate
+- **Endpoint**: `https://bff.akashic.local`
+- **Issued by**: Let's Encrypt (production) or Self-signed CA (dev)
+- **Status**: ⏸️ Deferred until BFF implementation
+
+**8. PostgreSQL TLS** (Optional)
+- **Purpose**: Encrypted database connections
+- **Type**: Server certificate
+- **Usage**: Paranoid security for internal traffic
+- **Priority**: Very Low (Docker network is already isolated)
+- **Status**: ⏸️ Optional enhancement
+
+**9. Redis TLS** (Optional)
+- **Purpose**: Encrypted cache connections
+- **Type**: Server certificate
+- **Usage**: Paranoid security for internal traffic
+- **Priority**: Very Low
+- **Status**: ⏸️ Optional enhancement
+
+### Cryptographic Keys (Non-TLS)
+
+#### 🔴 HIGH PRIORITY - OAuth/OIDC
+
+**10. JWT Signing Keys**
+- **Purpose**: Sign OAuth access tokens and OIDC ID tokens
+- **Algorithm**: RSA 2048/4096 or ECDSA P-256/P-384
+- **Format**: JWK (JSON Web Key)
+- **Key Rotation**: Supported with versioning (`kid` parameter)
+- **Location**: `keys/jwt/`
+- **Exposed via**: `/.well-known/jwks.json` endpoint
+- **Status**: ⚠️ To be implemented (roadmap item)
+
+**11. JWT Encryption Keys** (Optional)
+- **Purpose**: Encrypt sensitive tokens (JWE - JSON Web Encryption)
+- **Algorithm**: RSA-OAEP or ECDH-ES
+- **Usage**: For highly sensitive claims
+- **Status**: ⏸️ Optional feature
+
+#### 🟡 MEDIUM PRIORITY - Data Protection
+
+**12. Token Encryption Key**
+- **Purpose**: Encrypt refresh tokens and session data at rest
+- **Algorithm**: AES-256-GCM
+- **Storage**: Encrypted in Redis/PostgreSQL
+- **Key Management**: Application-level encryption
+- **Status**: ⚠️ To be implemented
+
+**13. Client Secret Encryption**
+- **Purpose**: Encrypt OAuth client secrets in database
+- **Algorithm**: AES-256-GCM
+- **Usage**: Prevent plaintext secret storage
+- **Status**: ⚠️ To be implemented
+
+### Development vs Production Strategy
+
+#### Development Mode (Current)
+
+```yaml
+Strategy: Self-Signed CA for all certificates
+├── Fast setup and iteration
+├── No external dependencies
+├── Full mTLS and TLS support
+└── Use tls_skip_verify only for testing
+```
+
+**Setup:**
+```bash
+# Initialize PKI (creates self-signed CA)
+akashic-cli pki init
+
+# Generate control server certificate
+akashic-cli pki generate-server --name control-server
+
+# Generate CLI client certificate
+akashic-cli pki generate-client --name cli
+
+# Generate LDAP server certificate
+akashic-cli pki generate-server --name ldap --san ldap,localhost
+```
+
+#### Production Mode (Future)
+
+```yaml
+Strategy: Let's Encrypt + Self-Signed CA hybrid
+├── Let's Encrypt for public endpoints (Auth Server, BFF)
+├── Self-Signed CA for internal mTLS (Control Plane)
+├── Certificate auto-renewal
+└── Proper certificate monitoring
+```
+
+**Public Certs (Let's Encrypt):**
+- Auth Server: Auto-renewed via ACME protocol
+- BFF Server: Auto-renewed via ACME protocol
+
+**Internal Certs (Self-Signed CA):**
+- Control Server: Manual renewal (long validity)
+- mTLS Client Certs: Manual issuance per client
+- LDAP Server: Manual renewal
+
+### Certificate Management
+
+#### Locations
+
+```
+certs/
+├── ca/
+│   ├── ca.crt              # CA certificate (public)
+│   └── ca.key              # CA private key (⚠️ SECRET)
+├── server/
+│   ├── control.crt         # Control server cert
+│   ├── control.key         # Control server key (⚠️ SECRET)
+│   ├── auth.crt            # Auth server cert
+│   ├── auth.key            # Auth server key (⚠️ SECRET)
+│   ├── ldap.crt            # LDAP server cert
+│   └── ldap.key            # LDAP server key (⚠️ SECRET)
+└── client/
+    ├── cli.crt             # CLI client cert
+    ├── cli.key             # CLI client key (⚠️ SECRET)
+    ├── bff.crt             # BFF client cert
+    └── bff.key             # BFF client key (⚠️ SECRET)
+
+keys/
+└── jwt/
+    ├── signing.pem         # JWT signing key (⚠️ SECRET)
+    └── signing.pub         # JWT public key (JWKS)
+```
+
+#### Validity Periods
+
+| Certificate Type | Development | Production |
+|-----------------|-------------|------------|
+| Self-Signed CA | 10 years | N/A |
+| Server Certs | 1 year | 90 days (Let's Encrypt) |
+| Client Certs | 1 year | 1 year |
+| JWT Signing Keys | No expiry | Rotate every 6 months |
+
+#### Security Best Practices
+
+1. **Never commit private keys to git**
+   - Add `certs/**/*.key` to `.gitignore`
+   - Add `keys/**/*.pem` to `.gitignore`
+   - Only commit `.crt` (public) files
+
+2. **Use proper file permissions**
+   - CA key: `0400` (read-only for owner)
+   - Server keys: `0400`
+   - Client keys: `0400`
+   - Public certs: `0644`
+
+3. **Regular rotation**
+   - Rotate JWT signing keys every 6 months
+   - Renew server certificates before expiry
+   - Monitor certificate expiration
+
+4. **Secure storage in production**
+   - Use hardware security modules (HSM) for CA key
+   - Use secrets management (HashiCorp Vault, AWS Secrets Manager)
+   - Encrypt keys at rest
+
+### PKI Package
+
+Akashic includes a comprehensive PKI package (`pkg/pki/`) for certificate management:
+
+**Features:**
+- Self-signed CA generation
+- Server certificate generation with SANs
+- Client certificate generation for mTLS
+- Certificate validation and verification
+- PEM encoding/decoding
+- Key generation (RSA 2048/4096, ECDSA P-256/P-384)
+
+**CLI Commands:**
+```bash
+# Initialize PKI with self-signed CA
+akashic-cli pki init
+
+# Generate server certificate
+akashic-cli pki generate-server --name <name> --san <hostname1,hostname2>
+
+# Generate client certificate
+akashic-cli pki generate-client --name <name>
+
+# List certificates
+akashic-cli pki list
+
+# Verify certificate
+akashic-cli pki verify --cert <path>
+
+# Renew certificate
+akashic-cli pki renew --name <name>
+```
+
+**Status**: 🚧 Under development
 
 ---
 

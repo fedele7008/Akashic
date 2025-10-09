@@ -7,6 +7,7 @@ import (
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/server/auth"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net"
@@ -55,6 +56,7 @@ func (s *Server) Start() error {
 		return fmt.Errorf("server already running")
 	}
 
+	cfg := s.config.GetConfig()
 	addr := s.GetAddress()
 
 	// Pre-bind listener to detect port conflicts immediately
@@ -79,17 +81,78 @@ func (s *Server) Start() error {
 		IdleTimeout:  CtrlServerIdleTimeout,
 	}
 
-	s.logger.App.Info("Control server starting", zap.String("address", addr))
-
-	// Start server in goroutine with pre-bound listener
-	go func() {
-		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			s.logger.App.Error("Control server error", zap.Error(err))
+	// Configure TLS if enabled
+	if cfg.Server.Control.TLS.Enabled {
+		tlsConfig, err := s.loadTLSConfig(cfg.Server.Control.TLS)
+		if err != nil {
+			ln.Close()
+			return fmt.Errorf("failed to load TLS config: %v", err)
 		}
-	}()
+		s.server.TLSConfig = tlsConfig
+
+		s.logger.App.Info("Control server starting with TLS",
+			zap.String("address", addr),
+			zap.Bool("mtls_enabled", cfg.Server.Control.TLS.ClientAuthRequired))
+
+		// Start server in goroutine with TLS
+		go func() {
+			// Pass empty strings because certs are already in TLSConfig
+			if err := s.server.ServeTLS(ln, "", ""); err != nil && err != http.ErrServerClosed {
+				s.logger.App.Error("Control server error", zap.Error(err))
+			}
+		}()
+	} else {
+		s.logger.App.Info("Control server starting without TLS", zap.String("address", addr))
+
+		// Start server in goroutine without TLS
+		go func() {
+			if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
+				s.logger.App.Error("Control server error", zap.Error(err))
+			}
+		}()
+	}
 
 	s.logger.App.Info("Control server started successfully", zap.String("address", addr))
 	return nil
+}
+
+// loadTLSConfig loads TLS configuration from config
+func (s *Server) loadTLSConfig(tlsCfg config.TLSConfig) (*tls.Config, error) {
+	// Load server certificate and key
+	cert, err := tls.LoadX509KeyPair(tlsCfg.CertFile, tlsCfg.KeyFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load server certificate: %v", err)
+	}
+
+	tlsConfig := &tls.Config{
+		Certificates: []tls.Certificate{cert},
+		MinVersion:   tls.VersionTLS12, // Require TLS 1.2 or higher
+	}
+
+	// Configure client authentication if required (mTLS)
+	if tlsCfg.ClientAuthRequired {
+		// Load CA certificate for client verification
+		caCert, err := os.ReadFile(tlsCfg.CAFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %v", err)
+		}
+
+		caPool := x509.NewCertPool()
+		if !caPool.AppendCertsFromPEM(caCert) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+
+		tlsConfig.ClientAuth = tls.RequireAndVerifyClientCert
+		tlsConfig.ClientCAs = caPool
+
+		s.logger.App.Info("mTLS enabled - client certificates will be required and verified",
+			zap.String("ca_file", tlsCfg.CAFile))
+	} else {
+		tlsConfig.ClientAuth = tls.NoClientCert
+		s.logger.App.Info("TLS enabled without client certificate requirement")
+	}
+
+	return tlsConfig, nil
 }
 
 // Stop stops the control server gracefully
@@ -175,10 +238,18 @@ func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
 		// Load CA certificate pool if CA file is specified
 		var caPool *x509.CertPool
 		if cfg.Server.Control.TLS.CAFile != "" {
-			// Note: In production, load the CA file here
-			// For now, we'll use nil which means no verification
-			// This will be implemented when TLS is fully set up
-			caPool = nil
+			caCert, err := os.ReadFile(cfg.Server.Control.TLS.CAFile)
+			if err != nil {
+				s.logger.App.Error("Failed to read CA certificate for mTLS middleware",
+					zap.String("ca_file", cfg.Server.Control.TLS.CAFile),
+					zap.Error(err))
+			} else {
+				caPool = x509.NewCertPool()
+				if !caPool.AppendCertsFromPEM(caCert) {
+					s.logger.App.Error("Failed to parse CA certificate for mTLS middleware")
+					caPool = nil
+				}
+			}
 		}
 
 		mtlsConfig = &middleware.MTLSConfig{

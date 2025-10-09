@@ -2,7 +2,9 @@ package ldap
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -59,6 +61,26 @@ func (c *Client) Connect() error {
 		tlsConfig = &tls.Config{
 			ServerName:         c.config.Host,
 			InsecureSkipVerify: c.config.TLSSkipVerify,
+		}
+
+		// Load CA certificate if provided (for proper verification)
+		if c.config.TLSCAFile != "" && !c.config.TLSSkipVerify {
+			caCert, err := os.ReadFile(c.config.TLSCAFile)
+			if err != nil {
+				return fmt.Errorf("failed to read LDAP CA certificate: %v", err)
+			}
+
+			caPool := x509.NewCertPool()
+			if !caPool.AppendCertsFromPEM(caCert) {
+				return fmt.Errorf("failed to parse LDAP CA certificate")
+			}
+
+			tlsConfig.RootCAs = caPool
+			c.logger.App.Info("loaded LDAP CA certificate for server verification",
+				zap.String("ca_file", c.config.TLSCAFile))
+		} else if !c.config.TLSSkipVerify {
+			// If no CA file provided and not skipping verification, use system cert pool
+			c.logger.App.Info("using system certificate pool for LDAP server verification")
 		}
 	}
 

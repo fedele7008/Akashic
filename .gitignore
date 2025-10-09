@@ -8,6 +8,7 @@ CLAUDE.md
 .env
 .env.*
 !.env.example
+certs
 
 # === generated files ===
 *.DS_Store

@@ -19,9 +19,9 @@ const (
 	DefaultControlHost        = "127.0.0.1"
 	DefaultControlPort        = 8081
 	DefaultTLSEnabled         = true
-	DefaultCertFile           = "./certs/server.crt"
-	DefaultKeyFile            = "./certs/server.key"
-	DefaultCAFile             = "./certs/ca.crt"
+	DefaultCertFile           = "./certs/servers/control.crt"
+	DefaultKeyFile            = "./certs/servers/control.key"
+	DefaultCAFile             = "./certs/ca/ca.crt"
 	DefaultClientAuthRequired = true
 
 	// Database defaults - PostgreSQL
@@ -127,6 +127,33 @@ const (
 	DefaultLDAPDeprovisioningRootDeletionThreshold  = 0 * time.Second // Immediate
 	DefaultLDAPDeprovisioningAdminDeletionThreshold = 720 * time.Hour  // 30 days
 	DefaultLDAPDeprovisioningUserDeletionThreshold  = 2160 * time.Hour // 90 days
+
+	// PKI defaults
+	DefaultPKIEnabled                    = true
+	DefaultPKICertsDir                   = "./certs"
+	DefaultPKIKeyType                    = "rsa"
+	DefaultPKIRSAKeySize                 = 2048
+	DefaultPKIECDSACurve                 = "P-256"
+	DefaultPKICAValidityYears            = 10
+	DefaultPKICACommonName               = "Akashic Self-Signed CA"
+	DefaultPKICAOrganization             = "Akashic"
+	DefaultPKICACountry                  = "US"
+	DefaultPKIServerValidityDays         = 365
+	DefaultPKIClientValidityDays         = 365
+
+	// PKI file paths
+	DefaultPKICACertFile                 = "certs/ca/ca.crt"
+	DefaultPKICAKeyFile                  = "certs/ca/ca.key"
+	DefaultPKIControlServerCertFile      = "certs/servers/control.crt"
+	DefaultPKIControlServerKeyFile       = "certs/servers/control.key"
+	DefaultPKIAuthServerCertFile         = "certs/servers/auth.crt"
+	DefaultPKIAuthServerKeyFile          = "certs/servers/auth.key"
+	DefaultPKILDAPServerCertFile         = "certs/servers/ldap.crt"
+	DefaultPKILDAPServerKeyFile          = "certs/servers/ldap.key"
+	DefaultPKICLIClientCertFile          = "certs/clients/cli.crt"
+	DefaultPKICLIClientKeyFile           = "certs/clients/cli.key"
+	DefaultPKIBFFClientCertFile          = "certs/clients/bff.crt"
+	DefaultPKIBFFClientKeyFile           = "certs/clients/bff.key"
 
 	// Middleware defaults - Auth Server
 	DefaultAuthMaxRequestSizeBytes int64         = 5 * 1024 * 1024 // 5MB
@@ -255,6 +282,44 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ldap.deprovisioning.root_deletion_threshold", DefaultLDAPDeprovisioningRootDeletionThreshold)
 	v.SetDefault("ldap.deprovisioning.admin_deletion_threshold", DefaultLDAPDeprovisioningAdminDeletionThreshold)
 	v.SetDefault("ldap.deprovisioning.user_deletion_threshold", DefaultLDAPDeprovisioningUserDeletionThreshold)
+
+	// PKI defaults
+	v.SetDefault("pki.enabled", DefaultPKIEnabled)
+	v.SetDefault("pki.certs_dir", DefaultPKICertsDir)
+	v.SetDefault("pki.key_type", DefaultPKIKeyType)
+	v.SetDefault("pki.rsa_key_size", DefaultPKIRSAKeySize)
+	v.SetDefault("pki.ecdsa_curve", DefaultPKIECDSACurve)
+
+	// PKI CA defaults
+	v.SetDefault("pki.ca.cert_file", DefaultPKICACertFile)
+	v.SetDefault("pki.ca.key_file", DefaultPKICAKeyFile)
+	v.SetDefault("pki.ca.validity_years", DefaultPKICAValidityYears)
+	v.SetDefault("pki.ca.common_name", DefaultPKICACommonName)
+	v.SetDefault("pki.ca.organization", DefaultPKICAOrganization)
+	v.SetDefault("pki.ca.country", DefaultPKICACountry)
+
+	// PKI server defaults
+	v.SetDefault("pki.servers.default_validity_days", DefaultPKIServerValidityDays)
+	v.SetDefault("pki.servers.control.cert_file", DefaultPKIControlServerCertFile)
+	v.SetDefault("pki.servers.control.key_file", DefaultPKIControlServerKeyFile)
+	v.SetDefault("pki.servers.control.dns_names", []string{"localhost", "control.akashic.local"})
+	v.SetDefault("pki.servers.control.ip_addresses", []string{"127.0.0.1"})
+	v.SetDefault("pki.servers.auth.cert_file", DefaultPKIAuthServerCertFile)
+	v.SetDefault("pki.servers.auth.key_file", DefaultPKIAuthServerKeyFile)
+	v.SetDefault("pki.servers.auth.dns_names", []string{"localhost", "auth.akashic.local"})
+	v.SetDefault("pki.servers.auth.ip_addresses", []string{"0.0.0.0"})
+	v.SetDefault("pki.servers.ldap.cert_file", DefaultPKILDAPServerCertFile)
+	v.SetDefault("pki.servers.ldap.key_file", DefaultPKILDAPServerKeyFile)
+	v.SetDefault("pki.servers.ldap.dns_names", []string{"ldap", "ldap.akashic.local"})
+
+	// PKI client defaults
+	v.SetDefault("pki.clients.default_validity_days", DefaultPKIClientValidityDays)
+	v.SetDefault("pki.clients.cli.cert_file", DefaultPKICLIClientCertFile)
+	v.SetDefault("pki.clients.cli.key_file", DefaultPKICLIClientKeyFile)
+	v.SetDefault("pki.clients.cli.common_name", "Akashic CLI Client")
+	v.SetDefault("pki.clients.bff.cert_file", DefaultPKIBFFClientCertFile)
+	v.SetDefault("pki.clients.bff.key_file", DefaultPKIBFFClientKeyFile)
+	v.SetDefault("pki.clients.bff.common_name", "Akashic BFF Client")
 
 	// Middleware defaults - Auth Server
 	// Security headers
