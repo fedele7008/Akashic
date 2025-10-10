@@ -1,0 +1,68 @@
+Net Connection Cases: (arrow indicates accessing direction)
+- Control <-> Auth: They are running in same process, different go routine. (communication via in-memory channeling is enough)
+- Control/Auth -> PostgresDB: 
+    - PG is non-replaceable internal component (TLS is optional if PG is only open to localhost)
+        - use self-signed internal CA (RootCA->InternalCA->postgres.cert)
+- Control/Auth -> Redis: 
+    - Redis is non-replaceable internal component (TLS is optional if Redis is only open to localhost)
+        - use self-signed internal CA (RootCA->InternalCA->redis.cert)
+- Control/Auth -> OpenLDAP: 
+    - OpenLDAP is replaceable internal component (TLS/mTLS is optional if it is only open to internal, localhost)
+        - use self-signed internal CA (RootCA->InternalCA->ldap.cert) IF, externalRoot is not given
+        - use externalRoot-signed cert (ExternCA->ldap.cert) IF, externalRoot is given
+            - Add externRoot to Trusted bundle and let Control/Auth to use this bundle to verify TLS connection
+    - If mTLS, akashic should load akashic-ldap-client.cert (client cert) to establish mTLS connection with OpenLDAP.
+- phpLDAPadmin -> OpenLDAP:
+    - OpenLDAP is replaceable internal component (TLS/mTLS is optional if it is only open to internal, localhost)
+        - use either self-signed internal CA or externalRootCA, phpLDAPadmin have to load Trusted bundle to verify TLS connection
+    - if mTLS, phpLDAPadmin have to load phpldapadmin-ldap-client.cert (client cert) to establish mTLS connection with OpenLDAP
+- browser -> phpLDAPadmin:
+    - phpLDAPadmin is replaceable external component (TLS is required in production)
+    - since phpLDAPadmin communicates with OpenLDAP, if mTLS is enabled, phpLDAPadmin should load its own client-key pair and client certificate.
+    - since phpLDAPadmin is exposed to public network, it should use public-CA (PublicCA->phpldapadmin.cert)
+        - for development environment, use self-signed public CA which is trusted in dev's machine
+- Control/Auth -> Loki: 
+    - Loki is replaceable internal component (TLS/mTLS is optional if it is only open to internal, localhost)
+        - use self-signed internal CA (RootCA->InternalCA->loki.cert) IF, externalRoot is not given
+        - use externalRoot-signed cert (ExternCA->loki.cert) IF, externalRoot is given
+            - Add externRoot to Trusted bundle and let Control/Auth to use this bundle to verify TLS connection
+        - If mTLS, akashic should load akashic-loki-client.cert (client cert) to establish mTLS connection with Loki
+- Grafana -> Loki:
+    - Loki is replaceable internal component (TLS/mTLS is optional if it is only open to internal, localhost)
+        - self-signed internal CA or externalRootCA, either case, grafana have to load Trusted bundle to verify TLS connection
+    - if mTLS, grafana should load grafana-loki-client.cert (client cert) to establish mTLS connection with Loki
+- Browser -> Grafana:
+    - Grafana is replaceable external component (TLS is required in production)
+        - use public-CA (PublicCA->grafana.cert)
+    - for development environment, use self-signed public CA which is trusted in developer's machine.
+- Adminer -> PostgresDB:
+    - PG is non-replaceable internal component (TLS is optional if PG is only open to localhost)
+    - Adminer should load root-bundle.pem in order to verify TLS cert from PG.
+- Browser -> Adminer:
+    - Adminer is replaceable internal component (This should be only open to localhost, TLS and mTLS is not necessary)
+- AkashicCLI -> Control:
+    - Control is non-replaceable internal component (TLS/mTLS is optional if it is only open to internal, localhost, mTLS is strongly recommended)
+        - use self-signed internal CA (RootCA->InternalCA->akashic-ctrl.cert)
+        - AkashicCLI should load control server's cli-akashic-client.cert (client cert) to establish mTLS connection with Akashic Ctrl server
+- AkashicCLI -> Auth:
+    - Auth is non-replaceable external component (TLS is required in prod)
+        - use public CA (PublicCA->akashic-auth.cert) <- recommended
+- BFF -> Control:
+    - Control is non-replaceable internal component (TLS/mTLS is optional if it is only open to internal, localhost, mTLS is strongly recommended)
+        - use self-signed internal CA (RootCA->InternalCA->akashic-ctrl.cert)
+        - BFF should load control server's bff-akashic-client.cert (client cert) to establish mTLS connection with Akashic Ctrl server
+- BFF -> Auth:
+    - Auth is non-replaceable external component (TLS is required in prod)
+        - use public CA (PublicCA->akashic-auth.cert)
+- WEB -> BFF:
+    - BFF as a server, it is typical web-backend-server, which is replaceable external component (TLS is required in prod)
+        - use public CA (PublicCA->bff.cert) since front-end's javascript will fetch BFF
+    - BFF as a client, it should load trusted bundle and use this bundle.pem to verify TLS connection with akashic (since akashic uses self-signed internal ca)
+- Browser -> WEB:
+    - WEB is front-end server, which is replaceable external component (TLS is required)
+        - use public CA (PublicCA->web.cert)
+- WEB -> Control:
+    - This is the case when user decided to opt out BFF and use SPA WEB. This case, due to security reason, access to control is prohibited
+- WEB -> Auth:
+    - This is the case when user decided to opt out BFF and use SPA WEB. Auth is non-replaceable external component (TLS is required in prod)
+        - use public CA (PublicCA->akashic-auth.cert)
