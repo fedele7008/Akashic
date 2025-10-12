@@ -8,7 +8,13 @@ CLAUDE.md
 .env
 .env.*
 !.env.example
-certs
+
+# === vault ===
+vault/data/
+vault/logs/
+.vault-token
+vault-init.json
+*.unseal
 
 # === generated files ===
 *.DS_Store
