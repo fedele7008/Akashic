@@ -1,12 +1,29 @@
-package main
+package cli
 
 import (
+	"akashic/akashic/pkg/command/cli/core"
 	"fmt"
-
-	akashiccli "akashic/akashic/pkg/akashic-cli"
 
 	"github.com/spf13/cobra"
 )
+
+func NewRootCmd() *cobra.Command {
+	rootCmd := &cobra.Command{
+		Use:     RootCmd,
+		Short:   fmt.Sprintf(FmtRootCmdShort, Version),
+		Long:    fmt.Sprintf(FmtRootCmdLong, Version),
+		Version: Version,
+		Example: FmtRootExamples,
+		CompletionOptions: cobra.CompletionOptions{
+			DisableDefaultCmd: true,
+		},
+	}
+
+	// Add subcommands
+	rootCmd.AddCommand(NewPkiCmd())
+
+	return rootCmd
+}
 
 var (
 	// Global flags
@@ -14,44 +31,16 @@ var (
 	verbose    bool
 
 	// Shared client instance
-	client *akashiccli.Client
+	client *core.Client
 )
 
 // rootCmd represents the base command
 var rootCmd = &cobra.Command{
 	Use:   "akashic-cli",
 	Short: "Akashic CLI - Administrative tool for Akashic server",
-	Long: `akashic-cli is a command-line tool for managing the Akashic server.
-
-It connects to the Akashic control plane API (default: http://localhost:8081)
-and allows you to perform administrative tasks such as:
-
-- Bootstrap root user creation
-- User management (create, list, disable, enable)
-- Server control (start, stop, restart, status)
-- Configuration management (view, reload)
-
-Examples:
-  # Check bootstrap status
-  akashic-cli bootstrap status
-
-  # Create root user (during bootstrap)
-  akashic-cli bootstrap create-root --token <token> --username root --email root@example.com
-
-  # Create an admin user
-  akashic-cli user create --username admin --email admin@example.com --type admin
-
-  # List all users
-  akashic-cli user list
-
-  # Check server status
-  akashic-cli server status
-
-  # Restart auth server
-  akashic-cli server restart`,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		// Initialize client for all commands
-		client = akashiccli.NewClient(controlURL, verbose)
+		client = core.NewClient(controlURL, verbose)
 	},
 }
 

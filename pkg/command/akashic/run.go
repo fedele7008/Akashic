@@ -1,14 +1,14 @@
-package command
+package akashic
 
 import (
-	"akashic/akashic/pkg/akashic"
+	"akashic/akashic/pkg/command/akashic/core"
 	"akashic/akashic/pkg/config"
 
 	"github.com/spf13/cobra"
 )
 
 func NewRunCmd() *cobra.Command {
-	app := akashic.NewAkashicApp()
+	app := core.NewAkashicApp()
 
 	runCmd := &cobra.Command{
 		Use:               RunCmd,

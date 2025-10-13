@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -8,8 +8,6 @@ import (
 	"syscall"
 	"text/tabwriter"
 	"time"
-
-	akashiccli "akashic/akashic/pkg/akashic-cli"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -40,7 +38,7 @@ var userListCmd = &cobra.Command{
 			return fmt.Errorf("failed to list users: %v", err)
 		}
 
-		var users []akashiccli.UserResponse
+		var users []UserResponse
 		if err := json.Unmarshal(resp.Data, &users); err != nil {
 			return fmt.Errorf("failed to parse response: %v", err)
 		}
@@ -89,7 +87,7 @@ var userGetCmd = &cobra.Command{
 			return fmt.Errorf("failed to get user: %v", err)
 		}
 
-		var user akashiccli.UserResponse
+		var user UserResponse
 		if err := json.Unmarshal(resp.Data, &user); err != nil {
 			return fmt.Errorf("failed to parse response: %v", err)
 		}
@@ -184,7 +182,7 @@ Example:
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		req := akashiccli.CreateUserRequest{
+		req := CreateUserRequest{
 			Username: username,
 			Email:    email,
 			Password: password,
@@ -196,7 +194,7 @@ Example:
 			return fmt.Errorf("failed to create user: %v", err)
 		}
 
-		var user akashiccli.UserResponse
+		var user UserResponse
 		if err := json.Unmarshal(resp.Data, &user); err != nil {
 			return fmt.Errorf("failed to parse response: %v", err)
 		}

@@ -1,4 +1,4 @@
-package akashiccli
+package cli
 
 import "time"
 

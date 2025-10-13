@@ -1,12 +1,10 @@
-package main
+package cli
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"time"
-
-	akashiccli "akashic/akashic/pkg/akashic-cli"
 
 	"github.com/spf13/cobra"
 	"gopkg.in/yaml.v3"
@@ -33,7 +31,7 @@ var configViewCmd = &cobra.Command{
 			return fmt.Errorf("failed to get configuration: %v", err)
 		}
 
-		var config akashiccli.ConfigResponse
+		var config ConfigResponse
 		if err := json.Unmarshal(resp.Data, &config); err != nil {
 			return fmt.Errorf("failed to parse response: %v", err)
 		}

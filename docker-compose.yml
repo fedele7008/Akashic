@@ -50,11 +50,13 @@ services:
       VAULT_TOKEN_FILE: "/vault/file/.vault-token"
       VAULT_INIT_FILE: "/vault/file/vault-init.json"
       VAULT_CAPATH: "/vault/certs/vault/root-ca.crt"
+      AKASHIC_VAULT_SECRET: "${AKASHIC_VAULT_SECRET:-}"
       CERTS_OUTPUT_DIR: "/vault/certs"
       TZ: ${AKASHIC_TZ:-UTC}
     volumes:
       - vault_file:/vault/file
       - vault_logs:/vault/logs
+      - vault_secret:/vault/.secret
       - ./certs:/vault/certs
       - ./services/vault/init/scripts:/usr/local/bin:ro
       - ./scripts/init:/scripts/init:ro # Remove later
@@ -196,3 +198,4 @@ volumes:
   ldap_config:
   vault_logs:
   vault_file:
+  vault_secret:

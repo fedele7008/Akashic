@@ -1,13 +1,14 @@
 package main
 
 import (
-	"fmt"
+	"akashic/akashic/pkg/command/cli"
 	"os"
 )
 
 func main() {
-	if err := Execute(); err != nil {
-		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+	cmd := cli.NewRootCmd()
+	err := cmd.Execute()
+	if err != nil {
 		os.Exit(1)
 	}
 }

@@ -1,4 +1,4 @@
-package main
+package cli
 
 import (
 	"context"
@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"syscall"
 	"time"
-
-	akashiccli "akashic/akashic/pkg/akashic-cli"
 
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
@@ -34,7 +32,7 @@ var bootstrapStatusCmd = &cobra.Command{
 			return fmt.Errorf("failed to get bootstrap status: %v", err)
 		}
 
-		var status akashiccli.BootstrapStatusResponse
+		var status BootstrapStatusResponse
 		if err := json.Unmarshal(resp.Data, &status); err != nil {
 			return fmt.Errorf("failed to parse response: %v", err)
 		}
@@ -141,7 +139,7 @@ Interactive mode (prompts for password):
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 
-		req := akashiccli.CreateRootRequest{
+		req := CreateRootRequest{
 			Token:    token,
 			Username: username,
 			Email:    email,
@@ -153,7 +151,7 @@ Interactive mode (prompts for password):
 			return fmt.Errorf("failed to create root user: %v", err)
 		}
 
-		var user akashiccli.RootUserCreateResponse
+		var user RootUserCreateResponse
 		if err := json.Unmarshal(resp.Data, &user); err != nil {
 			return fmt.Errorf("failed to parse response: %v", err)
 		}

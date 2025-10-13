@@ -1,4 +1,4 @@
-package akashic
+package core
 
 import (
 	"fmt"

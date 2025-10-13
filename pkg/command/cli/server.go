@@ -1,12 +1,10 @@
-package main
+package cli
 
 import (
 	"context"
 	"encoding/json"
 	"fmt"
 	"time"
-
-	akashiccli "akashic/akashic/pkg/akashic-cli"
 
 	"github.com/spf13/cobra"
 )
@@ -32,7 +30,7 @@ var serverStatusCmd = &cobra.Command{
 			return fmt.Errorf("failed to get server status: %v", err)
 		}
 
-		var status akashiccli.ServerStatusResponse
+		var status ServerStatusResponse
 		if err := json.Unmarshal(resp.Data, &status); err != nil {
 			return fmt.Errorf("failed to parse response: %v", err)
 		}

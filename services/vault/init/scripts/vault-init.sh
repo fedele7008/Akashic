@@ -1,6 +1,6 @@
 #!/bin/bash
 
-set -eu
+set -u
 
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

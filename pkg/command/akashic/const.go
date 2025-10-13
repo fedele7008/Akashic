@@ -1,11 +1,13 @@
-package command
+package akashic
 
 const (
 	RootCmd         = "akashic"
 	Version         = "0.0.2"
-	FmtRootCmdShort = `akashic %s`
+	FmtRootCmdShort = "akashic %s"
 	FmtRootCmdLong  = "akashic %s\nOAuth 2.0 + OIDC SSO Server"
+)
 
+const (
 	RunCmd      = "run"
 	RunCmdShort = "Start the Akashic server"
 	RunCmdLong  = `Start the Akashic server with auth and control plane endpoints.
