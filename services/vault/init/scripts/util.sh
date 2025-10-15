@@ -35,8 +35,14 @@ log_header() {
 
 log_section() {
     echo ""
+    echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE} $*${NC}"
+    echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
+}
+
+log_output() {
     echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
-    echo -e "${CYAN} $*${NC}"
+    echo -e "$*"
     echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
 }
 
@@ -47,12 +53,12 @@ command_exists() {
 
 # Wait for Vault to be available
 wait_for_vault() {
-    log "Waiting for Vault to be available at ${VAULT_ADDR}..."
+    log "Waiting for Vault to be available at ${AKASHIC_VAULT_ADDRESS}..."
     local max_retries=30
     local retry=0
 
     while [ $retry -lt $max_retries ]; do
-        curl --cacert "${VAULT_CAPATH}" "${VAULT_ADDR}/v1/sys/health" > /dev/null 2>&1
+        akashic-cli pki vault status > /dev/null 2>&1
         if [ $? -eq 0 ]; then
             log_success "Vault is reachable"
             return 0

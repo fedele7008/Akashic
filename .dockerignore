@@ -30,3 +30,7 @@ logs/*
 # === temp/test files ===
 tmp/
 **/*.ignore
+
+# === docker specific ignores ===
+.secrets/
+certs/

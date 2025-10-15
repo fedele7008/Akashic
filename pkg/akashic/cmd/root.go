@@ -1,4 +1,4 @@
-package akashic
+package cmd
 
 import (
 	"fmt"
@@ -22,3 +22,10 @@ func NewRootCmd() *cobra.Command {
 
 	return rootCmd
 }
+
+const (
+	RootCmd         = "akashic"
+	Version         = "0.0.2"
+	FmtRootCmdShort = "akashic %s"
+	FmtRootCmdLong  = "akashic %s\nOAuth 2.0 + OIDC SSO Server"
+)

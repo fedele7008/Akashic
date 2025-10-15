@@ -5,10 +5,12 @@ set -u
 # Script directory
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-VAULT_ADDR="${VAULT_ADDR:-https://vault:8200}"
-VAULT_TOKEN_FILE="${VAULT_TOKEN_FILE:-/vault/file/.vault-token}"
-VAULT_CAPATH="${VAULT_CAPATH:-/vault/certs/vault/root-ca.crt}"
-CERTS_OUTPUT_DIR="${CERTS_OUTPUT_DIR:-/vault/certs}"
+AKASHIC_SECRET="${AKASHIC_SECRET:-}"
+AKASHIC_VAULT_ADDRESS="${AKASHIC_VAULT_ADDRESS:-https://vault:8200}"
+AKASHIC_VAULT_TLS_CACERT="${AKASHIC_VAULT_TLS_CACERT:-/certs/vault/root-ca.crt}"
+CERTS_OUTPUT_DIR="${CERTS_OUTPUT_DIR:-/certs}"
+VAULT_TOKEN_FILE="${VAULT_TOKEN_FILE:-/vault/token/vault/root-token.enc}"
+VAULT_KEY_DIR="${VAULT_KEY_DIR:-/vault/token/vault/keys}"
 
 # PKI Configuration
 ROOT_CA_TTL="87600h"           # 10 years
@@ -38,9 +40,30 @@ main() {
         log_error "Failed to connect to Vault"
         return 1
     fi
+
+    # Run vault initialization
+    log_section "Step 1: Vault initialization"
+
+    # Check if vault is already initialized
+    local status_response
+    status_response=$(akashic-cli pki vault status || echo "{}") > /dev/null 2>&1
+    echo "$status_response" | grep -q 'initialized: true'
+    if [[ $? -eq 0 ]]; then
+        log "Vault is already initialized"
+    else
+        log "Vault is not initialized. Initializing..."
+        local init_response
+        init_response=$(akashic-cli pki vault init --keys 5 --thresholds 3 --key-out-dir "${VAULT_KEY_DIR}" --key-out-format "vault-key.enc" --root-out "${VAULT_TOKEN_FILE}" --override) > /dev/null 2>&1
+        if [[ $? -eq 0 ]]; then
+            log "Vault initialization successful"
+            log_output "$init_response"
+        else
+            log_error "Vault initialization failed"
+            log_output "$init_response"
+            return 1
+        fi
+    fi
 }
 
 main
 echo "Akashic Infrastructure PKI setup complete"
-
-# tail -f /dev/null

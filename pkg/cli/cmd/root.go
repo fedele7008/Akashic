@@ -1,4 +1,31 @@
-package cli
+package cmd
+
+import (
+	"akashic/akashic/pkg/cli/core"
+	"fmt"
+
+	"github.com/spf13/cobra"
+)
+
+func NewRootCmd() *cobra.Command {
+	ctx := core.NewCliContext()
+	cmd := &cobra.Command{
+		Use:               RootCmd,
+		Short:             fmt.Sprintf(FmtRootCmdShort, Version),
+		Long:              fmt.Sprintf(FmtRootCmdLong, Version),
+		Version:           Version,
+		Example:           FmtRootExamples,
+		PersistentPreRunE: ctx.Init,
+	}
+
+	// Register persistent flags
+	core.RegisterFlags(cmd, core.FilterCliConfig(core.Verbose)...)
+
+	// Add subcommands
+	cmd.AddCommand(NewPkiCmd(ctx))
+
+	return cmd
+}
 
 const (
 	RootCmd         = "akashic-cli"
@@ -31,10 +58,4 @@ akashic-cli server status
 
 # Restart auth server
 akashic-cli server restart`
-)
-
-const (
-	PkiCmd      = "pki"
-	PkiCmdShort = "Manage Akashic PKI certificates"
-	PkiCmdLong  = `Manage Akashic PKI certificates using Hashicorp Vault.`
 )

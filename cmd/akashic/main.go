@@ -1,14 +1,13 @@
 package main
 
 import (
-	"akashic/akashic/pkg/command/akashic"
+	"akashic/akashic/pkg/akashic/cmd"
+
 	"os"
 )
 
 func main() {
-	cmd := akashic.NewRootCmd()
-	err := cmd.Execute()
-	if err != nil {
+	if err := cmd.NewRootCmd().Execute(); err != nil {
 		os.Exit(1)
 	}
 }

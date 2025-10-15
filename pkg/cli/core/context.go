@@ -1,0 +1,721 @@
+package core
+
+import (
+	"akashic/akashic/pkg/common"
+	"bytes"
+	"context"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/json"
+	"fmt"
+	"log"
+	"maps"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/joho/godotenv"
+	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
+	"go.yaml.in/yaml/v3"
+	"golang.org/x/term"
+)
+
+type CliContext struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+	cfg    *viper.Viper
+}
+
+func NewCliContext() *CliContext {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &CliContext{
+		ctx:    ctx,
+		cancel: cancel,
+		cfg:    viper.New(),
+	}
+}
+
+func (ctx *CliContext) LogVerbose(format string, args ...any) {
+	if ctx.cfg.GetBool("verbose") {
+		log.Printf("[VERBOSE] "+format+"\n", args...)
+	}
+}
+
+type FlagKey int
+
+const (
+	_ FlagKey = iota
+	Verbose
+	VaultAddress
+	VaultCACert
+	Secret
+	SecretPath
+	VaultNumKeys
+	VaultNumThresholds
+	VaultInitKeyOutDir
+	VaultInitKeyOutFormat
+	VaultInitRootOut
+	VaultInitFileOverride
+	TokenFileIn
+	TokenFileOut
+	TokenFileOverride
+)
+
+var CliConfigMap = map[FlagKey]ConfigEntity[any]{
+	// Verbose is only set via flag
+	Verbose: {
+		Key:        "verbose",
+		Name:       "verbose",
+		Short:      "v",
+		Persistent: true,
+		Default:    bool(false),
+		Desc:       "Enable verbose output",
+	},
+	VaultAddress: {
+		Key:        "vault.address",
+		Env:        "AKASHIC_VAULT_ADDRESS",
+		Name:       "address",
+		Short:      "a",
+		Persistent: true,
+		Default:    string(""),
+		Desc:       "Address to Hashicorp Vault",
+	},
+	VaultCACert: {
+		Key:        "vault.cacert",
+		Env:        "AKASHIC_VAULT_TLS_CACERT",
+		Name:       "cacert",
+		Short:      "c",
+		Persistent: true,
+		Default:    string(""),
+		Desc:       "Path to CA certificate",
+	},
+	// VaultSecret is only set via env
+	Secret: {
+		Key: "secret",
+		Env: "AKASHIC_SECRET",
+	},
+	SecretPath: {
+		Key:     "secret_path",
+		Env:     "AKASHIC_SECRET_PATH",
+		Name:    "secret-path",
+		Short:   "s",
+		Default: string(""),
+		Desc:    "Path to the secret in Vault",
+	},
+	VaultNumKeys: {
+		Key:     "vault.keys",
+		Env:     "AKASHIC_VAULT_NUM_KEYS",
+		Name:    "keys",
+		Default: int(5),
+		Desc:    "Number of key shares to generate",
+	},
+	VaultNumThresholds: {
+		Key:     "vault.thresholds",
+		Env:     "AKASHIC_VAULT_NUM_THRESHOLDS",
+		Name:    "thresholds",
+		Default: int(3),
+		Desc:    "Number of threshold keys to generate",
+	},
+	// VaultInitKeyOutDir is only set via flag
+	VaultInitKeyOutDir: {
+		Key:     "vault.key_out_dir",
+		Name:    "key-out-dir",
+		Default: string(""),
+		Desc:    "Directory to output key files. If empty, it will be printed to stdout",
+	},
+	// VaultInitKeyOutFormat is only set via flag
+	VaultInitKeyOutFormat: {
+		Key:     "vault.key_out_format",
+		Name:    "key-out-format",
+		Default: string("key-%d.enc"),
+		Desc:    "Format of key files name, it will insert number into '%d' in the format string. Only in effect when --key-out-dir is specified",
+	},
+	// VaultInitRootOut is only set via flag
+	VaultInitRootOut: {
+		Key:     "vault.root_out",
+		Name:    "root-out",
+		Default: string(""),
+		Desc:    "Output file for root token. If empty, it will be printed to stdout",
+	},
+	VaultInitFileOverride: {
+		Key:     "vault.init.file_override",
+		Name:    "override",
+		Short:   "f",
+		Default: bool(false),
+		Desc:    "Override existing Vault initialization files if they exist",
+	},
+	// TokenFileIn is only set via flag
+	TokenFileIn: {
+		Key:     "token.in",
+		Name:    "in",
+		Short:   "i",
+		Default: string(""),
+		Desc:    "Input file for token. If empty, it will be read from stdin",
+	},
+	// TokenFileOut is only set via flag
+	TokenFileOut: {
+		Key:     "token.out",
+		Name:    "out",
+		Short:   "o",
+		Default: string(""),
+		Desc:    "Output file for token. If empty, it will be written to stdout",
+	},
+	// TokenFileOverride is only set via flag
+	TokenFileOverride: {
+		Key:     "token.override",
+		Name:    "override",
+		Short:   "f",
+		Default: bool(false),
+		Desc:    "Override existing token file if it exists",
+	},
+}
+
+func FilterCliConfig(flagkeys ...FlagKey) []ConfigEntity[any] {
+	filteredConfigs := make([]ConfigEntity[any], 0, len(flagkeys))
+	for _, key := range flagkeys {
+		entity, ok := CliConfigMap[key]
+		if !ok {
+			fmt.Printf("Missing config for flag key: %d\n", key)
+			continue
+		}
+		filteredConfigs = append(filteredConfigs, entity)
+	}
+	return filteredConfigs
+}
+
+func (cmdCtx *CliContext) Init(cmd *cobra.Command, args []string) error {
+	var err error
+
+	// Set default configuration
+	configs := slices.Collect(maps.Values(CliConfigMap))
+	SetDefaults(cmdCtx.cfg, configs)
+
+	// Load .env file if exists
+	if err = godotenv.Load(); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("something went wrong while loading .env file: %v", err)
+	}
+
+	// Load environment variables to config
+	if err = BindEnvs(cmdCtx.cfg, configs); err != nil {
+		return err
+	}
+
+	// Bind flags to config
+	if err = BindFlags(cmd, cmdCtx.cfg, configs); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func getVaultTlsConfig(cmdCtx *CliContext) (*tls.Config, error) {
+	cacert := cmdCtx.cfg.GetString("vault.cacert")
+	var tlsConfig *tls.Config
+	if cacert != "" {
+		rootCrt, err := os.ReadFile(cacert)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA certificate: %v", err)
+		}
+
+		rootCaPool := x509.NewCertPool()
+
+		if !rootCaPool.AppendCertsFromPEM(rootCrt) {
+			return nil, fmt.Errorf("failed to parse CA certificate")
+		}
+
+		tlsConfig = &tls.Config{
+			RootCAs: rootCaPool,
+		}
+	}
+	return tlsConfig, nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultStatusCmd(cmd *cobra.Command, args []string) error {
+	address := cmdCtx.cfg.GetString("vault.address")
+	if address == "" {
+		return fmt.Errorf("vault address is not specified")
+	}
+	tlsConfig, err := getVaultTlsConfig(cmdCtx)
+	if err != nil {
+		return fmt.Errorf("failed to create TLS configuration: %v", err)
+	}
+	client, err := NewHttpClient(cmdCtx, address, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %v", err)
+	}
+
+	var requestErr error
+	resp, body, err := client.SendRequest(http.MethodGet, "/v1/sys/health", nil)
+	if err != nil {
+		requestErr = err
+	}
+
+	fmt.Println("========================================================")
+	if requestErr == nil {
+		fmt.Printf("Vault Status (%d)\n", resp.StatusCode)
+	} else {
+		fmt.Println("Vault Status (FAILED)")
+	}
+	fmt.Println("========================================================")
+	if requestErr == nil {
+		output, err := common.ConvJsonToYaml(body)
+		if err != nil {
+			return fmt.Errorf("failed to convert JSON to YAML: %v", err)
+		}
+		fmt.Println(output)
+	} else {
+		fmt.Println(strings.ReplaceAll(requestErr.Error(), ": ", ":\n"))
+		os.Exit(1)
+	}
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) error {
+	address := cmdCtx.cfg.GetString("vault.address")
+	if address == "" {
+		return fmt.Errorf("vault address is not specified")
+	}
+	tlsConfig, err := getVaultTlsConfig(cmdCtx)
+	if err != nil {
+		return fmt.Errorf("failed to create TLS configuration: %v", err)
+	}
+	getClient, err := NewHttpClient(cmdCtx, address, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %v", err)
+	}
+	resp, body, err := getClient.SendRequest(http.MethodGet, "/v1/sys/init", nil)
+	if err != nil {
+		fmt.Println(strings.ReplaceAll(err.Error(), ": ", ":\n"))
+		os.Exit(1)
+	}
+	if resp.StatusCode != http.StatusOK {
+		fmt.Println("Something went wrong:", string(body))
+		os.Exit(1)
+	}
+	type initGetResponse struct {
+		Initialized bool `json:"initialized"`
+	}
+	initResp := &initGetResponse{}
+	err = json.Unmarshal(body, initResp)
+	if err != nil {
+		fmt.Println(strings.ReplaceAll(err.Error(), ": ", ":\n"))
+		os.Exit(1)
+	}
+	if initResp.Initialized {
+		fmt.Println("Vault is already initialized")
+		os.Exit(0)
+	}
+	override := cmdCtx.cfg.GetBool("vault.init.file_override")
+	numKey := cmdCtx.cfg.GetInt("vault.keys")
+	if numKey < 1 {
+		return fmt.Errorf("number of keys must be greater than 0")
+	}
+	numThreshold := cmdCtx.cfg.GetInt("vault.thresholds")
+	if numThreshold < 1 || numThreshold > numKey {
+		return fmt.Errorf("number of thresholds must be between 1 and number of keys")
+	}
+	keyOutDir := cmdCtx.cfg.GetString("vault.key_out_dir")
+	var mkdirCallback func() error // use callback so we can defer the creation of the directory
+	if keyOutDir != "" && !strings.ContainsRune(keyOutDir, 0) && !strings.ContainsAny(keyOutDir, `<>:"\|?*`) {
+		cleanPath := filepath.Clean(keyOutDir)
+		info, err := os.Stat(cleanPath)
+		if os.IsNotExist(err) {
+			mkdirCallback = func() error {
+				if mkdirErr := os.MkdirAll(cleanPath, 0o755); mkdirErr != nil {
+					return fmt.Errorf("failed to create key output directory: %v", mkdirErr)
+				}
+				cmdCtx.LogVerbose("Key output directory created: %s", cleanPath)
+				return nil
+			}
+		} else if err != nil {
+			return fmt.Errorf("failed to get key output directory info: %v", err)
+		} else if !info.IsDir() {
+			return fmt.Errorf("key output directory is not a directory: %s", cleanPath)
+		} else {
+			cmdCtx.LogVerbose("Key output directory verified: %s", cleanPath)
+		}
+	} else {
+		keyOutDir = ""
+		cmdCtx.LogVerbose("Key output directory not set, result will not be saved and printed to stdout")
+	}
+	keyOutFormat := cmdCtx.cfg.GetString("vault.key_out_format")
+	if !strings.Contains(keyOutFormat, "%d") {
+		splited := strings.Split(keyOutFormat, ".")
+		if len(splited) == 1 {
+			keyOutFormat = fmt.Sprintf("%s-%%d", splited[0])
+		} else {
+			splited[len(splited)-2] = fmt.Sprintf("%s-%%d", splited[len(splited)-2])
+			keyOutFormat = strings.Join(splited, ".")
+		}
+	}
+	cmdCtx.LogVerbose("Key output format: %s", keyOutFormat)
+
+	keyFiles := make([]string, 0, numKey)
+	if keyOutDir != "" {
+		for i := range numKey {
+			fileName := strings.ReplaceAll(keyOutFormat, "%d", strconv.Itoa(i+1))
+			fullPath := filepath.Join(keyOutDir, fileName)
+			fullPath, err := filepath.Abs(fullPath)
+			if err != nil {
+				return fmt.Errorf("failed to get absolute path of key output file: %v", err)
+			}
+			keyFiles = append(keyFiles, filepath.Clean(fullPath))
+		}
+	}
+	cmdCtx.LogVerbose("Key output files: %v", keyFiles)
+
+	// check if file exists
+	for _, file := range keyFiles {
+		info, err := os.Stat(file)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to get key output file info: %s", file)
+			}
+		} else if info.IsDir() {
+			return fmt.Errorf("key output file is a directory: %s", file)
+		} else {
+			cmdCtx.LogVerbose("Key output file verified: %s", file)
+			if !override {
+				fmt.Printf("Key output file already exist \"%v\"\n", file)
+				fmt.Print("Do you want to overwrite it? (y/N): ")
+				var confirm string
+				fmt.Scanln(&confirm)
+				confirm = strings.TrimSpace(strings.ToLower(confirm))
+				if confirm != "y" && confirm != "yes" {
+					fmt.Println("Aborted")
+					os.Exit(1)
+				}
+			}
+		}
+	}
+
+	rootFile := cmdCtx.cfg.GetString("vault.root_out")
+	var mkrootCallback func(data []byte) error // use callback so we can defer the creation of the file
+	if rootFile != "" {
+		rootFile = filepath.Clean(rootFile)
+		rootDir := filepath.Dir(rootFile)
+		mkrootCallback = func(data []byte) error {
+			if mkrootdirerr := os.MkdirAll(rootDir, 0o755); mkrootdirerr != nil {
+				return fmt.Errorf("failed to create root output directory: %v", mkrootdirerr)
+			}
+			cmdCtx.LogVerbose("Root output directory created: %s", rootDir)
+
+			f, err := os.OpenFile(rootFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			if err != nil {
+				return fmt.Errorf("failed to create root output file: %v", err)
+			}
+			defer f.Close()
+
+			_, err = f.Write(data)
+			if err != nil {
+				return fmt.Errorf("failed to write to root output file: %v", err)
+			}
+
+			return nil
+		}
+		info, err := os.Stat(rootFile)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to get root output directory info: %v", err)
+			}
+		} else if info.IsDir() {
+			return fmt.Errorf("root output file should not be a directory: %s", rootFile)
+		} else {
+			// confirm overwrite
+			absPath, err := filepath.Abs(rootFile)
+			if err != nil {
+				return fmt.Errorf("failed to get absolute path of root output file: %v", err)
+			}
+			if !override {
+				fmt.Printf("Root output file already exist \"%v\"\n", absPath)
+				fmt.Print("Do you want to overwrite the root output file? (y/N): ")
+				var confirm string
+				fmt.Scanln(&confirm)
+				confirm = strings.TrimSpace(strings.ToLower(confirm))
+				if confirm != "y" && confirm != "yes" {
+					fmt.Println("Aborted")
+					os.Exit(1)
+				}
+			}
+		}
+	} else {
+		rootFile = ""
+		cmdCtx.LogVerbose("Root output file not set, result will not be saved and printed to stdout")
+	}
+
+	secret := cmdCtx.cfg.GetString("secret")
+	if rootFile != "" || keyOutDir != "" {
+		if secret == "" && cmdCtx.cfg.IsSet("secret_path") {
+			s, err := os.ReadFile(cmdCtx.cfg.GetString("secret_path"))
+			if err == nil {
+				secret = strings.TrimSpace(string(s))
+			}
+		}
+		if secret == "" {
+			fmt.Print("Enter passphrase to encrypt your data: ")
+			passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
+			fmt.Println()
+			if err != nil {
+				return fmt.Errorf("failed to read passphrase: %v", err)
+			}
+			secret = string(passphraseBytes)
+
+			fmt.Print("Confirm passphrase: ")
+			confirmBytes, err := term.ReadPassword(int(syscall.Stdin))
+			fmt.Println()
+			if err != nil {
+				return fmt.Errorf("failed to read passphrase confirmation: %v", err)
+			}
+			if string(confirmBytes) != secret {
+				fmt.Println("passphrase does not match")
+				os.Exit(1)
+			}
+		}
+	}
+	secret = strings.TrimSpace(secret)
+
+	type JsonPayload struct {
+		SecretShares    int `json:"secret_shares"`
+		SecretThreshold int `json:"secret_threshold"`
+	}
+	jsonPayload := JsonPayload{
+		SecretShares:    numKey,
+		SecretThreshold: numThreshold,
+	}
+	postClient, err := NewHttpClient(cmdCtx, address, tlsConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create HTTP client: %v", err)
+	}
+	var requestErr error
+	resp, body, err = postClient.SendRequest(http.MethodPost, "/v1/sys/init", jsonPayload)
+	if err != nil {
+		requestErr = err
+	}
+	fmt.Println("========================================================")
+	if requestErr == nil {
+		fmt.Printf("Vault Initialization Successful (%d)\n", resp.StatusCode)
+	} else {
+		fmt.Println("Vault Initialization Failed")
+	}
+	fmt.Println("========================================================")
+	if requestErr != nil {
+		fmt.Println(strings.ReplaceAll(requestErr.Error(), ": ", ":\n"))
+		os.Exit(1)
+	}
+	type InitResponse struct {
+		Keys       []string `json:"keys"`
+		KeysBase64 []string `json:"keys_base64"`
+		RootToken  string   `json:"root_token"`
+	}
+	initResponse := InitResponse{}
+	err = json.Unmarshal(body, &initResponse)
+	if err != nil {
+		return fmt.Errorf("failed to parse initialization response: %v", err)
+	}
+	if len(initResponse.Keys) != numKey || len(initResponse.Keys) != len(keyFiles) {
+		return fmt.Errorf("expected %d keys, got %d", numKey, len(initResponse.Keys))
+	}
+
+	fmt.Println("Requested Unseal keys      :", numKey)
+	fmt.Println("Requested Unseal threshold :", numThreshold)
+	fmt.Println("--------------------------------------------------------")
+	if keyOutDir == "" {
+		fmt.Println("!! Key output directory is not set, your unseal key(s) will be exposed to the screen. Keep your keys safe !!")
+		for i, key := range initResponse.Keys {
+			fmt.Printf(" - Key %d: %s\n", i+1, key)
+		}
+	} else {
+		keyEncData := make([]string, len(initResponse.Keys))
+		for i, key := range initResponse.Keys {
+			token, err := IssueSecureToken([]byte(key), secret, TokenMeta{
+				Enc: AES_256_GCM,
+				Alg: HMAC_SHA256,
+				Sub: fmt.Sprintf("Hashicorp vault unseal key (%d/%d) threshold: %d", i+1, numKey, numThreshold),
+				Iss: "akashic-cli",
+				Cnt: TEXT,
+			})
+			if err != nil {
+				return fmt.Errorf("failed to issue secure token: %v", err)
+			}
+			keyEncData[i] = token
+		}
+
+		if mkdirCallback != nil {
+			if err := mkdirCallback(); err != nil {
+				return err
+			}
+		}
+
+		mkTokenFile := func(filename, token string) error {
+			file, err := os.OpenFile(filename, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+			if err != nil {
+				return fmt.Errorf("failed to create token file: %v", err)
+			}
+			defer file.Close()
+
+			_, err = file.WriteString(token)
+			if err != nil {
+				return fmt.Errorf("failed to write token to file: %v", err)
+			}
+
+			return nil
+		}
+		for i := range numKey {
+			fileName := keyFiles[i]
+			err := mkTokenFile(fileName, keyEncData[i])
+			if err != nil {
+				return fmt.Errorf("failed to save key to file: %v", err)
+			}
+			fmt.Printf(" - Key %d saved to: %s (encrypted)\n", i+1, fileName)
+		}
+	}
+	fmt.Println("--------------------------------------------------------")
+
+	if rootFile == "" {
+		fmt.Println("!! Root file is not set, your root token will be exposed to the screen. Keep your token safe !!")
+		fmt.Printf(" - Root token: %s\n", initResponse.RootToken)
+	} else {
+		secureRootToken, err := IssueSecureToken([]byte(initResponse.RootToken), secret, TokenMeta{
+			Enc: AES_256_GCM,
+			Alg: HMAC_SHA256,
+			Sub: "Hashicorp vault root token",
+			Iss: "akashic-cli",
+			Cnt: TEXT,
+		})
+		if err != nil {
+			return fmt.Errorf("failed to issue secure token: %v", err)
+		}
+		if mkrootCallback == nil {
+			return fmt.Errorf("failed to create root token file")
+		}
+		if err := mkrootCallback([]byte(secureRootToken)); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunTokenInspectCmd(cmd *cobra.Command, args []string) error {
+	secret := cmdCtx.cfg.GetString("secret")
+	if secret == "" && cmdCtx.cfg.IsSet("secret_path") {
+		cmdCtx.LogVerbose("Secret ENV not found, trying to read from secret_path")
+		s, err := os.ReadFile(cmdCtx.cfg.GetString("secret_path"))
+		if err == nil {
+			secret = strings.TrimSpace(string(s))
+		}
+	}
+	if secret == "" {
+		cmdCtx.LogVerbose("Secret still not found, prompting for passphrase")
+		fmt.Print("Enter passphrase: ")
+		passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
+		fmt.Println()
+		if err != nil {
+			return fmt.Errorf("failed to read passphrase: %v", err)
+		}
+		secret = string(passphraseBytes)
+	}
+	secret = strings.TrimSpace(secret)
+
+	inFile := cmdCtx.cfg.GetString("token.in")
+	if inFile != "" {
+		cmdCtx.LogVerbose("Token input file provided: %s", inFile)
+		inFile = filepath.Clean(inFile)
+		info, err := os.Stat(inFile)
+		if err != nil {
+			if !os.IsNotExist(err) {
+				return fmt.Errorf("failed to read token input file: %v", err)
+			}
+			cmdCtx.LogVerbose("Token input file not found: %s", inFile)
+			inFile = ""
+		} else if info.IsDir() {
+			cmdCtx.LogVerbose("Token input file is a directory: %s", inFile)
+			inFile = ""
+		}
+	}
+	var token string
+	if inFile != "" {
+		cmdCtx.LogVerbose("Trying to read token from input file: %s", inFile)
+		tokenByte, err := os.ReadFile(inFile)
+		if err != nil {
+			cmdCtx.LogVerbose("Failed to read token from input file: %v", err)
+			inFile = "" // Reset inFile to empty string to read it from stdin
+		} else {
+			token = strings.TrimSpace(string(tokenByte))
+		}
+	}
+	if inFile == "" {
+		cmdCtx.LogVerbose("Token still not provided, prompting for token")
+		fmt.Print("Enter token: ")
+		fmt.Scanln(&token)
+		token = strings.TrimSpace(token)
+	}
+	cmdCtx.LogVerbose("Token: %v", token)
+
+	fmt.Println("========================================================")
+	tokenMeta, data, err := ReadSecureToken(token, secret)
+	if IsSecureTokenError(err) {
+		cmdCtx.LogVerbose("Token ispection failed: %v", err)
+		fmt.Println("Token Inspection Failed")
+		fmt.Println("--------------------------------------------------------")
+		fmt.Printf("%v\n", err.Error())
+		fmt.Println("========================================================")
+		os.Exit(1)
+	} else if err != nil {
+		cmdCtx.LogVerbose("Token ispection failed: %v", err)
+		fmt.Println("Token Inspection Failed")
+		fmt.Println("========================================================")
+		os.Exit(1)
+	}
+	fmt.Println("Token Inspection Result")
+	fmt.Println("========================================================")
+	fmt.Println("Token Metadata:")
+	fmt.Println(" - Encryption Algorithm : ", tokenMeta.Enc)
+	fmt.Println(" - Signature Algorithm  : ", tokenMeta.Alg)
+	fmt.Println(" - Token Subject        : ", tokenMeta.Sub)
+	fmt.Println(" - Content Type         : ", tokenMeta.Cnt)
+	fmt.Println(" - Issuer               : ", tokenMeta.Iss)
+	fmt.Println(" - Created At           : ", time.Unix(tokenMeta.Iat, 0).Format(time.RFC3339))
+	fmt.Println("--------------------------------------------------------")
+	var reformedData string
+	switch tokenMeta.Cnt {
+	case JSON:
+		var j any
+		if err := json.Unmarshal(data, &j); err != nil {
+			reformedDataByte, err := json.MarshalIndent(j, "", "  ")
+			if err != nil {
+				reformedData = string(data)
+			} else {
+				reformedData = string(reformedDataByte)
+			}
+		}
+	case YAML:
+		var y any
+		if err := yaml.Unmarshal(data, &y); err == nil {
+			buf := &bytes.Buffer{}
+			enc := yaml.NewEncoder(buf)
+			enc.SetIndent(2)
+			if err := enc.Encode(y); err != nil {
+				reformedData = string(data)
+			} else {
+				reformedData = buf.String()
+			}
+		} else {
+			reformedData = string(data)
+		}
+	case TEXT:
+		reformedData = string(data)
+	default:
+		reformedData = string(data)
+	}
+	fmt.Println(reformedData)
+	fmt.Println("========================================================")
+	return nil
+}
