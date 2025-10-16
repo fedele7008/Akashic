@@ -1,9 +1,17 @@
 services:
-  # vault-bootstrap prepares TLS certificates for secure vault connection.
-  # It also configures volume permission settings.
-  # The output certificates are located in certs volume. To configure host location
-  # for certificate files, see the volumes section below.
-  # This bootstrap is idempotent - it can be run multiple times without causing any issues.
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # vault-bootstrap: TLS Certificate Generator (STEP 1/3)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Generates self-signed Root CA (RSA 4096-bit) and Vault server certificate
+  # (RSA 2048-bit) for HTTPS. Output: ./certs/vault/
+  #
+  # IMPORTANT: vault-root-ca (here) ≠ akashic-root-ca (created later by Vault)
+  # - vault-root-ca: For Vault's TLS connection only
+  # - akashic-root-ca: For Akashic's PKI system
+  #
+  # SANs: vault, localhost, 127.0.0.1
+  # Idempotent: Skips if certificates exist
+  # Troubleshooting: docker compose logs vault-bootstrap
   vault-bootstrap:
     build: ./services/vault/bootstrap
     container_name: akashic-vault-bootstrap
@@ -14,13 +22,20 @@ services:
       - ./services/vault/bootstrap:/bootstrap
     restart: "no"
 
-  # vault is the main service that will be used to store and manage secrets.
-  # It uses the TLS certificates provided by vault-bootstrap.
-  # The output certificates are located in certs volume.
-  # You may exec into this container to interact with vault CLI (use command below):
-  # >> docker exec -it akashic-vault bash
-  # Note that vault is bound to localhost to block external access. You may only access
-  # vault from your host machine or other containers on same network.
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # vault: HashiCorp Vault Server (STEP 2/3)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Secrets management backend. Starts SEALED, initialized by vault-init.
+  #
+  # Storage: File-based (vault_file volume) - NOT HA-ready
+  # Endpoints:
+  #   - API: https://localhost:8200 (bound to 127.0.0.1 only)
+  #   - UI: https://localhost:8200/ui (login with decrypted root token)
+  #   - Cluster: https://localhost:8201
+  #
+  # Security: IPC_LOCK (no swap), TLS required, localhost-only
+  # Access Vault CLI: docker exec -it akashic-vault bash
+  # Troubleshooting: docker compose logs vault
   vault:
     build: ./services/vault
     container_name: akashic-vault
@@ -53,11 +68,24 @@ services:
       retries: 5
       start_period: 10s
 
-  # vault-init is used to initialize, unseal, and configure vault for the project.
-  # It uses akashic-cli internally to interact with the vault.
-  # This container run will automatically unseal the vault when the docker-compose starts,
-  # If you want to control the process manually, comment out the service.
-  # This init is idempotent - it can be run multiple times without causing any issues.
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # vault-init: Vault Initialization (STEP 3/3)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Initializes Vault using Shamir's Secret Sharing (5 keys, 3 threshold).
+  # Encrypts root token and unseal keys with AKASHIC_SECRET (AES-256-GCM + HMAC).
+  # Output: ./.secrets/vault/ (root-token.enc + keys/vault-key-*.enc)
+  #
+  # CRITICAL REQUIREMENTS:
+  #   1. AKASHIC_SECRET must be set in .env (32+ chars, never commit)
+  #   2. BACKUP ./.secrets/vault/ immediately (loss = permanent vault lockout)
+  #   3. Loss of AKASHIC_SECRET = cannot decrypt tokens = no vault access
+  #
+  # Decrypt tokens (run from host after compiling akashic-cli):
+  #   akashic-cli token inspect ./.secrets/vault/root-token.enc
+  #
+  # Idempotent: Skips if already initialized
+  # Manual control available: Comment out this service, run 'akashic-cli pki vault init' manually
+  # Troubleshooting: docker compose logs vault-init
   vault-init:
     build:
       context: .
@@ -67,7 +95,7 @@ services:
     environment:
       AKASHIC_SECRET: "${AKASHIC_SECRET:-}"
       # use docker container's vault address using docker dns
-      AKASHIC_VAULT_ADDRESS: "https://vault:8200" 
+      AKASHIC_VAULT_ADDRESS: "https://vault:8200"
       AKASHIC_VAULT_TLS_CACERT: "/certs/vault/root-ca.crt"
       CERTS_OUTPUT_DIR: "/certs"
       VAULT_TOKEN_FILE: "/vault/token/vault/root-token.enc"
