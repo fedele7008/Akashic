@@ -75,6 +75,8 @@ func RegisterFlags(cmd *cobra.Command, entities ...ConfigEntity[any]) {
 			flagset.BoolP(e.Name, e.Short, v, e.Desc)
 		case int:
 			flagset.IntP(e.Name, e.Short, v, e.Desc)
+		case []string:
+			flagset.StringArrayP(e.Name, e.Short, v, e.Desc)
 		default:
 			fmt.Printf("Unsupported default type for flag %s: %T\n", e.Name, e.Default)
 			continue

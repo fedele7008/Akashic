@@ -11,6 +11,7 @@ func NewTokenInspectCmd(ctx *core.CliContext) *cobra.Command {
 		Use:   "inspect",
 		Short: "Inspect secure token",
 		Long:  "Inspect secure token.",
+		Args:  cobra.ArbitraryArgs,
 		RunE:  ctx.RunTokenInspectCmd,
 	}
 
@@ -18,7 +19,8 @@ func NewTokenInspectCmd(ctx *core.CliContext) *cobra.Command {
 	core.RegisterFlags(cmd, core.FilterCliConfig(
 		core.Secret,
 		core.SecretPath,
-		core.TokenFileIn,
+		core.TokenFilesIn,
+		core.MinimumOutput,
 	)...)
 
 	return cmd

@@ -28,7 +28,7 @@ log_warning() {
 log_header() {
     echo ""
     echo -e "${MAGENTA}╔═══════════════════════════════════════════════════════════════════╗${NC}"
-    printf "${MAGENTA}║${NC} %-78s ${MAGENTA}║${NC}\n" "$*"
+    printf "${MAGENTA}║${NC} %-65s ${MAGENTA}║${NC}\n" "$*"
     echo -e "${MAGENTA}╚═══════════════════════════════════════════════════════════════════╝${NC}"
     echo ""
 }
@@ -40,10 +40,18 @@ log_section() {
     echo -e "${BLUE}═══════════════════════════════════════════════════════${NC}"
 }
 
+print_log_output_header() {
+    echo -e "${CYAN}════════════════════════ OUTPUT ═══════════════════════${NC}"
+}
+
+print_log_output_footer() {
+    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+}
+
 log_output() {
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    print_log_output_header
     echo -e "$*"
-    echo -e "${CYAN}═══════════════════════════════════════════════════════${NC}"
+    print_log_output_footer
 }
 
 # Check if a command exists

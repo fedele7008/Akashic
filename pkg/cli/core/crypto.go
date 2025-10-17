@@ -11,23 +11,11 @@ import (
 	"io"
 
 	"golang.org/x/crypto/chacha20poly1305"
-	"golang.org/x/crypto/pbkdf2"
 )
 
-// PBKDF2 parameters for key derivation
-const (
-	pbkdf2Iterations = 100000 // OWASP recommended minimum
-	pbkdf2SaltSize   = 32     // 256 bits
-)
-
-// Fixed salt for deterministic key derivation
-// In production, you might want to generate and store this per-installation
-var pbkdf2Salt = []byte("akashic-cli-v1-salt-do-not-change-or-lose")
-
-// deriveKey derives a key of the specified length from a password using PBKDF2
-func deriveKey(password string, keyLen int) []byte {
-	return pbkdf2.Key([]byte(password), pbkdf2Salt, pbkdf2Iterations, keyLen, sha256.New)
-}
+// Note: Key derivation is now handled in secure_token.go using PBKDF2 + HKDF.
+// This file contains only the core encryption/signing algorithms that work with
+// pre-derived keys.
 
 // pkcs7Pad adds PKCS#7 padding to the data
 func pkcs7Pad(data []byte, blockSize int) []byte {
@@ -84,15 +72,16 @@ func NewAes256Gcm() *AesGcm {
 // Encrypt encrypts plaintext using AES-GCM
 // Output format: base64(nonce || ciphertext+tag)
 //
-// WARNING: Empty keys are allowed but provide NO security.
-// Anyone can decrypt data encrypted with an empty key.
-// Use Enc: NONE if encryption is not needed.
-func (a *AesGcm) Encrypt(text string, key string) (string, error) {
-	// Derive key of correct length
-	derivedKey := deriveKey(key, a.keySize)
+// Expects a pre-derived key of correct length (16/24/32 bytes for AES-128/192/256).
+// Key derivation is handled by the caller (see secure_token.go).
+func (a *AesGcm) Encrypt(text string, key []byte) (string, error) {
+	// Validate key length
+	if len(key) != a.keySize {
+		return "", fmt.Errorf("invalid key length: expected %d bytes, got %d bytes", a.keySize, len(key))
+	}
 
 	// Create AES cipher
-	block, err := aes.NewCipher(derivedKey)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %v", err)
 	}
@@ -120,18 +109,20 @@ func (a *AesGcm) Encrypt(text string, key string) (string, error) {
 }
 
 // Decrypt decrypts ciphertext using AES-GCM
-func (a *AesGcm) Decrypt(cipherBase64 string, key string) (string, error) {
+func (a *AesGcm) Decrypt(cipherBase64 string, key []byte) (string, error) {
+	// Validate key length
+	if len(key) != a.keySize {
+		return "", fmt.Errorf("invalid key length: expected %d bytes, got %d bytes", a.keySize, len(key))
+	}
+
 	// Decode base64
 	data, err := base64.StdEncoding.DecodeString(cipherBase64)
 	if err != nil {
 		return "", fmt.Errorf("invalid base64: %v", err)
 	}
 
-	// Derive key of correct length
-	derivedKey := deriveKey(key, a.keySize)
-
 	// Create AES cipher
-	block, err := aes.NewCipher(derivedKey)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %v", err)
 	}
@@ -187,15 +178,16 @@ func NewAes256Cbc() *AesCbc {
 // Encrypt encrypts plaintext using AES-CBC with PKCS#7 padding
 // Output format: base64(IV || ciphertext)
 //
-// WARNING: Empty keys are allowed but provide NO security.
-// Anyone can decrypt data encrypted with an empty key.
-// Use Enc: NONE if encryption is not needed.
-func (a *AesCbc) Encrypt(text string, key string) (string, error) {
-	// Derive key of correct length
-	derivedKey := deriveKey(key, a.keySize)
+// Expects a pre-derived key of correct length (16/24/32 bytes for AES-128/192/256).
+// Key derivation is handled by the caller (see secure_token.go).
+func (a *AesCbc) Encrypt(text string, key []byte) (string, error) {
+	// Validate key length
+	if len(key) != a.keySize {
+		return "", fmt.Errorf("invalid key length: expected %d bytes, got %d bytes", a.keySize, len(key))
+	}
 
 	// Create AES cipher
-	block, err := aes.NewCipher(derivedKey)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %v", err)
 	}
@@ -222,18 +214,20 @@ func (a *AesCbc) Encrypt(text string, key string) (string, error) {
 }
 
 // Decrypt decrypts ciphertext using AES-CBC
-func (a *AesCbc) Decrypt(cipherBase64 string, key string) (string, error) {
+func (a *AesCbc) Decrypt(cipherBase64 string, key []byte) (string, error) {
+	// Validate key length
+	if len(key) != a.keySize {
+		return "", fmt.Errorf("invalid key length: expected %d bytes, got %d bytes", a.keySize, len(key))
+	}
+
 	// Decode base64
 	data, err := base64.StdEncoding.DecodeString(cipherBase64)
 	if err != nil {
 		return "", fmt.Errorf("invalid base64: %v", err)
 	}
 
-	// Derive key of correct length
-	derivedKey := deriveKey(key, a.keySize)
-
 	// Create AES cipher
-	block, err := aes.NewCipher(derivedKey)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %v", err)
 	}
@@ -280,15 +274,16 @@ func NewChaCha20Poly1305() *ChaCha20Poly1305 {
 // Encrypt encrypts plaintext using ChaCha20-Poly1305
 // Output format: base64(nonce || ciphertext+tag)
 //
-// WARNING: Empty keys are allowed but provide NO security.
-// Anyone can decrypt data encrypted with an empty key.
-// Use Enc: NONE if encryption is not needed.
-func (c *ChaCha20Poly1305) Encrypt(text string, key string) (string, error) {
-	// Derive 256-bit key
-	derivedKey := deriveKey(key, chacha20poly1305.KeySize)
+// Expects a pre-derived 256-bit (32-byte) key.
+// Key derivation is handled by the caller (see secure_token.go).
+func (c *ChaCha20Poly1305) Encrypt(text string, key []byte) (string, error) {
+	// Validate key length
+	if len(key) != chacha20poly1305.KeySize {
+		return "", fmt.Errorf("invalid key length: expected %d bytes, got %d bytes", chacha20poly1305.KeySize, len(key))
+	}
 
 	// Create ChaCha20-Poly1305 AEAD
-	aead, err := chacha20poly1305.New(derivedKey)
+	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %v", err)
 	}
@@ -310,18 +305,20 @@ func (c *ChaCha20Poly1305) Encrypt(text string, key string) (string, error) {
 }
 
 // Decrypt decrypts ciphertext using ChaCha20-Poly1305
-func (c *ChaCha20Poly1305) Decrypt(cipherBase64 string, key string) (string, error) {
+func (c *ChaCha20Poly1305) Decrypt(cipherBase64 string, key []byte) (string, error) {
+	// Validate key length
+	if len(key) != chacha20poly1305.KeySize {
+		return "", fmt.Errorf("invalid key length: expected %d bytes, got %d bytes", chacha20poly1305.KeySize, len(key))
+	}
+
 	// Decode base64
 	data, err := base64.StdEncoding.DecodeString(cipherBase64)
 	if err != nil {
 		return "", fmt.Errorf("invalid base64: %v", err)
 	}
 
-	// Derive 256-bit key
-	derivedKey := deriveKey(key, chacha20poly1305.KeySize)
-
 	// Create ChaCha20-Poly1305 AEAD
-	aead, err := chacha20poly1305.New(derivedKey)
+	aead, err := chacha20poly1305.New(key)
 	if err != nil {
 		return "", fmt.Errorf("failed to create cipher: %v", err)
 	}
@@ -359,10 +356,10 @@ func NewHmacSha256() *HmacSha256 {
 // Sign creates an HMAC-SHA256 signature
 // Output: base64(HMAC-SHA256(key, content))
 //
-// WARNING: Empty keys are allowed but provide NO security.
-// Anyone can forge signatures with an empty key.
-func (h *HmacSha256) Sign(content string, key string) (string, error) {
-	mac := hmac.New(sha256.New, []byte(key))
+// Expects a pre-derived 256-bit (32-byte) signing key.
+// Key derivation is handled by the caller (see secure_token.go).
+func (h *HmacSha256) Sign(content string, key []byte) (string, error) {
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(content))
 	signature := mac.Sum(nil)
 
@@ -370,7 +367,7 @@ func (h *HmacSha256) Sign(content string, key string) (string, error) {
 }
 
 // Verify verifies an HMAC-SHA256 signature using constant-time comparison
-func (h *HmacSha256) Verify(content string, signatureBase64 string, key string) (bool, error) {
+func (h *HmacSha256) Verify(content string, signatureBase64 string, key []byte) (bool, error) {
 	// Decode signature
 	signature, err := base64.StdEncoding.DecodeString(signatureBase64)
 	if err != nil {
@@ -378,7 +375,7 @@ func (h *HmacSha256) Verify(content string, signatureBase64 string, key string) 
 	}
 
 	// Compute expected signature
-	mac := hmac.New(sha256.New, []byte(key))
+	mac := hmac.New(sha256.New, key)
 	mac.Write([]byte(content))
 	expectedSignature := mac.Sum(nil)
 

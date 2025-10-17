@@ -7,6 +7,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"maps"
@@ -19,7 +20,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/bmatcuk/doublestar/v4"
+	"github.com/fatih/color"
 	"github.com/joho/godotenv"
+	"github.com/olekukonko/tablewriter"
+	"github.com/olekukonko/tablewriter/renderer"
+	"github.com/olekukonko/tablewriter/tw"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 	"go.yaml.in/yaml/v3"
@@ -47,6 +53,11 @@ func (ctx *CliContext) LogVerbose(format string, args ...any) {
 	}
 }
 
+const (
+	SubjectRootToken  = "akashic/vault/root-token"
+	SubjectUnsealKeys = "akashic/vault/unseal-key"
+)
+
 type FlagKey int
 
 const (
@@ -63,6 +74,8 @@ const (
 	VaultInitRootOut
 	VaultInitFileOverride
 	TokenFileIn
+	TokenFilesIn
+	MinimumOutput
 	TokenFileOut
 	TokenFileOverride
 )
@@ -158,6 +171,19 @@ var CliConfigMap = map[FlagKey]ConfigEntity[any]{
 		Default: string(""),
 		Desc:    "Input file for token. If empty, it will be read from stdin",
 	},
+	// TokenFilesIn is only set via flag
+	TokenFilesIn: {
+		Key:     "token.ins",
+		Name:    "in",
+		Short:   "i",
+		Default: []string{},
+		Desc: `Input files for token. multiple files with globs are available (use , to separate the files).
+Directory wide glob search are supported, for example, "./private/**/*.enc" will find all matching files under ./private/ directory.
+Note that if you use glob expression, you must wrap the glob expression in double quotes,
+Otherwise, shell will expand the glob expression before passing it to the command.
+If globbing the file takes more than 5 seconds, the glob will be skipped.
+This flag can be called multiple times. If empty, it will be reading token from stdin`,
+	},
 	// TokenFileOut is only set via flag
 	TokenFileOut: {
 		Key:     "token.out",
@@ -173,6 +199,14 @@ var CliConfigMap = map[FlagKey]ConfigEntity[any]{
 		Short:   "f",
 		Default: bool(false),
 		Desc:    "Override existing token file if it exists",
+	},
+	// MinimumOutput is only set via flag
+	MinimumOutput: {
+		Key:     "min_out",
+		Name:    "min",
+		Short:   "m",
+		Default: bool(false),
+		Desc:    "Only output the minimum required information, if failes, print nothing.",
 	},
 }
 
@@ -262,15 +296,18 @@ func (cmdCtx *CliContext) RunPkiVaultStatusCmd(cmd *cobra.Command, args []string
 	} else {
 		fmt.Println("Vault Status (FAILED)")
 	}
-	fmt.Println("========================================================")
+	fmt.Println("--------------------------------------------------------")
 	if requestErr == nil {
 		output, err := common.ConvJsonToYaml(body)
 		if err != nil {
 			return fmt.Errorf("failed to convert JSON to YAML: %v", err)
 		}
+		output = strings.TrimSuffix(output, "\n")
 		fmt.Println(output)
+		fmt.Println("========================================================")
 	} else {
 		fmt.Println(strings.ReplaceAll(requestErr.Error(), ": ", ":\n"))
+		fmt.Println("========================================================")
 		os.Exit(1)
 	}
 
@@ -537,7 +574,8 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 			token, err := IssueSecureToken([]byte(key), secret, TokenMeta{
 				Enc: AES_256_GCM,
 				Alg: HMAC_SHA256,
-				Sub: fmt.Sprintf("Hashicorp vault unseal key (%d/%d) threshold: %d", i+1, numKey, numThreshold),
+				Sub: SubjectUnsealKeys,
+				Dtl: fmt.Sprintf("Hashicorp vault unseal key (%d/%d) threshold: %d", i+1, numKey, numThreshold),
 				Iss: "akashic-cli",
 				Cnt: TEXT,
 			})
@@ -585,7 +623,8 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 		secureRootToken, err := IssueSecureToken([]byte(initResponse.RootToken), secret, TokenMeta{
 			Enc: AES_256_GCM,
 			Alg: HMAC_SHA256,
-			Sub: "Hashicorp vault root token",
+			Sub: SubjectRootToken,
+			Dtl: "Hashicorp vault root token",
 			Iss: "akashic-cli",
 			Cnt: TEXT,
 		})
@@ -598,12 +637,18 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 		if err := mkrootCallback([]byte(secureRootToken)); err != nil {
 			return err
 		}
+		fmt.Printf(" - Root token saved to: %s (encrypted)\n", rootFile)
 	}
+
+	fmt.Println("========================================================")
 
 	return nil
 }
 
 func (cmdCtx *CliContext) RunTokenInspectCmd(cmd *cobra.Command, args []string) error {
+	min := cmdCtx.cfg.GetBool("min_out")
+
+	// Get secret passphrase to decrypt token
 	secret := cmdCtx.cfg.GetString("secret")
 	if secret == "" && cmdCtx.cfg.IsSet("secret_path") {
 		cmdCtx.LogVerbose("Secret ENV not found, trying to read from secret_path")
@@ -618,104 +663,303 @@ func (cmdCtx *CliContext) RunTokenInspectCmd(cmd *cobra.Command, args []string) 
 		passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
 		fmt.Println()
 		if err != nil {
+			if min {
+				os.Exit(1)
+			}
 			return fmt.Errorf("failed to read passphrase: %v", err)
 		}
 		secret = string(passphraseBytes)
 	}
 	secret = strings.TrimSpace(secret)
 
-	inFile := cmdCtx.cfg.GetString("token.in")
-	if inFile != "" {
-		cmdCtx.LogVerbose("Token input file provided: %s", inFile)
-		inFile = filepath.Clean(inFile)
-		info, err := os.Stat(inFile)
+	// Get all file inputs
+	inFiles := cmdCtx.cfg.GetStringSlice("token.ins")
+
+	var tokenFiles []string
+	delims := []rune{','}
+	seen := make(map[string]struct{})
+	add := func(path string) {
+		abspath, err := filepath.Abs(filepath.Clean(path))
 		if err != nil {
-			if !os.IsNotExist(err) {
-				return fmt.Errorf("failed to read token input file: %v", err)
-			}
-			cmdCtx.LogVerbose("Token input file not found: %s", inFile)
-			inFile = ""
-		} else if info.IsDir() {
-			cmdCtx.LogVerbose("Token input file is a directory: %s", inFile)
-			inFile = ""
+			cmdCtx.LogVerbose("Failed to resolve path: %v", err)
+			return
 		}
-	}
-	var token string
-	if inFile != "" {
-		cmdCtx.LogVerbose("Trying to read token from input file: %s", inFile)
-		tokenByte, err := os.ReadFile(inFile)
-		if err != nil {
-			cmdCtx.LogVerbose("Failed to read token from input file: %v", err)
-			inFile = "" // Reset inFile to empty string to read it from stdin
+		if _, ok := seen[abspath]; !ok {
+			seen[abspath] = struct{}{}
+			tokenFiles = append(tokenFiles, abspath)
 		} else {
-			token = strings.TrimSpace(string(tokenByte))
+			cmdCtx.LogVerbose("Dropping duplicate file input: %s", path)
 		}
 	}
-	if inFile == "" {
-		cmdCtx.LogVerbose("Token still not provided, prompting for token")
+
+	for _, fileBundle := range inFiles {
+		delimiters := map[rune]bool{}
+		for _, d := range delims {
+			delimiters[d] = true
+		}
+		parts := strings.FieldsFunc(fileBundle, func(c rune) bool {
+			return delimiters[c]
+		})
+		files := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				files = append(files, p)
+			}
+		}
+
+		for _, f := range files {
+			// glob expansion
+			timeout := 5 * time.Second
+			ctx, cancel := context.WithTimeout(context.Background(), timeout)
+			defer cancel()
+			matches, err := common.ExpandFileGlobsCtx(ctx, f, doublestar.WithFilesOnly())
+			if err != nil {
+				if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+					cmdCtx.LogVerbose("Glob expansion timeout: %v", err)
+					if !min {
+						fmt.Printf("Could not read all files matching '%s' due to timeout (%v)\n", f, timeout.String())
+					}
+				} else {
+					cmdCtx.LogVerbose("Failed to glob file pattern: %v", err)
+				}
+				continue
+			}
+			if len(matches) == 0 {
+				if info, err := os.Stat(f); err == nil && !info.IsDir() {
+					add(f)
+				} else {
+					cmdCtx.LogVerbose("Token file is not found or is a directory: %s", f)
+				}
+				continue
+			} else {
+				for _, match := range matches {
+					if info, err := os.Stat(match); err == nil && !info.IsDir() {
+						add(match)
+					} else {
+						cmdCtx.LogVerbose("Token file is not found or is a directory: %s", match)
+					}
+					continue
+				}
+			}
+		}
+	}
+
+	var token string
+	if len(tokenFiles) == 0 && len(args) == 0 {
 		fmt.Print("Enter token: ")
 		fmt.Scanln(&token)
 		token = strings.TrimSpace(token)
+		if token == "" {
+			if min {
+				os.Exit(1)
+			}
+			return fmt.Errorf("no token provided")
+		}
 	}
-	cmdCtx.LogVerbose("Token: %v", token)
 
-	fmt.Println("========================================================")
-	tokenMeta, data, err := ReadSecureToken(token, secret)
-	if IsSecureTokenError(err) {
-		cmdCtx.LogVerbose("Token ispection failed: %v", err)
-		fmt.Println("Token Inspection Failed")
-		fmt.Println("--------------------------------------------------------")
-		fmt.Printf("%v\n", err.Error())
-		fmt.Println("========================================================")
-		os.Exit(1)
-	} else if err != nil {
-		cmdCtx.LogVerbose("Token ispection failed: %v", err)
-		fmt.Println("Token Inspection Failed")
-		fmt.Println("========================================================")
-		os.Exit(1)
-	}
-	fmt.Println("Token Inspection Result")
-	fmt.Println("========================================================")
-	fmt.Println("Token Metadata:")
-	fmt.Println(" - Encryption Algorithm : ", tokenMeta.Enc)
-	fmt.Println(" - Signature Algorithm  : ", tokenMeta.Alg)
-	fmt.Println(" - Token Subject        : ", tokenMeta.Sub)
-	fmt.Println(" - Content Type         : ", tokenMeta.Cnt)
-	fmt.Println(" - Issuer               : ", tokenMeta.Iss)
-	fmt.Println(" - Created At           : ", time.Unix(tokenMeta.Iat, 0).Format(time.RFC3339))
-	fmt.Println("--------------------------------------------------------")
-	var reformedData string
-	switch tokenMeta.Cnt {
-	case JSON:
-		var j any
-		if err := json.Unmarshal(data, &j); err != nil {
-			reformedDataByte, err := json.MarshalIndent(j, "", "  ")
-			if err != nil {
-				reformedData = string(data)
-			} else {
-				reformedData = string(reformedDataByte)
-			}
-		}
-	case YAML:
-		var y any
-		if err := yaml.Unmarshal(data, &y); err == nil {
-			buf := &bytes.Buffer{}
-			enc := yaml.NewEncoder(buf)
-			enc.SetIndent(2)
-			if err := enc.Encode(y); err != nil {
-				reformedData = string(data)
-			} else {
-				reformedData = buf.String()
-			}
+	const (
+		sourcePrompt = "PROMPT"
+		sourceFile   = "FILE"
+		sourceArgs   = "ARGS"
+	)
+
+	color.NoColor = false
+	printResult := func(token string, secret string, source string) {
+		success := false
+		meta, data, readErr := ReadSecureToken(token, secret)
+		if readErr != nil {
+			cmdCtx.LogVerbose("Token ispection failed: %v", readErr)
 		} else {
-			reformedData = string(data)
+			success = true
 		}
-	case TEXT:
-		reformedData = string(data)
-	default:
-		reformedData = string(data)
+
+		if min {
+			if !success {
+				return
+			}
+			fmt.Println(string(data))
+		} else {
+			var tableTitle string
+			var tableData []string
+			var tableFooter string
+
+			sourceRow := fmt.Sprintf("Source: %s", color.New(color.FgCyan).Sprint(source))
+			if success {
+				tableTitle = "Token Inspection Result"
+				metaData := fmt.Sprintf(
+					"Token Metadata:\n"+
+						"- Token Subject        : %s\n"+
+						"- Details              : %s\n"+
+						"- Encryption Algorithm : %s\n"+
+						"- Signature Algorithm  : %s\n"+
+						"- Content Type         : %s\n"+
+						"- Version              : %d\n"+
+						"- Issuer               : %s\n"+
+						"- Created At           : %s\n"+
+						"- Key Salt             : %s\n",
+					meta.Sub,
+					meta.Dtl,
+					meta.Alg,
+					meta.Enc,
+					meta.Cnt,
+					meta.Ver,
+					meta.Iss,
+					time.Unix(meta.Iat, 0).Format(time.RFC3339),
+					meta.Slt)
+				tableData = []string{
+					sourceRow,
+					metaData,
+				}
+				var reformedData string
+				switch meta.Cnt {
+				case JSON:
+					var j any
+					if err := json.Unmarshal(data, &j); err != nil {
+						reformedDataByte, err := json.MarshalIndent(j, "", "  ")
+						if err != nil {
+							reformedData = string(data)
+						} else {
+							reformedData = string(reformedDataByte)
+						}
+					}
+				case YAML:
+					var y any
+					if err := yaml.Unmarshal(data, &y); err == nil {
+						buf := &bytes.Buffer{}
+						enc := yaml.NewEncoder(buf)
+						enc.SetIndent(2)
+						if err := enc.Encode(y); err != nil {
+							reformedData = string(data)
+						} else {
+							reformedData = buf.String()
+						}
+					} else {
+						reformedData = string(data)
+					}
+				case TEXT:
+					reformedData = string(data)
+				default:
+					reformedData = string(data)
+				}
+				tableFooter = reformedData
+			} else {
+				tableTitle = "Token Inspection Failed"
+				errorDetails := fmt.Sprintf(
+					"Error Details:\n"+
+						"- Is secure token error : %v\n",
+					IsSecureTokenError(readErr),
+				)
+				tableData = []string{
+					sourceRow,
+					errorDetails,
+				}
+				tableFooter = readErr.Error()
+			}
+
+			var titleColor color.Attribute
+			var footerColor color.Attribute
+			if success {
+				titleColor = color.FgGreen
+				footerColor = color.FgYellow
+			} else {
+				titleColor = color.FgRed
+				footerColor = color.FgMagenta
+			}
+
+			// Create table
+			colorCfg := renderer.ColorizedConfig{
+				Settings: tw.Settings{
+					Separators: tw.Separators{
+						BetweenRows: tw.On,
+					},
+				},
+				Header: renderer.Tint{
+					FG: renderer.Colors{titleColor, color.Bold},
+					BG: renderer.Colors{},
+				},
+				Column: renderer.Tint{
+					FG: renderer.Colors{color.Reset},
+					BG: renderer.Colors{},
+				},
+				Footer: renderer.Tint{
+					FG: renderer.Colors{footerColor},
+					BG: renderer.Colors{},
+				},
+				Border: renderer.Tint{
+					FG: renderer.Colors{color.FgWhite},
+					BG: renderer.Colors{},
+				},
+				Separator: renderer.Tint{
+					FG: renderer.Colors{color.FgWhite},
+					BG: renderer.Colors{},
+				},
+				Symbols: tw.NewSymbols(tw.StyleRounded),
+			}
+
+			termWith, _, err := term.GetSize(int(syscall.Stdout))
+			if err != nil {
+				cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
+				termWith = 80
+			} else {
+				termWith -= 8 // Give some space for better readability
+			}
+
+			dataCfg := tw.CellConfig{
+				Formatting: tw.CellFormatting{
+					AutoWrap: tw.WrapBreak,
+				},
+				Padding: tw.CellPadding{
+					Global: tw.Padding{
+						Right: " ",
+						Left:  " ",
+					},
+				},
+				ColMaxWidths: tw.CellWidth{Global: termWith},
+			}
+
+			footerCfg := tw.CellConfig{
+				Formatting: tw.CellFormatting{
+					AutoWrap: tw.WrapBreak,
+				},
+				Padding: tw.CellPadding{
+					Global: tw.Padding{
+						Right: " ",
+						Left:  " ",
+					},
+				},
+				ColMaxWidths: tw.CellWidth{Global: termWith},
+			}
+
+			table := tablewriter.NewTable(os.Stdout,
+				tablewriter.WithRenderer(renderer.NewColorized(colorCfg)),
+				tablewriter.WithRowConfig(dataCfg),
+				tablewriter.WithFooterConfig(footerCfg),
+			)
+			table.Header(tableTitle)
+			table.Bulk(tableData)
+			table.Footer(tableFooter)
+			table.Render()
+		}
 	}
-	fmt.Println(reformedData)
-	fmt.Println("========================================================")
+
+	if token != "" {
+		printResult(token, secret, sourcePrompt)
+	}
+
+	for i, arg := range args {
+		printResult(arg, secret, fmt.Sprintf("%s[%d]", sourceArgs, i))
+	}
+
+	for _, f := range tokenFiles {
+		tokenBytes, err := os.ReadFile(f)
+		if err != nil {
+			cmdCtx.LogVerbose("Failed to read token from file: %v", err)
+			continue
+		}
+		t := strings.TrimSpace(string(tokenBytes))
+		printResult(t, secret, fmt.Sprintf("%s \"%s\"", sourceFile, f))
+	}
+
 	return nil
 }

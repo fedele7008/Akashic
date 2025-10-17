@@ -1,12 +1,18 @@
 package core
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"time"
+
+	"golang.org/x/crypto/hkdf"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 type EncAlg string
@@ -37,29 +43,128 @@ const (
 )
 
 type TokenMeta struct {
-	Enc EncAlg      `json:"enc"`
-	Alg SignAlg     `json:"alg"`
-	Sub string      `json:"sub"`
-	Iss string      `json:"iss"`
-	Cnt ContentType `json:"cnt"`
+	Enc EncAlg      `json:"enc"` // Encryption algorithm
+	Alg SignAlg     `json:"alg"` // Signing algorithm
+	Sub string      `json:"sub"` // Subject
+	Dtl string      `json:"dtl"` // Details
+	Iss string      `json:"iss"` // Issuer
+	Cnt ContentType `json:"cnt"` // Content type
 }
 
 type FullTokenMeta struct {
 	TokenMeta
-	Iat int64 `json:"iat"`
+	Ver int    `json:"ver"` // Token format version (currently 1)
+	Iat int64  `json:"iat"` // Issued at (Unix nano timestamp)
+	Slt string `json:"slt"` // Base64-encoded random salt for key derivation
+}
+
+// Key derivation constants
+const (
+	pbkdf2Iterations = 600000 // OWASP 2023 recommendation for PBKDF2-SHA256
+	saltSize         = 32     // 256 bits
+	masterKeySize    = 32     // 256 bits for master key
+	signingKeySize   = 32     // 256 bits for HMAC-SHA256
+)
+
+// Context-specific info strings for HKDF
+var (
+	hkdfInfoEncryption = []byte("akashic-token-encryption-v1")
+	hkdfInfoSigning    = []byte("akashic-token-signing-v1")
+)
+
+// generateSalt generates a cryptographically secure random salt
+func generateSalt() ([]byte, error) {
+	salt := make([]byte, saltSize)
+	if _, err := io.ReadFull(rand.Reader, salt); err != nil {
+		return nil, fmt.Errorf("failed to generate salt: %v", err)
+	}
+	return salt, nil
+}
+
+// deriveMasterKey derives a master key from password using PBKDF2
+func deriveMasterKey(password string, salt []byte) []byte {
+	return pbkdf2.Key([]byte(password), salt, pbkdf2Iterations, masterKeySize, sha256.New)
+}
+
+// deriveEncryptionKey derives an encryption key from master key using HKDF
+func deriveEncryptionKey(masterKey []byte, salt []byte, keySize int) ([]byte, error) {
+	hkdfReader := hkdf.New(sha256.New, masterKey, salt, hkdfInfoEncryption)
+	key := make([]byte, keySize)
+	if _, err := io.ReadFull(hkdfReader, key); err != nil {
+		return nil, fmt.Errorf("failed to derive encryption key: %v", err)
+	}
+	return key, nil
+}
+
+// deriveSigningKey derives a signing key from master key using HKDF
+func deriveSigningKey(masterKey []byte, salt []byte) ([]byte, error) {
+	hkdfReader := hkdf.New(sha256.New, masterKey, salt, hkdfInfoSigning)
+	key := make([]byte, signingKeySize)
+	if _, err := io.ReadFull(hkdfReader, key); err != nil {
+		return nil, fmt.Errorf("failed to derive signing key: %v", err)
+	}
+	return key, nil
+}
+
+// getEncryptionKeySize returns the required key size for the encryption algorithm
+func getEncryptionKeySize(alg EncAlg) (int, error) {
+	switch alg {
+	case AES_128_GCM, AES_128_CBC:
+		return 16, nil
+	case AES_192_GCM, AES_192_CBC:
+		return 24, nil
+	case AES_256_GCM, AES_256_CBC, CHACHA20_POLY1305:
+		return 32, nil
+	case NONE:
+		return 0, nil // No encryption key needed
+	default:
+		return 0, fmt.Errorf("unsupported encryption algorithm: %s", alg)
+	}
 }
 
 func IssueSecureToken(data []byte, key string, meta TokenMeta) (string, error) {
-	fullMeta := FullTokenMeta{
-		TokenMeta: meta,
-		Iat:       time.Now().UTC().UnixNano(),
+	// Step 1: Generate random salt
+	salt, err := generateSalt()
+	if err != nil {
+		return "", fmt.Errorf("failed to generate salt: %v", err)
 	}
-	jsonMeta, err := json.Marshal(fullMeta)
+
+	// Step 2: Derive master key from password
+	masterKey := deriveMasterKey(key, salt)
+
+	// Step 3: Derive encryption and signing keys from master key
+	var encryptionKey []byte
+	if meta.Enc != NONE {
+		keySize, err := getEncryptionKeySize(meta.Enc)
+		if err != nil {
+			return "", err
+		}
+		encryptionKey, err = deriveEncryptionKey(masterKey, salt, keySize)
+		if err != nil {
+			return "", err
+		}
+	}
+
+	signingKey, err := deriveSigningKey(masterKey, salt)
 	if err != nil {
 		return "", err
 	}
+
+	// Step 4: Build metadata with salt and version
+	fullMeta := FullTokenMeta{
+		TokenMeta: meta,
+		Iat:       time.Now().UTC().UnixNano(),
+		Slt:       base64.StdEncoding.EncodeToString(salt),
+		Ver:       1, // Token format version
+	}
+
+	jsonMeta, err := json.Marshal(fullMeta)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal metadata: %v", err)
+	}
 	base64JsonMeta := base64.StdEncoding.EncodeToString(jsonMeta)
 
+	// Step 5: Encrypt data with derived encryption key
 	base64Data := base64.StdEncoding.EncodeToString(data)
 	var cipherData string
 	if fullMeta.Enc == NONE {
@@ -69,20 +174,21 @@ func IssueSecureToken(data []byte, key string, meta TokenMeta) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		cipherData, err = encAlg.Encrypt(base64Data, key)
+		cipherData, err = encAlg.Encrypt(base64Data, encryptionKey)
 		if err != nil {
-			return "", err
+			return "", fmt.Errorf("encryption failed: %v", err)
 		}
 	}
 
-	sigContent := fmt.Sprintf("%s.%s.%s", key, base64JsonMeta, cipherData)
+	// Step 6: Sign with derived signing key
+	sigContent := fmt.Sprintf("%s.%s", base64JsonMeta, cipherData)
 	signingAlg, err := GetSigningAlgorithm(fullMeta.Alg)
 	if err != nil {
 		return "", err
 	}
-	signature, err := signingAlg.Sign(sigContent, key)
+	signature, err := signingAlg.Sign(sigContent, signingKey)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("signing failed: %v", err)
 	}
 
 	return fmt.Sprintf("%s.%s.%s", base64JsonMeta, cipherData, signature), nil
@@ -127,6 +233,7 @@ func IsSecureTokenError(err error) bool {
 }
 
 func ReadSecureToken(token string, key string) (meta *FullTokenMeta, data []byte, err error) {
+	// Step 1: Parse token structure
 	parts := strings.Split(token, ".")
 	if len(parts) != 3 {
 		return nil, nil, fmt.Errorf("invalid token format")
@@ -136,22 +243,54 @@ func ReadSecureToken(token string, key string) (meta *FullTokenMeta, data []byte
 	cipherData := parts[1]
 	signature := parts[2]
 
+	// Step 2: Decode and parse metadata
 	jsonMeta, err := base64.StdEncoding.DecodeString(base64Meta)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid base64: %v", err)
+		return nil, nil, fmt.Errorf("invalid base64 metadata: %v", err)
 	}
 	var fullMeta FullTokenMeta
 	err = json.Unmarshal(jsonMeta, &fullMeta)
 	if err != nil {
-		return nil, nil, fmt.Errorf("invalid JSON: %v", err)
+		return nil, nil, fmt.Errorf("invalid metadata JSON: %v", err)
 	}
 
-	sigContent := fmt.Sprintf("%s.%s.%s", key, base64Meta, cipherData)
+	// Step 3: Extract salt from metadata
+	if fullMeta.Slt == "" {
+		return nil, nil, fmt.Errorf("missing salt in token metadata")
+	}
+	salt, err := base64.StdEncoding.DecodeString(fullMeta.Slt)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid salt encoding: %v", err)
+	}
+
+	// Step 4: Derive master key from password using stored salt
+	masterKey := deriveMasterKey(key, salt)
+
+	// Step 5: Derive encryption and signing keys from master key
+	var encryptionKey []byte
+	if fullMeta.Enc != NONE {
+		keySize, err := getEncryptionKeySize(fullMeta.Enc)
+		if err != nil {
+			return nil, nil, err
+		}
+		encryptionKey, err = deriveEncryptionKey(masterKey, salt, keySize)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
+
+	signingKey, err := deriveSigningKey(masterKey, salt)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	// Step 6: Verify signature with derived signing key
+	sigContent := fmt.Sprintf("%s.%s", base64Meta, cipherData)
 	signingAlg, err := GetSigningAlgorithm(fullMeta.Alg)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to get signing algorithm: %v", err)
 	}
-	verified, err := signingAlg.Verify(sigContent, signature, key)
+	verified, err := signingAlg.Verify(sigContent, signature, signingKey)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to verify signature: %v", err)
 	}
@@ -159,6 +298,7 @@ func ReadSecureToken(token string, key string) (meta *FullTokenMeta, data []byte
 		return nil, nil, NewInvalidTokenKeyError("passphrase mismatch, unable to decrypt token")
 	}
 
+	// Step 7: Decrypt data with derived encryption key
 	var base64Data string
 	if fullMeta.Enc == NONE {
 		base64Data = cipherData
@@ -168,27 +308,27 @@ func ReadSecureToken(token string, key string) (meta *FullTokenMeta, data []byte
 			return nil, nil, fmt.Errorf("failed to get encryption algorithm: %v", err)
 		}
 
-		base64Data, err = encAlg.Decrypt(cipherData, key)
+		base64Data, err = encAlg.Decrypt(cipherData, encryptionKey)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to decrypt token: %v", err)
 		}
 	}
 	data, err = base64.StdEncoding.DecodeString(base64Data)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to decode base64: %v", err)
+		return nil, nil, fmt.Errorf("failed to decode base64 data: %v", err)
 	}
 
 	return &fullMeta, data, nil
 }
 
 type EncryptionAlgorithm interface {
-	Encrypt(text string, key string) (cipher string, err error)
-	Decrypt(cipher string, key string) (text string, err error)
+	Encrypt(text string, key []byte) (cipher string, err error)
+	Decrypt(cipher string, key []byte) (text string, err error)
 }
 
 type SigningAlgorithm interface {
-	Sign(content string, key string) (signature string, err error)
-	Verify(content string, signature string, key string) (bool, error)
+	Sign(content string, key []byte) (signature string, err error)
+	Verify(content string, signature string, key []byte) (bool, error)
 }
 
 // GetEncryptionAlgorithm returns an EncryptionAlgorithm instance for the given algorithm

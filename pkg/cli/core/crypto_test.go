@@ -1,18 +1,36 @@
 package core
 
 import (
+	"crypto/sha256"
 	"strings"
 	"testing"
+
+	"golang.org/x/crypto/pbkdf2"
 )
 
 // Test data
 const (
-	testKey       = "my-secret-key-123"
+	testPassword  = "my-secret-key-123"
 	testPlaintext = "Hello, World! This is a test message with unicode: 你好世界 🌍"
 	testLongText  = "Lorem ipsum dolor sit amet, consectetur adipiscing elit. " +
 		"Sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. " +
 		"Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris."
 )
+
+// Test salt (fixed for deterministic tests)
+var testSalt = []byte("test-salt-for-crypto-tests-12345")
+
+// Pre-derived test keys for different key sizes
+var (
+	testKey16 = pbkdf2.Key([]byte(testPassword), testSalt, 10000, 16, sha256.New) // AES-128
+	testKey24 = pbkdf2.Key([]byte(testPassword), testSalt, 10000, 24, sha256.New) // AES-192
+	testKey32 = pbkdf2.Key([]byte(testPassword), testSalt, 10000, 32, sha256.New) // AES-256, ChaCha20, HMAC
+)
+
+// deriveTestKey derives a key from password for testing (simpler than production)
+func deriveTestKey(password string, keySize int) []byte {
+	return pbkdf2.Key([]byte(password), testSalt, 10000, keySize, sha256.New)
+}
 
 // ===========================
 // AES-GCM Tests
@@ -20,30 +38,30 @@ const (
 
 func TestAes128Gcm_RoundTrip(t *testing.T) {
 	cipher := NewAes128Gcm()
-	testEncryptionRoundTrip(t, cipher, "AES-128-GCM")
+	testEncryptionRoundTrip(t, cipher, "AES-128-GCM", testKey16)
 }
 
 func TestAes192Gcm_RoundTrip(t *testing.T) {
 	cipher := NewAes192Gcm()
-	testEncryptionRoundTrip(t, cipher, "AES-192-GCM")
+	testEncryptionRoundTrip(t, cipher, "AES-192-GCM", testKey24)
 }
 
 func TestAes256Gcm_RoundTrip(t *testing.T) {
 	cipher := NewAes256Gcm()
-	testEncryptionRoundTrip(t, cipher, "AES-256-GCM")
+	testEncryptionRoundTrip(t, cipher, "AES-256-GCM", testKey32)
 }
 
 func TestAesGcm_EmptyKey(t *testing.T) {
 	cipher := NewAes256Gcm()
 
 	// Empty keys should work (but are insecure)
-	encrypted, err := cipher.Encrypt(testPlaintext, "")
+	encrypted, err := (func() (string, error) { emptyKey := make([]byte, 32); return cipher.Encrypt(testPlaintext, emptyKey) })()
 	if err != nil {
 		t.Fatalf("Encryption with empty key failed: %v", err)
 	}
 
 	// Should be able to decrypt with the same empty key
-	decrypted, err := cipher.Decrypt(encrypted, "")
+	decrypted, err := cipher.Decrypt(encrypted, make([]byte, 32))
 	if err != nil {
 		t.Fatalf("Decryption with empty key failed: %v", err)
 	}
@@ -53,7 +71,7 @@ func TestAesGcm_EmptyKey(t *testing.T) {
 	}
 
 	// Different empty key encryptions should still have different nonces
-	encrypted2, _ := cipher.Encrypt(testPlaintext, "")
+	encrypted2, _ := (func() (string, error) { emptyKey := make([]byte, 32); return cipher.Encrypt(testPlaintext, emptyKey) })()
 	if encrypted == encrypted2 {
 		t.Error("Expected different ciphertexts even with empty key (different nonces)")
 	}
@@ -63,20 +81,20 @@ func TestAesGcm_InvalidCiphertext(t *testing.T) {
 	cipher := NewAes256Gcm()
 
 	// Test invalid base64
-	_, err := cipher.Decrypt("not-valid-base64!!!", testKey)
+	_, err := cipher.Decrypt("not-valid-base64!!!", testKey32)
 	if err == nil {
 		t.Error("Expected error with invalid base64, got nil")
 	}
 
 	// Test too short ciphertext
-	_, err = cipher.Decrypt("YWJj", testKey) // "abc" in base64 - too short
+	_, err = cipher.Decrypt("YWJj", testKey32) // "abc" in base64 - too short
 	if err == nil {
 		t.Error("Expected error with too short ciphertext, got nil")
 	}
 
 	// Test wrong key
-	encrypted, _ := cipher.Encrypt(testPlaintext, testKey)
-	_, err = cipher.Decrypt(encrypted, "wrong-key")
+	encrypted, _ := cipher.Encrypt(testPlaintext, testKey32)
+	_, err = cipher.Decrypt(encrypted, deriveTestKey("wrong-key", 32))
 	if err == nil {
 		t.Error("Expected error with wrong key, got nil")
 	}
@@ -86,12 +104,12 @@ func TestAesGcm_DifferentNoncesEachTime(t *testing.T) {
 	cipher := NewAes256Gcm()
 
 	// Encrypt the same plaintext multiple times
-	encrypted1, err := cipher.Encrypt(testPlaintext, testKey)
+	encrypted1, err := cipher.Encrypt(testPlaintext, testKey32)
 	if err != nil {
 		t.Fatalf("Encryption 1 failed: %v", err)
 	}
 
-	encrypted2, err := cipher.Encrypt(testPlaintext, testKey)
+	encrypted2, err := cipher.Encrypt(testPlaintext, testKey32)
 	if err != nil {
 		t.Fatalf("Encryption 2 failed: %v", err)
 	}
@@ -102,8 +120,8 @@ func TestAesGcm_DifferentNoncesEachTime(t *testing.T) {
 	}
 
 	// But both should decrypt to the same plaintext
-	plaintext1, _ := cipher.Decrypt(encrypted1, testKey)
-	plaintext2, _ := cipher.Decrypt(encrypted2, testKey)
+	plaintext1, _ := cipher.Decrypt(encrypted1, testKey32)
+	plaintext2, _ := cipher.Decrypt(encrypted2, testKey32)
 
 	if plaintext1 != testPlaintext || plaintext2 != testPlaintext {
 		t.Error("Decryption failed to produce original plaintext")
@@ -116,30 +134,30 @@ func TestAesGcm_DifferentNoncesEachTime(t *testing.T) {
 
 func TestAes128Cbc_RoundTrip(t *testing.T) {
 	cipher := NewAes128Cbc()
-	testEncryptionRoundTrip(t, cipher, "AES-128-CBC")
+	testEncryptionRoundTrip(t, cipher, "AES-128-CBC", testKey16)
 }
 
 func TestAes192Cbc_RoundTrip(t *testing.T) {
 	cipher := NewAes192Cbc()
-	testEncryptionRoundTrip(t, cipher, "AES-192-CBC")
+	testEncryptionRoundTrip(t, cipher, "AES-192-CBC", testKey24)
 }
 
 func TestAes256Cbc_RoundTrip(t *testing.T) {
 	cipher := NewAes256Cbc()
-	testEncryptionRoundTrip(t, cipher, "AES-256-CBC")
+	testEncryptionRoundTrip(t, cipher, "AES-256-CBC", testKey32)
 }
 
 func TestAesCbc_EmptyKey(t *testing.T) {
 	cipher := NewAes256Cbc()
 
 	// Empty keys should work (but are insecure)
-	encrypted, err := cipher.Encrypt(testPlaintext, "")
+	encrypted, err := (func() (string, error) { emptyKey := make([]byte, 32); return cipher.Encrypt(testPlaintext, emptyKey) })()
 	if err != nil {
 		t.Fatalf("Encryption with empty key failed: %v", err)
 	}
 
 	// Should be able to decrypt with the same empty key
-	decrypted, err := cipher.Decrypt(encrypted, "")
+	decrypted, err := cipher.Decrypt(encrypted, make([]byte, 32))
 	if err != nil {
 		t.Fatalf("Decryption with empty key failed: %v", err)
 	}
@@ -153,20 +171,20 @@ func TestAesCbc_InvalidCiphertext(t *testing.T) {
 	cipher := NewAes256Cbc()
 
 	// Test invalid base64
-	_, err := cipher.Decrypt("not-valid-base64!!!", testKey)
+	_, err := cipher.Decrypt("not-valid-base64!!!", testKey32)
 	if err == nil {
 		t.Error("Expected error with invalid base64, got nil")
 	}
 
 	// Test too short ciphertext
-	_, err = cipher.Decrypt("YWJj", testKey) // "abc" in base64 - too short
+	_, err = cipher.Decrypt("YWJj", testKey32) // "abc" in base64 - too short
 	if err == nil {
 		t.Error("Expected error with too short ciphertext, got nil")
 	}
 
 	// Test wrong key
-	encrypted, _ := cipher.Encrypt(testPlaintext, testKey)
-	_, err = cipher.Decrypt(encrypted, "wrong-key")
+	encrypted, _ := cipher.Encrypt(testPlaintext, testKey32)
+	_, err = cipher.Decrypt(encrypted, deriveTestKey("wrong-key", 32))
 	if err == nil {
 		t.Error("Expected error with wrong key (padding error), got nil")
 	}
@@ -186,13 +204,13 @@ func TestAesCbc_Padding(t *testing.T) {
 	}
 
 	for _, text := range testTexts {
-		encrypted, err := cipher.Encrypt(text, testKey)
+		encrypted, err := cipher.Encrypt(text, testKey32)
 		if err != nil {
 			t.Errorf("Encryption failed for %d-byte text: %v", len(text), err)
 			continue
 		}
 
-		decrypted, err := cipher.Decrypt(encrypted, testKey)
+		decrypted, err := cipher.Decrypt(encrypted, testKey32)
 		if err != nil {
 			t.Errorf("Decryption failed for %d-byte text: %v", len(text), err)
 			continue
@@ -210,20 +228,20 @@ func TestAesCbc_Padding(t *testing.T) {
 
 func TestChaCha20Poly1305_RoundTrip(t *testing.T) {
 	cipher := NewChaCha20Poly1305()
-	testEncryptionRoundTrip(t, cipher, "ChaCha20-Poly1305")
+	testEncryptionRoundTrip(t, cipher, "ChaCha20-Poly1305", testKey32)
 }
 
 func TestChaCha20Poly1305_EmptyKey(t *testing.T) {
 	cipher := NewChaCha20Poly1305()
 
 	// Empty keys should work (but are insecure)
-	encrypted, err := cipher.Encrypt(testPlaintext, "")
+	encrypted, err := (func() (string, error) { emptyKey := make([]byte, 32); return cipher.Encrypt(testPlaintext, emptyKey) })()
 	if err != nil {
 		t.Fatalf("Encryption with empty key failed: %v", err)
 	}
 
 	// Should be able to decrypt with the same empty key
-	decrypted, err := cipher.Decrypt(encrypted, "")
+	decrypted, err := cipher.Decrypt(encrypted, make([]byte, 32))
 	if err != nil {
 		t.Fatalf("Decryption with empty key failed: %v", err)
 	}
@@ -237,20 +255,20 @@ func TestChaCha20Poly1305_InvalidCiphertext(t *testing.T) {
 	cipher := NewChaCha20Poly1305()
 
 	// Test invalid base64
-	_, err := cipher.Decrypt("not-valid-base64!!!", testKey)
+	_, err := cipher.Decrypt("not-valid-base64!!!", testKey32)
 	if err == nil {
 		t.Error("Expected error with invalid base64, got nil")
 	}
 
 	// Test too short ciphertext
-	_, err = cipher.Decrypt("YWJj", testKey) // "abc" in base64 - too short
+	_, err = cipher.Decrypt("YWJj", testKey32) // "abc" in base64 - too short
 	if err == nil {
 		t.Error("Expected error with too short ciphertext, got nil")
 	}
 
 	// Test wrong key
-	encrypted, _ := cipher.Encrypt(testPlaintext, testKey)
-	_, err = cipher.Decrypt(encrypted, "wrong-key")
+	encrypted, _ := cipher.Encrypt(testPlaintext, testKey32)
+	_, err = cipher.Decrypt(encrypted, deriveTestKey("wrong-key", 32))
 	if err == nil {
 		t.Error("Expected error with wrong key, got nil")
 	}
@@ -264,13 +282,13 @@ func TestHmacSha256_SignAndVerify(t *testing.T) {
 	signer := NewHmacSha256()
 
 	// Sign
-	signature, err := signer.Sign(testPlaintext, testKey)
+	signature, err := signer.Sign(testPlaintext, testKey32)
 	if err != nil {
 		t.Fatalf("Signing failed: %v", err)
 	}
 
 	// Verify with correct key
-	valid, err := signer.Verify(testPlaintext, signature, testKey)
+	valid, err := signer.Verify(testPlaintext, signature, testKey32)
 	if err != nil {
 		t.Fatalf("Verification failed: %v", err)
 	}
@@ -279,7 +297,7 @@ func TestHmacSha256_SignAndVerify(t *testing.T) {
 	}
 
 	// Verify with wrong key
-	valid, err = signer.Verify(testPlaintext, signature, "wrong-key")
+	valid, err = signer.Verify(testPlaintext, signature, deriveTestKey("wrong-key", 32))
 	if err != nil {
 		t.Fatalf("Verification error: %v", err)
 	}
@@ -288,7 +306,7 @@ func TestHmacSha256_SignAndVerify(t *testing.T) {
 	}
 
 	// Verify with modified content
-	valid, err = signer.Verify(testPlaintext+"modified", signature, testKey)
+	valid, err = signer.Verify(testPlaintext+"modified", signature, testKey32)
 	if err != nil {
 		t.Fatalf("Verification error: %v", err)
 	}
@@ -301,13 +319,13 @@ func TestHmacSha256_EmptyKey(t *testing.T) {
 	signer := NewHmacSha256()
 
 	// Empty keys should work (but are insecure)
-	signature, err := signer.Sign(testPlaintext, "")
+	signature, err := signer.Sign(testPlaintext, make([]byte, 32))
 	if err != nil {
 		t.Fatalf("Signing with empty key failed: %v", err)
 	}
 
 	// Should be able to verify with the same empty key
-	valid, err := signer.Verify(testPlaintext, signature, "")
+	valid, err := signer.Verify(testPlaintext, signature, make([]byte, 32))
 	if err != nil {
 		t.Fatalf("Verification with empty key failed: %v", err)
 	}
@@ -317,8 +335,8 @@ func TestHmacSha256_EmptyKey(t *testing.T) {
 	}
 
 	// Anyone can forge signatures with empty key
-	forgedSig, _ := signer.Sign("modified content", "")
-	valid, _ = signer.Verify("modified content", forgedSig, "")
+	forgedSig, _ := signer.Sign("modified content", make([]byte, 32))
+	valid, _ = signer.Verify("modified content", forgedSig, make([]byte, 32))
 	if !valid {
 		t.Error("Should be able to forge signatures with known empty key")
 	}
@@ -328,7 +346,7 @@ func TestHmacSha256_InvalidSignature(t *testing.T) {
 	signer := NewHmacSha256()
 
 	// Test invalid base64
-	_, err := signer.Verify(testPlaintext, "not-valid-base64!!!", testKey)
+	_, err := signer.Verify(testPlaintext, "not-valid-base64!!!", testKey32)
 	if err == nil {
 		t.Error("Expected error with invalid base64 signature, got nil")
 	}
@@ -338,8 +356,8 @@ func TestHmacSha256_DeterministicSignature(t *testing.T) {
 	signer := NewHmacSha256()
 
 	// Sign the same content multiple times
-	sig1, _ := signer.Sign(testPlaintext, testKey)
-	sig2, _ := signer.Sign(testPlaintext, testKey)
+	sig1, _ := signer.Sign(testPlaintext, testKey32)
+	sig2, _ := signer.Sign(testPlaintext, testKey32)
 
 	// Signatures should be identical (HMAC is deterministic)
 	if sig1 != sig2 {
@@ -418,7 +436,7 @@ func TestGetSigningAlgorithm(t *testing.T) {
 // Helper Functions
 // ===========================
 
-func testEncryptionRoundTrip(t *testing.T, cipher EncryptionAlgorithm, name string) {
+func testEncryptionRoundTrip(t *testing.T, cipher EncryptionAlgorithm, name string, key []byte) {
 	t.Helper()
 
 	testCases := []struct {
@@ -435,7 +453,7 @@ func testEncryptionRoundTrip(t *testing.T, cipher EncryptionAlgorithm, name stri
 	for _, tc := range testCases {
 		t.Run(tc.name, func(t *testing.T) {
 			// Encrypt
-			encrypted, err := cipher.Encrypt(tc.plaintext, testKey)
+			encrypted, err := cipher.Encrypt(tc.plaintext, key)
 			if err != nil {
 				t.Fatalf("%s encryption failed: %v", name, err)
 			}
@@ -446,7 +464,7 @@ func testEncryptionRoundTrip(t *testing.T, cipher EncryptionAlgorithm, name stri
 			}
 
 			// Decrypt
-			decrypted, err := cipher.Decrypt(encrypted, testKey)
+			decrypted, err := cipher.Decrypt(encrypted, key)
 			if err != nil {
 				t.Fatalf("%s decryption failed: %v", name, err)
 			}
@@ -462,12 +480,14 @@ func testEncryptionRoundTrip(t *testing.T, cipher EncryptionAlgorithm, name stri
 // ===========================
 // Key Derivation Tests
 // ===========================
+// Note: Key derivation is now handled in secure_token.go using PBKDF2 + HKDF.
+// These tests verify the test helper function used in this file.
 
-func TestDeriveKey_DifferentLengths(t *testing.T) {
-	// Test that deriveKey produces keys of different lengths correctly
-	key16 := deriveKey(testKey, 16)
-	key24 := deriveKey(testKey, 24)
-	key32 := deriveKey(testKey, 32)
+func TestDeriveTestKey_DifferentLengths(t *testing.T) {
+	// Test that deriveTestKey produces keys of different lengths correctly
+	key16 := deriveTestKey(testPassword, 16)
+	key24 := deriveTestKey(testPassword, 24)
+	key32 := deriveTestKey(testPassword, 32)
 
 	if len(key16) != 16 {
 		t.Errorf("Expected 16-byte key, got %d bytes", len(key16))
@@ -480,20 +500,20 @@ func TestDeriveKey_DifferentLengths(t *testing.T) {
 	}
 }
 
-func TestDeriveKey_Deterministic(t *testing.T) {
-	// Same password should produce same key
-	key1 := deriveKey(testKey, 32)
-	key2 := deriveKey(testKey, 32)
+func TestDeriveTestKey_Deterministic(t *testing.T) {
+	// Same password should produce same key (for testing purposes)
+	key1 := deriveTestKey(testPassword, 32)
+	key2 := deriveTestKey(testPassword, 32)
 
 	if string(key1) != string(key2) {
-		t.Error("Key derivation should be deterministic")
+		t.Error("Test key derivation should be deterministic")
 	}
 }
 
-func TestDeriveKey_DifferentPasswords(t *testing.T) {
+func TestDeriveTestKey_DifferentPasswords(t *testing.T) {
 	// Different passwords should produce different keys
-	key1 := deriveKey("password1", 32)
-	key2 := deriveKey("password2", 32)
+	key1 := deriveTestKey("password1", 32)
+	key2 := deriveTestKey("password2", 32)
 
 	if string(key1) == string(key2) {
 		t.Error("Different passwords should produce different keys")
