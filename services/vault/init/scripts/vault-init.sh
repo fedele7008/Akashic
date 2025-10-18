@@ -30,11 +30,6 @@ main() {
     log_header "Akashic Infrastructure PKI Setup"
     log "Script directory: ${SCRIPT_DIR}"
 
-    if ! command_exists curl; then
-        log_error "curl is not installed"
-        return 1
-    fi
-
     # Wait for Vault to be available
     if ! wait_for_vault; then
         log_error "Failed to connect to Vault"
@@ -54,14 +49,14 @@ main() {
     else
         # CASE: Vault is not initialized
         log "Vault is not initialized. Initializing..."
-        local init_response
-        init_response=$(akashic-cli pki vault init --keys 5 --thresholds 3 --key-out-dir "${VAULT_KEY_DIR}" --key-out-format "vault-key.enc" --root-out "${VAULT_TOKEN_FILE}" --override) > /dev/null 2>&1
-        if [[ $? -eq 0 ]]; then
-            log "Vault initialization successful"
-            log_output "$init_response"
+        print_log_output_header
+        akashic-cli pki vault init --keys 5 --thresholds 3 --key-out-dir "${VAULT_KEY_DIR}" --key-out-format "vault-key.enc" --root-out "${VAULT_TOKEN_FILE}" --override
+        init_response=$?
+        print_log_output_footer
+        if [[ ${init_response} -eq 0 ]]; then
+            log_success "Vault initialization successful"
         else
             log_error "Vault initialization failed"
-            log_output "$init_response"
             return 1
         fi
 
@@ -73,4 +68,4 @@ main() {
 }
 
 main
-log "Akashic Infrastructure PKI setup complete"
+log_success "Akashic Infrastructure PKI setup complete"
