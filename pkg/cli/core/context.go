@@ -395,12 +395,12 @@ func (cmdCtx *CliContext) RunPkiVaultStatusCmd(cmd *cobra.Command, args []string
 
 func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) error {
 	printResult := func(title string, data []string, footer string, isErr bool) {
-		termWith, _, err := term.GetSize(int(syscall.Stdout))
+		termWidth, _, err := term.GetSize(int(syscall.Stdout))
 		if err != nil {
 			cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
-			termWith = 80
+			termWidth = 80
 		} else {
-			termWith -= 8 // Give some space for better readability
+			termWidth -= 8 // Give some space for better readability
 		}
 		renderer := renderer.NewColorized(
 			renderer.ColorizedConfig{
@@ -442,7 +442,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 					Left:  " ",
 				},
 			},
-			ColMaxWidths: tw.CellWidth{Global: termWith},
+			ColMaxWidths: tw.CellWidth{Global: termWidth},
 		}
 		footerCfg := tw.CellConfig{
 			Formatting: tw.CellFormatting{
@@ -454,7 +454,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 					Left:  " ",
 				},
 			},
-			ColMaxWidths: tw.CellWidth{Global: termWith},
+			ColMaxWidths: tw.CellWidth{Global: termWidth},
 		}
 		table := tablewriter.NewTable(os.Stdout,
 			tablewriter.WithRenderer(renderer),
@@ -1193,6 +1193,507 @@ func (cmdCtx *CliContext) RunTokenInspectCmd(cmd *cobra.Command, args []string) 
 		t := strings.TrimSpace(string(tokenBytes))
 		printResult(t, secret, fmt.Sprintf("%s \"%s\"", sourceFile, f))
 	}
+
+	return nil
+}
+func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string) error {
+	var err error
+	printResult := func(title string, data []string, footer string, isErr bool) {
+		termWidth, _, err := term.GetSize(int(syscall.Stdout))
+		if err != nil {
+			cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
+			termWidth = 80
+		} else {
+			termWidth -= 8 // Give some space for better readability
+		}
+		renderer := renderer.NewColorized(
+			renderer.ColorizedConfig{
+				Settings: tw.Settings{
+					Separators: tw.Separators{
+						BetweenRows: tw.On,
+					},
+				},
+				Header: renderer.Tint{
+					FG: renderer.Colors{common.Ternary(isErr, color.FgRed, color.FgGreen), color.Bold},
+					BG: renderer.Colors{},
+				},
+				Column: renderer.Tint{
+					FG: renderer.Colors{common.Ternary(isErr, color.FgMagenta, color.Reset)},
+					BG: renderer.Colors{},
+				},
+				Footer: renderer.Tint{
+					FG: renderer.Colors{common.Ternary(isErr, color.Reset, color.FgCyan)},
+					BG: renderer.Colors{},
+				},
+				Border: renderer.Tint{
+					FG: renderer.Colors{color.FgWhite},
+					BG: renderer.Colors{},
+				},
+				Separator: renderer.Tint{
+					FG: renderer.Colors{color.FgWhite},
+					BG: renderer.Colors{},
+				},
+				Symbols: tw.NewSymbols(tw.StyleRounded),
+			},
+		)
+		rowCfg := tw.CellConfig{
+			Formatting: tw.CellFormatting{
+				AutoWrap: tw.WrapBreak,
+			},
+			Padding: tw.CellPadding{
+				Global: tw.Padding{
+					Right: " ",
+					Left:  " ",
+				},
+			},
+			ColMaxWidths: tw.CellWidth{Global: termWidth},
+		}
+		footerCfg := tw.CellConfig{
+			Formatting: tw.CellFormatting{
+				AutoWrap: tw.WrapBreak,
+			},
+			Padding: tw.CellPadding{
+				Global: tw.Padding{
+					Right: " ",
+					Left:  " ",
+				},
+			},
+			ColMaxWidths: tw.CellWidth{Global: termWidth},
+		}
+		table := tablewriter.NewTable(os.Stdout,
+			tablewriter.WithRenderer(renderer),
+			tablewriter.WithRowConfig(rowCfg),
+			tablewriter.WithFooterConfig(footerCfg),
+		)
+
+		table.Header(title)
+		table.Bulk(data)
+		table.Footer(footer)
+		table.Render()
+	}
+	const (
+		resultTitle       = "VAULT UNSEAL RESULT"
+		failedTitle       = "VAULT UNSEAL FAILED"
+		requestEndpoint   = "/v1/sys/unseal"
+		statusEndpoint    = "/v1/sys/health"
+		GlobSearchTimeout = 5 * time.Second
+	)
+	type unsealReqJsonPayload struct {
+		Key string `json:"key"`
+	}
+	address := cmdCtx.cfg.GetString("vault.address")
+	if address == "" {
+		printResult(failedTitle, []string{
+			"Vault address is not specified",
+		}, "", true)
+		os.Exit(1)
+	}
+	tlsConfig, err := getVaultTlsConfig(cmdCtx)
+	if err != nil {
+		printResult(failedTitle, []string{
+			"Failed to create TLS configuration",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	client, err := NewHttpClient(cmdCtx, address, tlsConfig)
+	if err != nil {
+		printResult(failedTitle, []string{
+			"Failed to create HTTP client",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	resp, body, err := client.SendRequest(http.MethodGet, statusEndpoint, nil)
+	if err != nil {
+		printResult(failedTitle, []string{
+			"Failed to get vault status",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	var jsonStatus any
+	err = json.Unmarshal(body, &jsonStatus)
+	if err != nil {
+		printResult(failedTitle, []string{
+			"Failed to parse vault status response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	jsonStatusMap, ok := jsonStatus.(map[string]any)
+	if !ok {
+		printResult(failedTitle, []string{
+			"Failed to convert vault status response to map",
+		}, "", true)
+		os.Exit(1)
+	}
+	isSealedRaw, ok := jsonStatusMap["sealed"]
+	if !ok {
+		printResult(failedTitle, []string{
+			"Failed to find 'sealed' key in vault status response",
+		}, "", true)
+		os.Exit(1)
+	}
+	isSealed, ok := isSealedRaw.(bool)
+	if !ok {
+		printResult(failedTitle, []string{
+			"Failed to convert 'sealed' value to boolean",
+		}, "", true)
+		os.Exit(1)
+	}
+	if !isSealed {
+		printResult(resultTitle, []string{
+			"Vault is not sealed",
+		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+		return nil
+	}
+
+	// Get all input files
+	inFiles := cmdCtx.cfg.GetStringSlice("token.ins")
+
+	var fileInputs []string
+	seen := make(map[string]struct{}) // Avoid duplicate input files
+	addFileInput := func(path string) {
+		abspath, err := filepath.Abs(filepath.Clean(path))
+		if err != nil {
+			cmdCtx.LogVerbose("Failed to resolve absolute path: %v", err)
+			return
+		}
+		if _, exists := seen[abspath]; exists {
+			cmdCtx.LogVerbose("Dropping duplicate file input: %s", path)
+		} else {
+			seen[abspath] = struct{}{}
+			fileInputs = append(fileInputs, abspath)
+		}
+	}
+
+	for _, fileBundle := range inFiles {
+		parts := strings.FieldsFunc(fileBundle, func(c rune) bool {
+			return c == ','
+		})
+		files := make([]string, 0, len(parts))
+		for _, p := range parts {
+			p = strings.TrimSpace(p)
+			if p == "" {
+				continue
+			}
+			files = append(files, p)
+		}
+
+		for _, f := range files {
+			// glob expansion
+			ctx, cancel := context.WithTimeout(context.Background(), GlobSearchTimeout)
+			defer cancel()
+			matches, err := common.ExpandFileGlobsCtx(ctx, f, doublestar.WithFilesOnly())
+			if err != nil {
+				var msg string
+				if errors.Is(context.Cause(ctx), context.DeadlineExceeded) {
+					msg = fmt.Sprintf("Glob expansion timed out: %v", GlobSearchTimeout.String())
+				} else {
+					msg = fmt.Sprintf("Failed to glob file pattern \"%v\": %v", f, err)
+				}
+				printResult(failedTitle, []string{
+					msg,
+				}, err.Error(), true)
+				os.Exit(1)
+			}
+			for _, file := range matches {
+				if info, err := os.Stat(file); err == nil {
+					if info.IsDir() {
+						continue
+					}
+					addFileInput(file)
+				} else {
+					printResult(failedTitle, []string{
+						fmt.Sprintf("Failed to access file: %v", file),
+					}, err.Error(), true)
+					os.Exit(1)
+				}
+			}
+		}
+	}
+
+	var secret string
+	if len(fileInputs) > 0 {
+		secret = cmdCtx.cfg.GetString("secret")
+		if secret == "" && cmdCtx.cfg.IsSet("secret_path") {
+			path := cmdCtx.cfg.GetString("secret_path")
+			cmdCtx.LogVerbose("Secret ENV is not found, trying to read from secret path instead: %s", path)
+			s, err := os.ReadFile(path)
+			if err != nil {
+				printResult(failedTitle, []string{
+					fmt.Sprintf("Failed to read secret from file: %v", path),
+				}, err.Error(), true)
+				os.Exit(1)
+			}
+			secret = strings.TrimSpace(string(s))
+		}
+		if secret == "" {
+			cmdCtx.LogVerbose("Secret still not found, prompting for passphrase")
+			fmt.Print("Enter passphrase: ")
+			passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
+			fmt.Println()
+			if err != nil {
+				printResult(failedTitle, []string{
+					"Failed to read passphrase",
+				}, err.Error(), true)
+				os.Exit(1)
+			}
+			secret = strings.TrimSpace(string(passphraseBytes))
+		}
+	}
+
+	type unsealKeyResult struct {
+		Key          string
+		Source       string
+		IsUsed       bool
+		IsFailed     bool
+		Result       string
+		ResultDetail string
+		ExecuteOrder int
+		IsClean      bool
+	}
+	unsealKeys := []*unsealKeyResult{}
+	for i, arg := range args {
+		unsealKeys = append(unsealKeys, &unsealKeyResult{
+			Key:    arg,
+			Source: fmt.Sprintf("ARG[%d]", i),
+		})
+	}
+
+	for _, file := range fileInputs {
+		tokenBytes, err := os.ReadFile(file)
+		if err != nil {
+			cmdCtx.LogVerbose("Failed to read unseal key token from file \"%s\" (skiped): %v", file, err)
+			continue
+		}
+		token := strings.TrimSpace(string(tokenBytes))
+
+		meta, data, err := ReadSecureToken(token, secret)
+		if err != nil {
+			cmdCtx.LogVerbose("Token inspection failed for \"%s\" (skiped): %v", file, err)
+			continue
+		}
+		if meta.Sub != SubjectUnsealKeys {
+			cmdCtx.LogVerbose("Token is not a unseal key token (skiped): %s", file)
+			continue
+		}
+		unsealKeys = append(unsealKeys, &unsealKeyResult{
+			Key:    string(data),
+			Source: fmt.Sprintf("FILE: \"%s\"", file),
+		})
+	}
+
+	if len(unsealKeys) == 0 {
+		printResult(failedTitle, []string{
+			"No valid unseal key found",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// TESTING CODE STARTS
+	unsealKeys = []*unsealKeyResult{
+		{Key: "51eeb5cb4cd51f2ef1c281b441f71420f8c99ce37182cb76948cc6d0c231bcba1a", Source: "(WRONG BUT ACCEPTS)"},
+		{Key: "51eeb5cb4cd51f2ef1c281b441f71420f8c99ce37182cb76948cc6d0c231bcba1f", Source: "(CORRECT 1)"},
+		{Key: "399e4971ad200094a9180c1ec7c2a6c3ccfc2e47a046ee2e4499caba98faab26f2", Source: "(WRONG BUT ACCEPTS)"},
+		{Key: "399e4971ad200094a9180c1ec7c2a6c3ccfc2e47a046ee2e4499caba98faab26f6", Source: "(CORRECT 2)"},
+		{Key: "6641248f0b2bb9468d62734c61f6b50b62c72654c42982de6e5afa49c0be9861ea", Source: "(WRONG BUT ACCEPTS)"},
+		{Key: "6641248f0b2bb9468d62734c61f6b50b62c72654c42982de6e5afa49c0be9861e2", Source: "(CORRECT 3)"},
+		{Key: "b56f7379bc94c781f707f67d4c45ae378fb4e69557c1452f28bf5d0fa34c8dfa14", Source: "(CORRECT 4)"},
+	}
+	// TESTING CODE ENDS
+
+	cmdCtx.LogVerbose("Start unsealing...")
+
+	setDirtyBits := func(keys []*unsealKeyResult) {
+		for _, e := range keys {
+			if e.IsFailed {
+				continue
+			}
+			e.IsClean = false
+		}
+	}
+	type unsealRspJsonPayload struct {
+		Errs      []string `json:"errors"`
+		Sealed    bool     `json:"sealed"`
+		Threshold int      `json:"t"`
+		TotalKeys int      `json:"n"`
+		Progress  int      `json:"progress"`
+	}
+	i := 0
+	failCount := 0
+	threshold := -1
+	const (
+		processing = 0
+		failed     = 1
+		success    = 2
+	)
+	status := processing
+	var lastSuccessfulCleanUnsealRespJsonPayload *unsealRspJsonPayload
+	setDirtyBits(unsealKeys)
+	for {
+		// successed not failed, clean ones
+		cleanAcceptedCount := 0
+		for _, e := range unsealKeys {
+			if e.IsUsed && !e.IsFailed && e.IsClean {
+				cleanAcceptedCount++
+			}
+		}
+		// fail detection
+		if failCount+cleanAcceptedCount >= len(unsealKeys) {
+			status = failed
+			cmdCtx.LogVerbose("Unseal process failed")
+			break
+		}
+
+		// Don't spam Vault unseal API too often
+		if i > 0 {
+			time.Sleep(100 * time.Millisecond)
+		}
+
+		idx := i % len(unsealKeys)
+		i++
+		keyEntity := unsealKeys[idx]
+
+		// If already failed, skip this key
+		if keyEntity.IsFailed {
+			cmdCtx.LogVerbose("Skipping unseal key %s (already failed)", keyEntity.Key)
+			failCount++
+			continue
+		}
+
+		// If already got accepted and it's still recorded in vault, skip this key
+		if keyEntity.IsClean {
+			cmdCtx.LogVerbose("Skipping unseal key %s (already accepted)", keyEntity.Key)
+			continue
+		}
+		cmdCtx.LogVerbose("Trying to unseal with key %s", keyEntity.Key)
+
+		keyEntity.IsUsed = true
+		_, data, err := client.SendRequest(http.MethodPost, requestEndpoint, unsealReqJsonPayload{
+			Key: keyEntity.Key,
+		})
+
+		if err != nil {
+			cmdCtx.LogVerbose("Request send failed")
+			keyEntity.Result = "Failed to send request"
+			keyEntity.ResultDetail = err.Error()
+			keyEntity.IsFailed = true
+			failCount++
+			setDirtyBits(unsealKeys)
+			lastSuccessfulCleanUnsealRespJsonPayload = nil
+			continue
+		}
+
+		jsonRespBody := unsealRspJsonPayload{}
+		if err := json.Unmarshal(data, &jsonRespBody); err != nil {
+			cmdCtx.LogVerbose("Response parsing failed")
+			keyEntity.Result = "Failed to parse response"
+			keyEntity.ResultDetail = err.Error()
+			keyEntity.IsFailed = true
+			failCount++
+			setDirtyBits(unsealKeys)
+			lastSuccessfulCleanUnsealRespJsonPayload = nil
+			continue
+		}
+
+		if jsonRespBody.Errs != nil {
+			cmdCtx.LogVerbose("Unseal request rejected")
+			keyEntity.Result = "Unseal request failed"
+			keyEntity.ResultDetail = strings.Join(jsonRespBody.Errs, ", ")
+			keyEntity.IsFailed = true
+			failCount++
+			setDirtyBits(unsealKeys)
+			lastSuccessfulCleanUnsealRespJsonPayload = nil
+			continue
+		}
+
+		cmdCtx.LogVerbose("Unseal request accepted %v", keyEntity)
+		failCount = 0
+		keyEntity.IsClean = true
+		keyEntity.Result = "Unseal request succeeded"
+		lastSuccessfulCleanUnsealRespJsonPayload = &jsonRespBody
+		progress := jsonRespBody.Progress
+		if jsonRespBody.Progress == 0 && !jsonRespBody.Sealed {
+			// adjust progress value as it reset to 0 when vault just unsealed
+			progress = jsonRespBody.Threshold
+		}
+		keyEntity.ResultDetail = fmt.Sprintf("Progress: %d/%d", progress, jsonRespBody.Threshold)
+		keyEntity.ExecuteOrder = i
+		threshold = jsonRespBody.Threshold
+
+		// detect unseal
+		if !jsonRespBody.Sealed {
+			cmdCtx.LogVerbose("Vault is now unsealed")
+			status = success
+			break
+		}
+	}
+	cmdCtx.LogVerbose("Unseal process result: %v", status)
+
+	successedFiltered := []unsealKeyResult{}
+	for _, e := range unsealKeys {
+		if !e.IsFailed {
+			successedFiltered = append(successedFiltered, *e)
+		}
+	}
+	slices.SortFunc(successedFiltered, func(a, b unsealKeyResult) int {
+		return b.ExecuteOrder - a.ExecuteOrder
+	})
+	appliedKeyOrders := []int{}
+	for i := range threshold {
+		if len(successedFiltered) <= i {
+			break
+		}
+		appliedKeyOrders = append(appliedKeyOrders, successedFiltered[i].ExecuteOrder)
+	}
+	isApplied := func(unsealKeyEntity *unsealKeyResult, appliedKeyOrders []int) bool {
+		return slices.Contains(appliedKeyOrders, unsealKeyEntity.ExecuteOrder)
+	}
+
+	resultBody := []string{}
+	for _, e := range unsealKeys {
+		var msg string
+		source := color.New(color.FgCyan).Sprint(e.Source)
+		if !e.IsUsed {
+			msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[not used] %s", source)
+		} else if e.IsFailed {
+			st := color.New(color.FgRed).Sprint("rejected")
+			detail := color.New(color.FgMagenta).Sprint(e.ResultDetail)
+			msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[%s] %s: %s", st, source, detail)
+		} else { // successed
+			st := color.New(color.FgGreen).Sprint("accepted")
+			detail := e.ResultDetail
+			if isApplied(e, appliedKeyOrders) {
+				msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[%s] %s: %s", st, source, detail)
+			} else {
+				msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[%s] %s", st, source)
+			}
+		}
+		resultBody = append(resultBody, msg)
+	}
+
+	footer := ""
+	if status == success {
+		footer = color.New(color.FgGreen).Sprint("Vault is now unsealed")
+	} else {
+		if lastSuccessfulCleanUnsealRespJsonPayload != nil {
+			footer = fmt.Sprintf(color.New(color.FgYellow).Sprint("Last successful progress status:")+"\n"+
+				"- Total Keys exist: %d\n"+
+				"- Last Progress: %d/%d",
+				lastSuccessfulCleanUnsealRespJsonPayload.TotalKeys,
+				lastSuccessfulCleanUnsealRespJsonPayload.Progress,
+				lastSuccessfulCleanUnsealRespJsonPayload.Threshold)
+		} else {
+			footer = ""
+		}
+	}
+
+	printResult(
+		common.Ternary(status == success,
+			resultTitle,
+			failedTitle),
+		resultBody,
+		footer,
+		status == failed,
+	)
 
 	return nil
 }

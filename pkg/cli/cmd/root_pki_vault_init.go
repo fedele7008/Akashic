@@ -23,6 +23,7 @@ There's no security requirement for the passphrase, but it's recommended to use 
 
 	// Register persistent flags
 	core.RegisterFlags(cmd, core.FilterCliConfig(
+		core.Secret,
 		core.SecretPath,
 		core.VaultNumKeys,
 		core.VaultNumThresholds,

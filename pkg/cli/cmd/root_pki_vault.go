@@ -22,6 +22,7 @@ func NewVaultCmd(ctx *core.CliContext) *cobra.Command {
 	// Add subcommands
 	cmd.AddCommand(NewVaultStatusCmd(ctx))
 	cmd.AddCommand(NewVaultInitCmd(ctx))
+	cmd.AddCommand(NewVaultUnsealCmd(ctx))
 
 	return cmd
 }
