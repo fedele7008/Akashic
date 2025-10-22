@@ -78,6 +78,7 @@ const (
 	MinimumOutput
 	TokenFileOut
 	TokenFileOverride
+	VaultUnsealOnce
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -207,6 +208,20 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Short:   "m",
 		Default: bool(false),
 		Desc:    "Only output the minimum required information, if failes, print nothing.",
+	},
+	// VaultUnsealOnce is only set via flag
+	VaultUnsealOnce: {
+		Key:     "vault.unseal_once",
+		Name:    "once",
+		Short:   "o",
+		Default: bool(false),
+		Desc: "Disable auto-unsealing feature that automatically try & finds working unsealing keys among the inputs, if they are available.\n" +
+			"It will try to unseal the vault using each key once and exit.\n" +
+			"- Tests each key sequentially without intelligent search\n" +
+			"- Reports accept/reject status for each key individually\n" +
+			"- Continues until vault unseals or all keys are tested\n" +
+			"- No learning or optimization between attempts\n" +
+			"- Best for: Debugging, testing known keys, or simple verification",
 	},
 }
 
@@ -1218,7 +1233,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 					BG: renderer.Colors{},
 				},
 				Column: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.FgMagenta, color.Reset)},
+					FG: renderer.Colors{common.Ternary(isErr, color.Reset, color.Reset)},
 					BG: renderer.Colors{},
 				},
 				Footer: renderer.Tint{
@@ -1275,11 +1290,61 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 		resultTitle       = "VAULT UNSEAL RESULT"
 		failedTitle       = "VAULT UNSEAL FAILED"
 		requestEndpoint   = "/v1/sys/unseal"
-		statusEndpoint    = "/v1/sys/health"
+		statusEndpoint    = "/v1/sys/seal-status"
 		GlobSearchTimeout = 5 * time.Second
 	)
-	type unsealReqJsonPayload struct {
-		Key string `json:"key"`
+	type unsealResponse struct {
+		Errors      []string `json:"errors"`
+		Initialized bool     `json:"initialized"`
+		Sealed      bool     `json:"sealed"`
+		NumKeys     int      `json:"n"`
+		Threshold   int      `json:"t"`
+		Progress    int      `json:"progress"`
+	}
+	getUnsealStatus := func(client *HttpClient) (*http.Response, *unsealResponse, error) {
+		resp, body, err := client.SendRequest(http.MethodGet, statusEndpoint, nil)
+		if err != nil {
+			return nil, nil, err
+		}
+		var rspBody unsealResponse
+		if err = json.Unmarshal(body, &rspBody); err != nil {
+			return nil, nil, err
+		}
+		return resp, &rspBody, nil
+	}
+	sendUnsealRequest := func(client *HttpClient, key string) (*http.Response, *unsealResponse, error) {
+		type unsealReqJsonPayload struct {
+			Key string `json:"key"`
+		}
+		payload := unsealReqJsonPayload{Key: key}
+		resp, body, err := client.SendRequest(http.MethodPost, requestEndpoint, payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		var rspBody unsealResponse
+		if err = json.Unmarshal(body, &rspBody); err != nil {
+			return nil, nil, err
+		}
+		return resp, &rspBody, nil
+	}
+	sendResetRequest := func(client *HttpClient) (*http.Response, *unsealResponse, error) {
+		type resetReqJsonPayload struct {
+			Reset bool `json:"reset"`
+		}
+		payload := resetReqJsonPayload{Reset: true}
+		resp, body, err := client.SendRequest(http.MethodPost, requestEndpoint, payload)
+		if err != nil {
+			return nil, nil, err
+		}
+		var rspBody unsealResponse
+		if err = json.Unmarshal(body, &rspBody); err != nil {
+			return nil, nil, err
+		}
+		return resp, &rspBody, nil
+	}
+	runOnce := cmdCtx.cfg.GetBool("vault.unseal_once")
+	if runOnce {
+		cmdCtx.LogVerbose("Running vault unseal command without auto-recovery")
 	}
 	address := cmdCtx.cfg.GetString("vault.address")
 	if address == "" {
@@ -1302,48 +1367,28 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 		}, err.Error(), true)
 		os.Exit(1)
 	}
-	resp, body, err := client.SendRequest(http.MethodGet, statusEndpoint, nil)
+	_, status, err := getUnsealStatus(client)
 	if err != nil {
 		printResult(failedTitle, []string{
-			"Failed to get vault status",
+			"Failed to get vault seal status",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
-	var jsonStatus any
-	err = json.Unmarshal(body, &jsonStatus)
-	if err != nil {
+	if !status.Initialized {
 		printResult(failedTitle, []string{
-			"Failed to parse vault status response",
-		}, err.Error(), true)
-		os.Exit(1)
-	}
-	jsonStatusMap, ok := jsonStatus.(map[string]any)
-	if !ok {
-		printResult(failedTitle, []string{
-			"Failed to convert vault status response to map",
+			"Vault is not initialized",
 		}, "", true)
 		os.Exit(1)
 	}
-	isSealedRaw, ok := jsonStatusMap["sealed"]
-	if !ok {
-		printResult(failedTitle, []string{
-			"Failed to find 'sealed' key in vault status response",
-		}, "", true)
-		os.Exit(1)
-	}
-	isSealed, ok := isSealedRaw.(bool)
-	if !ok {
-		printResult(failedTitle, []string{
-			"Failed to convert 'sealed' value to boolean",
-		}, "", true)
-		os.Exit(1)
-	}
-	if !isSealed {
+	if !status.Sealed {
 		printResult(resultTitle, []string{
-			"Vault is not sealed",
-		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+			"Vault is already unsealed",
+		}, "", false)
 		return nil
 	}
+	numKeys := status.NumKeys
+	numThresholds := status.Threshold
+	numProgress := status.Progress
 
 	// Get all input files
 	inFiles := cmdCtx.cfg.GetStringSlice("token.ins")
@@ -1440,21 +1485,18 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 		}
 	}
 
-	type unsealKeyResult struct {
-		Key          string
-		Source       string
-		IsUsed       bool
-		IsFailed     bool
-		Result       string
-		ResultDetail string
-		ExecuteOrder int
-		IsClean      bool
+	// unsealKeyCandidate represents a candidate unseal key with its source information
+	type unsealKeyCandidate struct {
+		Key    string
+		Source string
 	}
-	unsealKeys := []*unsealKeyResult{}
+
+	// Collect all candidate keys from args and files
+	unsealKeys := []*unsealKeyCandidate{}
 	for i, arg := range args {
-		unsealKeys = append(unsealKeys, &unsealKeyResult{
+		unsealKeys = append(unsealKeys, &unsealKeyCandidate{
 			Key:    arg,
-			Source: fmt.Sprintf("ARG[%d]", i),
+			Source: fmt.Sprintf("COMMAND ARGUMENT %d", i+1),
 		})
 	}
 
@@ -1475,9 +1517,9 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 			cmdCtx.LogVerbose("Token is not a unseal key token (skiped): %s", file)
 			continue
 		}
-		unsealKeys = append(unsealKeys, &unsealKeyResult{
+		unsealKeys = append(unsealKeys, &unsealKeyCandidate{
 			Key:    string(data),
-			Source: fmt.Sprintf("FILE: \"%s\"", file),
+			Source: fmt.Sprintf("TOKEN FILE: \"%s\"", file),
 		})
 	}
 
@@ -1488,212 +1530,420 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 		os.Exit(1)
 	}
 
-	// TESTING CODE STARTS
-	unsealKeys = []*unsealKeyResult{
-		{Key: "51eeb5cb4cd51f2ef1c281b441f71420f8c99ce37182cb76948cc6d0c231bcba1a", Source: "(WRONG BUT ACCEPTS)"},
-		{Key: "51eeb5cb4cd51f2ef1c281b441f71420f8c99ce37182cb76948cc6d0c231bcba1f", Source: "(CORRECT 1)"},
-		{Key: "399e4971ad200094a9180c1ec7c2a6c3ccfc2e47a046ee2e4499caba98faab26f2", Source: "(WRONG BUT ACCEPTS)"},
-		{Key: "399e4971ad200094a9180c1ec7c2a6c3ccfc2e47a046ee2e4499caba98faab26f6", Source: "(CORRECT 2)"},
-		{Key: "6641248f0b2bb9468d62734c61f6b50b62c72654c42982de6e5afa49c0be9861ea", Source: "(WRONG BUT ACCEPTS)"},
-		{Key: "6641248f0b2bb9468d62734c61f6b50b62c72654c42982de6e5afa49c0be9861e2", Source: "(CORRECT 3)"},
-		{Key: "b56f7379bc94c781f707f67d4c45ae378fb4e69557c1452f28bf5d0fa34c8dfa14", Source: "(CORRECT 4)"},
-	}
-	// TESTING CODE ENDS
+	type finalResult int
+	const (
+		_ = iota
+		resultUnknown
+		resultUnsealed // fully unsealed
+		resultFailed   // unseal failed
+		resultPartial  // partially unsealed (for run-once mode)
+	)
+	var result finalResult = resultUnknown
 
-	cmdCtx.LogVerbose("Start unsealing...")
-
-	setDirtyBits := func(keys []*unsealKeyResult) {
-		for _, e := range keys {
-			if e.IsFailed {
+	// special handling for run-once mode
+	if runOnce {
+		cmdCtx.LogVerbose("Start unsealing with PB-SAT key discovery disabled...")
+		resultData := color.New(color.FgYellow).Sprint("Key candidates") + ":\n"
+		detail := ""
+		isUnsealed := false
+		for i, key := range unsealKeys {
+			if isUnsealed {
+				cmdCtx.LogVerbose("Vault is already unsealed, skipping remaining keys: %v", key.Source)
+				resultData += fmt.Sprintf("[%s] #%d: %s\n",
+					"UNUSED",
+					i+1,
+					color.New(color.FgCyan).Sprint(key.Source),
+				)
 				continue
 			}
-			e.IsClean = false
-		}
-	}
-	type unsealRspJsonPayload struct {
-		Errs      []string `json:"errors"`
-		Sealed    bool     `json:"sealed"`
-		Threshold int      `json:"t"`
-		TotalKeys int      `json:"n"`
-		Progress  int      `json:"progress"`
-	}
-	i := 0
-	failCount := 0
-	threshold := -1
-	const (
-		processing = 0
-		failed     = 1
-		success    = 2
-	)
-	status := processing
-	var lastSuccessfulCleanUnsealRespJsonPayload *unsealRspJsonPayload
-	setDirtyBits(unsealKeys)
-	for {
-		// successed not failed, clean ones
-		cleanAcceptedCount := 0
-		for _, e := range unsealKeys {
-			if e.IsUsed && !e.IsFailed && e.IsClean {
-				cleanAcceptedCount++
+			_, body, err := sendUnsealRequest(client, key.Key)
+
+			// something went wrong while sending the request
+			if err != nil {
+				cmdCtx.LogVerbose("Failed to send unseal request: %v", key.Source)
+				resultData += fmt.Sprintf("[%s] #%d: %s\n",
+					color.New(color.FgRed).Sprint("FAILED"),
+					i+1,
+					color.New(color.FgCyan).Sprint(key.Source),
+				)
+				detail += fmt.Sprintf("#%d: %s\n",
+					i+1,
+					color.New(color.FgMagenta).Sprint(err.Error()),
+				)
+				continue
 			}
-		}
-		// fail detection
-		if failCount+cleanAcceptedCount >= len(unsealKeys) {
-			status = failed
-			cmdCtx.LogVerbose("Unseal process failed")
-			break
-		}
 
-		// Don't spam Vault unseal API too often
-		if i > 0 {
-			time.Sleep(100 * time.Millisecond)
-		}
+			// something went wrong while processing the request
+			if body.Errors != nil {
+				cmdCtx.LogVerbose("Vault rejected unseal key: %v", key.Source)
+				errMsgs := []string{}
+				for _, errstr := range body.Errors {
+					parts := strings.Split(errstr, "\n")
+					errMsgs = append(errMsgs, parts...)
+				}
+				resultData += fmt.Sprintf("[%s] #%d: %s\n",
+					color.New(color.FgRed).Sprint("REJECT"),
+					i+1,
+					color.New(color.FgCyan).Sprint(key.Source),
+				)
+				if len(errMsgs) == 1 {
+					detail += fmt.Sprintf("#%d: %s\n",
+						i+1,
+						color.New(color.FgMagenta).Sprint(errMsgs[0]),
+					)
+				} else if len(errMsgs) > 1 {
+					detail += fmt.Sprintf("#%d:\n", i+1)
+					for _, msg := range errMsgs {
+						detail += fmt.Sprintf("- %s\n", color.New(color.FgMagenta).Sprint(msg))
+					}
+				}
+				continue
+			}
 
-		idx := i % len(unsealKeys)
-		i++
-		keyEntity := unsealKeys[idx]
-
-		// If already failed, skip this key
-		if keyEntity.IsFailed {
-			cmdCtx.LogVerbose("Skipping unseal key %s (already failed)", keyEntity.Key)
-			failCount++
-			continue
-		}
-
-		// If already got accepted and it's still recorded in vault, skip this key
-		if keyEntity.IsClean {
-			cmdCtx.LogVerbose("Skipping unseal key %s (already accepted)", keyEntity.Key)
-			continue
-		}
-		cmdCtx.LogVerbose("Trying to unseal with key %s", keyEntity.Key)
-
-		keyEntity.IsUsed = true
-		_, data, err := client.SendRequest(http.MethodPost, requestEndpoint, unsealReqJsonPayload{
-			Key: keyEntity.Key,
-		})
-
-		if err != nil {
-			cmdCtx.LogVerbose("Request send failed")
-			keyEntity.Result = "Failed to send request"
-			keyEntity.ResultDetail = err.Error()
-			keyEntity.IsFailed = true
-			failCount++
-			setDirtyBits(unsealKeys)
-			lastSuccessfulCleanUnsealRespJsonPayload = nil
-			continue
-		}
-
-		jsonRespBody := unsealRspJsonPayload{}
-		if err := json.Unmarshal(data, &jsonRespBody); err != nil {
-			cmdCtx.LogVerbose("Response parsing failed")
-			keyEntity.Result = "Failed to parse response"
-			keyEntity.ResultDetail = err.Error()
-			keyEntity.IsFailed = true
-			failCount++
-			setDirtyBits(unsealKeys)
-			lastSuccessfulCleanUnsealRespJsonPayload = nil
-			continue
-		}
-
-		if jsonRespBody.Errs != nil {
-			cmdCtx.LogVerbose("Unseal request rejected")
-			keyEntity.Result = "Unseal request failed"
-			keyEntity.ResultDetail = strings.Join(jsonRespBody.Errs, ", ")
-			keyEntity.IsFailed = true
-			failCount++
-			setDirtyBits(unsealKeys)
-			lastSuccessfulCleanUnsealRespJsonPayload = nil
-			continue
-		}
-
-		cmdCtx.LogVerbose("Unseal request accepted %v", keyEntity)
-		failCount = 0
-		keyEntity.IsClean = true
-		keyEntity.Result = "Unseal request succeeded"
-		lastSuccessfulCleanUnsealRespJsonPayload = &jsonRespBody
-		progress := jsonRespBody.Progress
-		if jsonRespBody.Progress == 0 && !jsonRespBody.Sealed {
-			// adjust progress value as it reset to 0 when vault just unsealed
-			progress = jsonRespBody.Threshold
-		}
-		keyEntity.ResultDetail = fmt.Sprintf("Progress: %d/%d", progress, jsonRespBody.Threshold)
-		keyEntity.ExecuteOrder = i
-		threshold = jsonRespBody.Threshold
-
-		// detect unseal
-		if !jsonRespBody.Sealed {
-			cmdCtx.LogVerbose("Vault is now unsealed")
-			status = success
-			break
-		}
-	}
-	cmdCtx.LogVerbose("Unseal process result: %v", status)
-
-	successedFiltered := []unsealKeyResult{}
-	for _, e := range unsealKeys {
-		if !e.IsFailed {
-			successedFiltered = append(successedFiltered, *e)
-		}
-	}
-	slices.SortFunc(successedFiltered, func(a, b unsealKeyResult) int {
-		return b.ExecuteOrder - a.ExecuteOrder
-	})
-	appliedKeyOrders := []int{}
-	for i := range threshold {
-		if len(successedFiltered) <= i {
-			break
-		}
-		appliedKeyOrders = append(appliedKeyOrders, successedFiltered[i].ExecuteOrder)
-	}
-	isApplied := func(unsealKeyEntity *unsealKeyResult, appliedKeyOrders []int) bool {
-		return slices.Contains(appliedKeyOrders, unsealKeyEntity.ExecuteOrder)
-	}
-
-	resultBody := []string{}
-	for _, e := range unsealKeys {
-		var msg string
-		source := color.New(color.FgCyan).Sprint(e.Source)
-		if !e.IsUsed {
-			msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[not used] %s", source)
-		} else if e.IsFailed {
-			st := color.New(color.FgRed).Sprint("rejected")
-			detail := color.New(color.FgMagenta).Sprint(e.ResultDetail)
-			msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[%s] %s: %s", st, source, detail)
-		} else { // successed
-			st := color.New(color.FgGreen).Sprint("accepted")
-			detail := e.ResultDetail
-			if isApplied(e, appliedKeyOrders) {
-				msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[%s] %s: %s", st, source, detail)
+			progress := body.Progress
+			if !body.Sealed {
+				progress = body.Threshold
+				isUnsealed = true
+			}
+			cmdCtx.LogVerbose("Key accepted, progress: %d/%d (%s)", progress, body.Threshold, key.Source)
+			if body.Sealed {
+				resultData += fmt.Sprintf("[%s] #%d: %s - progress %d/%d\n",
+					color.New(color.FgGreen).Sprint("ACCEPT"),
+					i+1,
+					color.New(color.FgCyan).Sprint(key.Source),
+					progress,
+					body.Threshold,
+				)
 			} else {
-				msg = fmt.Sprintf(color.New(color.Reset).Sprint()+"[%s] %s", st, source)
+				resultData += fmt.Sprintf("[%s] #%d: %s - progress %d/%d\n",
+					color.New(color.FgGreen, color.Bold).Sprint("UNSEAL"),
+					i+1,
+					color.New(color.FgCyan).Sprint(key.Source),
+					progress,
+					body.Threshold,
+				)
 			}
 		}
-		resultBody = append(resultBody, msg)
+
+		_, status, err := getUnsealStatus(client)
+		if err != nil {
+			cmdCtx.LogVerbose("Failed to get unseal status: %v", err)
+			result = resultUnknown
+		}
+		var resultTblTitle, progressFooter string
+		switch result {
+		case resultUnknown:
+			resultTblTitle = "VAULT UNSEAL RESULT"
+		case resultUnsealed:
+			resultTblTitle = "VAULT UNSEALED"
+		case resultFailed:
+			resultTblTitle = "VAULT UNSEAL FAILED"
+		case resultPartial:
+			resultTblTitle = "VAULT PARTIALLY UNSEALED"
+		}
+
+		progress := status.Progress
+		if !status.Sealed {
+			result = resultUnsealed
+			progress = status.Threshold
+		} else {
+			if status.Progress > numProgress {
+				result = resultPartial
+			} else {
+				result = resultFailed
+			}
+		}
+		if status.Sealed {
+			progressFooter = color.New(color.FgYellow).Sprintf("Last unseal progress: %d/%d\n", progress, status.Threshold)
+		} else {
+			progressFooter = color.New(color.FgGreen, color.Bold).Sprint("Vault is now unsealed")
+		}
+
+		var data []string
+		data = append(data, resultData)
+		if detail != "" {
+			detail = fmt.Sprintf("%s:\n%s", color.New(color.FgYellow).Sprint("Details"), detail)
+			data = append(data, detail)
+		}
+		isErr := result == resultFailed || result == resultUnknown
+		printResult(resultTblTitle, data, progressFooter, isErr)
+		return nil
 	}
 
-	footer := ""
-	if status == success {
-		footer = color.New(color.FgGreen).Sprint("Vault is now unsealed")
-	} else {
-		if lastSuccessfulCleanUnsealRespJsonPayload != nil {
-			footer = fmt.Sprintf(color.New(color.FgYellow).Sprint("Last successful progress status:")+"\n"+
-				"- Total Keys exist: %d\n"+
-				"- Last Progress: %d/%d",
-				lastSuccessfulCleanUnsealRespJsonPayload.TotalKeys,
-				lastSuccessfulCleanUnsealRespJsonPayload.Progress,
-				lastSuccessfulCleanUnsealRespJsonPayload.Threshold)
-		} else {
-			footer = ""
+	cmdCtx.LogVerbose("Start unsealing with PB-SAT key discovery...")
+
+	// Track test attempts for reporting
+	type testAttempt struct {
+		KeyIndices []int    // Indices into unsealKeys
+		Success    bool     // Whether Vault was unsealed
+		ErrMsgs    []string // Error message if failed
+	}
+	attempts := []testAttempt{}
+
+	cmdCtx.LogVerbose("Total number of keys issued: %d", numKeys)
+	cmdCtx.LogVerbose("Number of keys needed to unseal: %d", numThresholds)
+	if numProgress != 0 {
+		cmdCtx.LogVerbose("Resetting the progress...")
+		_, rspBody, err := sendResetRequest(client)
+		if err != nil {
+			printResult(failedTitle, []string{
+				"Failed to reset Vault",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		if rspBody.Errors != nil {
+			errMsgs := []string{}
+			for _, errstr := range rspBody.Errors {
+				parts := strings.Split(errstr, "\n")
+				errMsgs = append(errMsgs, parts...)
+			}
+			footer := "Error:\n"
+			for _, msg := range errMsgs {
+				footer += fmt.Sprintf("- %s\n", color.New(color.FgMagenta).Sprint(msg))
+			}
+			printResult(failedTitle, []string{
+				"Failed to reset Vault",
+			}, footer, true)
+			os.Exit(1)
+		}
+		if !rspBody.Sealed {
+			printResult(resultTitle, []string{
+				"Vault is already unsealed",
+			}, "", false)
+			return nil
+		}
+		numKeys = rspBody.NumKeys
+		numThresholds = rspBody.Threshold
+	}
+
+	satSolver := NewVaultKeySatSolver(len(unsealKeys), numThresholds, numKeys)
+
+	for {
+		keyIndices, err := satSolver.GetNextKeyCombination()
+		if err != nil {
+			cmdCtx.LogVerbose("SAT solver reports UNSAT: %v", err)
+			result = resultFailed
+			attempts = append(attempts, testAttempt{
+				KeyIndices: keyIndices,
+				Success:    false,
+				ErrMsgs:    []string{err.Error()},
+			})
+			break
+		}
+
+		var testErr error
+		var testRsp *unsealResponse
+		cmdCtx.LogVerbose("Testing key combinations (0-indexed): %v", keyIndices)
+		for i, keyIdx := range keyIndices {
+			if i > 0 {
+				time.Sleep(10 * time.Millisecond)
+			}
+			key := unsealKeys[keyIdx].Key
+			cmdCtx.LogVerbose("Feeding key %d/%d: idx=%d", i+1, len(keyIndices), keyIdx)
+
+			_, testRsp, testErr = sendUnsealRequest(client, key)
+			if testErr != nil {
+				cmdCtx.LogVerbose("Request failed: %v", testErr)
+				satSolver.RecordFalseKey(keyIdx) // Mark this key as false key
+				break
+			}
+			if testRsp.Errors != nil {
+				cmdCtx.LogVerbose("Request rejected: %v", testErr)
+				for _, errMsg := range testRsp.Errors {
+					if strings.Contains(errMsg, "'key' must be a valid hex or base64 string") {
+						cmdCtx.LogVerbose("Request was rejected due to invalid key format, adding to false key list")
+						satSolver.RecordFalseKey(keyIdx) // Mark this key as false key
+					}
+				}
+				break
+			}
+			cmdCtx.LogVerbose("Request accepted, progress: %d", testRsp.Progress)
+
+			if !testRsp.Sealed {
+				cmdCtx.LogVerbose("Vault unsealed")
+				result = resultUnsealed
+				break
+			}
+		}
+
+		attemptRecord := testAttempt{
+			KeyIndices: keyIndices,
+			Success:    result == resultUnsealed,
+			ErrMsgs:    []string{},
+		}
+		if testErr != nil {
+			attemptRecord.ErrMsgs = append(attemptRecord.ErrMsgs, testErr.Error())
+		}
+		if testRsp.Errors != nil {
+			attemptRecord.ErrMsgs = append(attemptRecord.ErrMsgs, testRsp.Errors...)
+		}
+
+		attempts = append(attempts, attemptRecord)
+		if result == resultUnsealed {
+			break
+		}
+
+		cmdCtx.LogVerbose("Test failed, adding constraint to SAT solver")
+		satSolver.RecordFailure(keyIndices) // At least one of the tested key is false key
+
+		// reset after failure
+		cmdCtx.LogVerbose("Resetting the progress...")
+		_, rspBody, err := sendResetRequest(client)
+		if err != nil {
+			printResult(failedTitle, []string{
+				"Failed to reset Vault",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		if rspBody.Errors != nil {
+			errMsgs := []string{}
+			for _, errstr := range rspBody.Errors {
+				parts := strings.Split(errstr, "\n")
+				errMsgs = append(errMsgs, parts...)
+			}
+			footer := "Error:\n"
+			for _, msg := range errMsgs {
+				footer += fmt.Sprintf("- %s\n", color.New(color.FgMagenta).Sprint(msg))
+			}
+			printResult(failedTitle, []string{
+				"Failed to reset Vault",
+			}, footer, true)
+			os.Exit(1)
+		}
+		if !rspBody.Sealed {
+			printResult(resultTitle, []string{
+				"Vault is already unsealed",
+			}, "", false)
+			return nil
 		}
 	}
 
-	printResult(
-		common.Ternary(status == success,
-			resultTitle,
-			failedTitle),
-		resultBody,
-		footer,
-		status == failed,
-	)
+	// Perform backbone analysis to classify keys
+	cmdCtx.LogVerbose("Performing backbone analysis to classify remaining keys...")
+	var successfulKeys []int
+	if result == resultUnsealed {
+		// Find the successful attempt to get the key indices
+		for i := len(attempts) - 1; i >= 0; i-- {
+			if attempts[i].Success {
+				successfulKeys = attempts[i].KeyIndices
+				break
+			}
+		}
+	}
 
+	backboneResult, err := satSolver.ComputeBackbone(result == resultUnsealed, successfulKeys)
+	if err != nil {
+		cmdCtx.LogVerbose("Backbone analysis failed: %v", err)
+	}
+
+	resultTblTitle := "VAULT UNSEAL RESULT"
+	resultTblBody := []string{}
+	resultTblFooter := ""
+
+	// generate stats
+	statsBody := color.New(color.FgYellow).Sprint("Statistics") + ":"
+	attemptCounts, _ := satSolver.GetStats()
+	statsBody += fmt.Sprintf("\n"+
+		"- Total key candidates: %d\n"+
+		"- Vault threshold: %d\n"+
+		"- Total attempts: %d\n",
+		len(unsealKeys),
+		numThresholds,
+		attemptCounts,
+	)
+	resultTblBody = append(resultTblBody, statsBody)
+
+	// generate key candidates with backbone classification
+	keyCandidatesBody := color.New(color.FgYellow).Sprint("Key Candidates") + ":\n"
+
+	// Build classification maps for easy lookup
+	keyClassification := make(map[int]string)
+	if backboneResult != nil {
+		for _, idx := range backboneResult.DefinitelyReal {
+			keyClassification[idx] = "ACCEPT"
+		}
+		for _, idx := range backboneResult.DefinitelyFake {
+			keyClassification[idx] = "REJECT"
+		}
+		for _, idx := range backboneResult.Undetermined {
+			keyClassification[idx] = "UNSURE"
+		}
+	}
+
+	for i, key := range unsealKeys {
+		classification := keyClassification[i]
+		if classification == "" {
+			classification = "UNUSED"
+		}
+
+		var classColor *color.Color
+		switch classification {
+		case "ACCEPT":
+			classColor = color.New(color.FgGreen, color.Bold)
+		case "REJECT":
+			classColor = color.New(color.FgRed)
+		case "UNSURE":
+			classColor = color.New(color.FgYellow)
+		default:
+			classColor = color.New(color.Reset)
+		}
+
+		keyCandidatesBody += fmt.Sprintf("- [%s] #%d: %s\n",
+			classColor.Sprint(classification),
+			i+1,
+			color.New(color.FgCyan).Sprint(key.Source))
+	}
+	resultTblBody = append(resultTblBody, keyCandidatesBody)
+
+	// generate attempts table
+	attemptsBody := color.New(color.FgYellow).Sprint("Attempts") + ":\n"
+	for i, a := range attempts {
+		if a.KeyIndices != nil {
+			status := ""
+			if a.Success {
+				status = color.New(color.FgGreen).Sprint("PASSED")
+			} else {
+				status = color.New(color.FgRed).Sprint("FAILED")
+			}
+			usedKeys := ""
+			for _, k := range a.KeyIndices {
+				if usedKeys != "" {
+					usedKeys += ", "
+				}
+				usedKeys += color.New(color.FgCyan).Sprintf("#%d", k+1)
+			}
+			attemptsBody += fmt.Sprintf("%3d. [%s] Keys: %s\n", i+1, status, usedKeys)
+			if a.ErrMsgs != nil {
+				errMsgs := []string{}
+				for _, errstr := range a.ErrMsgs {
+					parts := strings.Split(errstr, "\n")
+					errMsgs = append(errMsgs, parts...)
+				}
+				for _, msg := range errMsgs {
+					attemptsBody += fmt.Sprintf("- %s\n", msg)
+				}
+			}
+		} else {
+			attemptsBody += fmt.Sprintf(
+				"%3d. [%s]: %s\n",
+				i+1,
+				color.New(color.FgRed, color.Bold).Sprint("FAILED"),
+				color.New(color.FgMagenta).Sprint("Unsatisfiable, no valid key combination exists"),
+			)
+		}
+	}
+	resultTblBody = append(resultTblBody, attemptsBody)
+
+	// generate footer
+	switch result {
+	case resultUnknown:
+		resultTblFooter = color.New(color.FgRed).Sprint("Something went wrong, result unknown")
+	case resultUnsealed:
+		resultTblFooter = color.New(color.FgGreen, color.Bold).Sprint("Vault is now unsealed")
+	case resultFailed:
+		resultTblFooter = color.New(color.FgRed, color.Bold).Sprint("Failed to unseal vault - no valid key combination found")
+	}
+
+	printResult(resultTblTitle, resultTblBody, resultTblFooter, result == resultFailed || result == resultUnknown)
 	return nil
 }

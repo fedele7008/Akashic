@@ -65,6 +65,34 @@ main() {
         akashic-cli pki token inspect -i "${VAULT_TOKEN_FILE}" -i "${VAULT_KEY_DIR}/*.enc"
         print_log_output_footer
     fi
+
+    # Check if vault is already unsealed
+    status_response=$(akashic-cli pki vault status || echo "{}") > /dev/null 2>&1
+    echo "$status_response" | grep -q 'sealed: false'
+    if [[ $? -eq 0 ]]; then
+        # CASE: Vault is already unsealed
+        log "Vault is already unsealed"
+    else
+        # CASE: Vault is not unsealed
+        log "Vault is sealed. Unsealing..."
+        print_log_output_header
+        akashic-cli pki vault unseal -i "${VAULT_KEY_DIR}/*.enc"
+        unseal_response=$?
+        print_log_output_footer
+        if [[ ${unseal_response} -eq 0 ]]; then
+            log_success "Vault unseal successful"
+        else
+            log_error "Vault unseal failed"
+            return 1
+        fi
+    fi
+
+    log "Vault status..."
+    print_log_output_header
+    akashic-cli pki vault status
+    print_log_output_footer
+
+    log_success "Vault initialization successful"
 }
 
 main
