@@ -202,15 +202,15 @@ The Akashic ecosystem consists of three fundamental components:
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         Frontend (Optional)                      │
-│                    (Web UI - Default or BYO)                     │
+│                         Frontend (Optional)                     │
+│                    (Web UI - Default or BYO)                    │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ HTTPS (Production)
                                 │ HTTP (Development)
                                 ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│                      BFF - Backend For Frontend                  │
-│                         (Optional/BYO)                           │
+│                      BFF - Backend For Frontend                 │
+│                         (Optional/BYO)                          │
 │  • REST API bridge           • Session management               │
 │  • Token storage             • mTLS with Akashic                │
 └───────────────────────────────┬─────────────────────────────────┘
@@ -221,7 +221,7 @@ The Akashic ecosystem consists of three fundamental components:
                 ▼                              ▼
 ┌──────────────────────────┐   ┌──────────────────────────┐
 │   Control Server         │   │    Auth Server           │
-│   (127.0.0.1:8081)      │   │    (0.0.0.0:8080)       │
+│   (127.0.0.1:8081)       │   │    (0.0.0.0:8080)        │
 │                          │   │                          │
 │ • Server management      │   │ • OAuth 2.1 endpoints    │
 │ • Config hot-reload      │   │ • OIDC endpoints         │
