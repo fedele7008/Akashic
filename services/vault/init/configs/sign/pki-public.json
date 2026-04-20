@@ -1,0 +1,5 @@
+{
+  "use_csr_values": true,
+  "format": "pem_bundle",
+  "ttl": "43800h"
+}

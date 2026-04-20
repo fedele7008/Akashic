@@ -230,6 +230,7 @@ const (
 	EngineName
 	CsrOutput
 	CsrCommonName
+	SignCsrInput
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -421,6 +422,12 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Name:    "cn",
 		Default: string(""),
 		Desc:    "Common name for the CSR (highest priority, overrides config)",
+	},
+	SignCsrInput: {
+		Key:     "sign.csr_input",
+		Name:    "csr",
+		Default: string(""),
+		Desc:    "Path to PEM-encoded CSR file to sign",
 	},
 }
 
@@ -2400,6 +2407,193 @@ func (cmdCtx *CliContext) RunPkiVaultEngineGenerateRootInternalCmd(cmd *cobra.Co
 				"TTL:         %s\n"+
 				"Output:      %s",
 			engineName, commonName, rootResponse.Data.KeyID, rootResponse.Data.SerialNum, keyType, keyBits, ttl, outputPath),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultEngineSignIntermediateCmd(cmd *cobra.Command, args []string) error {
+	// Validate required flags
+	engineName := cmdCtx.cfg.GetString("engine.name")
+	if engineName == "" {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			"Signing engine is required (--engine / -e)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	csrInputPath := cmdCtx.cfg.GetString("sign.csr_input")
+	if csrInputPath == "" {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			"CSR input file is required (--csr)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	outputPath := cmdCtx.cfg.GetString("csr.output")
+	if outputPath == "" {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			"Output file is required (--output / -o)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.LogVerbose("Signing engine: %s, CSR: %s, Output: %s", engineName, csrInputPath, outputPath)
+
+	// Read CSR file
+	csrBytes, err := os.ReadFile(csrInputPath)
+	if err != nil {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			fmt.Sprintf("Failed to read CSR file: %s", csrInputPath),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	csrPEM := string(csrBytes)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Build cascading config: defaults → config file → inline config → --cn flag
+	config := map[string]interface{}{
+		"use_csr_values": true,
+		"format":         "pem_bundle",
+		"ttl":            "43800h",
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// --cn flag has highest priority
+	cnFlag := cmdCtx.cfg.GetString("csr.common_name")
+	if cnFlag != "" {
+		config["common_name"] = cnFlag
+	}
+
+	// Inject CSR into the request payload
+	config["csr"] = csrPEM
+
+	// If use_csr_values is true and no common_name provided, Vault will use CSR's CN
+	// If use_csr_values is false, common_name is required
+	useCsrValues, _ := config["use_csr_values"].(bool)
+	if !useCsrValues {
+		if _, ok := config["common_name"]; !ok {
+			cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+				"common_name is required when use_csr_values is false (use --cn or include in config)",
+			}, "", true)
+			os.Exit(1)
+		}
+	}
+
+	// Send sign-intermediate request
+	apiPath := fmt.Sprintf("/v1/%s/root/sign-intermediate", engineName)
+	cmdCtx.LogVerbose("Signing intermediate: POST %s", apiPath)
+
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			"Failed to send sign-intermediate request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Parse response
+	var signResponse struct {
+		Data struct {
+			Certificate  string   `json:"certificate"`
+			IssuingCA    string   `json:"issuing_ca"`
+			CAChain      []string `json:"ca_chain"`
+			SerialNumber string   `json:"serial_number"`
+			Expiration   int64    `json:"expiration"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &signResponse); err != nil {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			"Failed to parse sign response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if signResponse.Data.Certificate == "" {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			"Signed certificate not found in Vault response",
+		}, string(body), true)
+		os.Exit(1)
+	}
+
+	// Write signed certificate to output file
+	outputDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			fmt.Sprintf("Failed to create output directory: %s", outputDir),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if err := os.WriteFile(outputPath, []byte(signResponse.Data.Certificate), 0o644); err != nil {
+		cmdCtx.printResultTable("SIGN INTERMEDIATE FAILED", []string{
+			fmt.Sprintf("Failed to write certificate to file: %s", outputPath),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	// Display result
+	ttl := fmt.Sprintf("%v", config["ttl"])
+	cmdCtx.printResultTable("SIGN INTERMEDIATE SUCCESS", []string{
+		fmt.Sprintf(
+			"Signing Engine: %s\n"+
+				"Serial:         %s\n"+
+				"TTL:            %s\n"+
+				"CSR Input:      %s\n"+
+				"Output:         %s",
+			engineName, signResponse.Data.SerialNumber, ttl, csrInputPath, outputPath),
 	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 
 	return nil

@@ -103,9 +103,9 @@ main() {
         local mount_args=("-t" "${VAULT_TOKEN_FILE}" "-d" "${description}")
         if [[ -f "${config_file}" ]]; then
             mount_args+=("-f" "${config_file}")
-            log "Using config: ${config_file}"
+            log "- Using config: ${config_file}"
         else
-            log_warning "Config file not found: ${config_file}, using defaults"
+            log_warning "- Config file not found: ${config_file}, using defaults"
         fi
 
         print_log_output_header
@@ -152,9 +152,9 @@ main() {
         local gen_args=("-e" "${engine}" "-o" "${output}" "-t" "${VAULT_TOKEN_FILE}")
         if [[ -f "${config_file}" ]]; then
             gen_args+=("-f" "${config_file}")
-            log "Using config: ${config_file}"
+            log "- Using config: ${config_file}"
         else
-            log_warning "Config file not found: ${config_file}, using defaults"
+            log_warning "- Config file not found: ${config_file}, using defaults"
         fi
 
         print_log_output_header
@@ -189,9 +189,9 @@ main() {
         local gen_args=("-e" "${engine}" "-o" "${output}" "-t" "${VAULT_TOKEN_FILE}")
         if [[ -f "${config_file}" ]]; then
             gen_args+=("-f" "${config_file}")
-            log "Using config: ${config_file}"
+            log "- Using config: ${config_file}"
         else
-            log_warning "Config file not found: ${config_file}, using defaults"
+            log_warning "- Config file not found: ${config_file}, using defaults"
         fi
 
         print_log_output_header
@@ -214,6 +214,73 @@ main() {
     generate_csr "pki-mtls-loki" "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.csr" || return 1
 
     log_success "All intermediate CA CSRs generated successfully"
+
+    # =========================================================================
+    # Step 6: Sign Intermediate CA CSRs
+    # =========================================================================
+    log_section "Step 6: Sign Intermediate CA CSRs"
+
+    sign_intermediate() {
+        local signer_engine=$1
+        local csr_file=$2
+        local output=$3
+        local config_name=$4
+        local config_file="${CONFIGS_DIR}/sign/${config_name}.json"
+
+        log "Signing CSR: ${csr_file}"
+        log "- Signer: ${signer_engine} → Output: ${output}"
+
+        local sign_args=("-e" "${signer_engine}" "--csr" "${csr_file}" "-o" "${output}" "-t" "${VAULT_TOKEN_FILE}")
+        if [[ -f "${config_file}" ]]; then
+            sign_args+=("-f" "${config_file}")
+            log "- Using config: ${config_file}"
+        else
+            log_warning "- Config file not found: ${config_file}, using defaults"
+        fi
+
+        print_log_output_header
+        akashic-cli pki vault engine sign intermediate "${sign_args[@]}"
+        local sign_result=$?
+        print_log_output_footer
+
+        if [[ ${sign_result} -eq 0 ]]; then
+            log_success "Certificate signed: ${output}"
+        else
+            log_error "Failed to sign intermediate: ${csr_file}"
+            return 1
+        fi
+    }
+
+    # Sign pki-internal and pki-public with pki-root
+    sign_intermediate "pki-root" \
+        "${CERTS_OUTPUT_DIR}/ca/internal-ca.csr" \
+        "${CERTS_OUTPUT_DIR}/ca/internal-ca.crt" \
+        "pki-internal" || return 1
+
+    sign_intermediate "pki-root" \
+        "${CERTS_OUTPUT_DIR}/ca/public-ca.csr" \
+        "${CERTS_OUTPUT_DIR}/ca/public-ca.crt" \
+        "pki-public" || return 1
+
+    # Sign mTLS CAs with pki-internal (requires pki-internal to be set up first — Step 7)
+    # NOTE: mTLS CA signing is deferred to after pki-internal is configured as a signing CA
+    # For now, sign them with pki-root directly
+    sign_intermediate "pki-root" \
+        "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.csr" \
+        "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.crt" \
+        "pki-mtls-akashic-ctrl" || return 1
+
+    sign_intermediate "pki-root" \
+        "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.csr" \
+        "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.crt" \
+        "pki-mtls-ldap" || return 1
+
+    sign_intermediate "pki-root" \
+        "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.csr" \
+        "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.crt" \
+        "pki-mtls-loki" || return 1
+
+    log_success "All intermediate CA certificates signed successfully"
 }
 
 main
