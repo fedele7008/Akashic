@@ -2698,3 +2698,96 @@ func (cmdCtx *CliContext) RunPkiVaultEngineRegisterCmd(cmd *cobra.Command, args 
 
 	return nil
 }
+
+func (cmdCtx *CliContext) RunPkiVaultEngineConfigUrlsCmd(cmd *cobra.Command, args []string) error {
+	// Validate required flags
+	engineName := cmdCtx.cfg.GetString("engine.name")
+	if engineName == "" {
+		cmdCtx.printResultTable("CONFIG URLS FAILED", []string{
+			"Engine name is required (--engine / -e)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.LogVerbose("Engine: %s", engineName)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("CONFIG URLS FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Build cascading config: defaults (auto-generated from engine name) → file → inline
+	config := map[string]interface{}{
+		"issuing_certificates":    []string{fmt.Sprintf("http://localhost:8280/v1/%s/ca", engineName)},
+		"crl_distribution_points": []string{fmt.Sprintf("http://localhost:8280/v1/%s/crl", engineName)},
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("CONFIG URLS FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("CONFIG URLS FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("CONFIG URLS FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// Send config/urls request
+	apiPath := fmt.Sprintf("/v1/%s/config/urls", engineName)
+	cmdCtx.LogVerbose("Configuring URLs: POST %s", apiPath)
+
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("CONFIG URLS FAILED", []string{
+			"Failed to send config/urls request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		cmdCtx.printResultTable("CONFIG URLS FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Display result
+	configJSON, _ := json.MarshalIndent(config, "", "  ")
+	cmdCtx.printResultTable("CONFIG URLS SUCCESS", []string{
+		fmt.Sprintf("Engine: %s\nURLs configured:\n%s", engineName, string(configJSON)),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}

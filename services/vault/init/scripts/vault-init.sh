@@ -328,6 +328,38 @@ main() {
     register_cert "pki-mtls-loki" "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.crt" || return 1
 
     log_success "All mTLS CA engines activated"
+
+    # =========================================================================
+    # Step 10: Configure CRL/CA URLs
+    # =========================================================================
+    log_section "Step 10: Configure CRL/CA URLs"
+
+    configure_urls() {
+        local engine=$1
+
+        log "Configuring URLs: ${engine}"
+
+        print_log_output_header
+        akashic-cli pki vault engine config urls -e "${engine}" -t "${VAULT_TOKEN_FILE}"
+        local url_result=$?
+        print_log_output_footer
+
+        if [[ ${url_result} -eq 0 ]]; then
+            log_success "URLs configured: ${engine}"
+        else
+            log_error "Failed to configure URLs: ${engine}"
+            return 1
+        fi
+    }
+
+    configure_urls "pki-root" || return 1
+    configure_urls "pki-internal" || return 1
+    configure_urls "pki-public" || return 1
+    configure_urls "pki-mtls-akashic-ctrl" || return 1
+    configure_urls "pki-mtls-ldap" || return 1
+    configure_urls "pki-mtls-loki" || return 1
+
+    log_success "All CRL/CA URLs configured"
 }
 
 main

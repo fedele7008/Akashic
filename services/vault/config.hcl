@@ -19,6 +19,14 @@ listener "tcp" {
   tls_key_file    = "/vault/certs/vault/vault.key"
 }
 
+# HTTP listener for CRL/CA distribution (unauthenticated, read-only)
+# Exposed on localhost for certificate revocation checks.
+# Users can optionally put nginx in front for custom DNS routing.
+listener "tcp" {
+  address     = "0.0.0.0:8280"
+  tls_disable = true
+}
+
 # Disable mlock in development (Docker containers)
 # For production on Linux, ensure the container has IPC_LOCK capability
 disable_mlock = false

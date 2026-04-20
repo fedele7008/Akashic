@@ -53,6 +53,7 @@ services:
       # Don't expose vault to public
       - "127.0.0.1:${AKASHIC_VAULT_HOST_PORT:-8200}:8200"
       - "127.0.0.1:${AKASHIC_VAULT_CLUSTER_PORT:-8201}:8201"
+      - "127.0.0.1:${AKASHIC_PKI_CRL_PORT:-8280}:8280"
     volumes:
       - vault_file:/vault/file
       - vault_logs:/vault/logs
