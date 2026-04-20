@@ -262,25 +262,72 @@ main() {
         "${CERTS_OUTPUT_DIR}/ca/public-ca.crt" \
         "pki-public" || return 1
 
-    # Sign mTLS CAs with pki-internal (requires pki-internal to be set up first — Step 7)
-    # NOTE: mTLS CA signing is deferred to after pki-internal is configured as a signing CA
-    # For now, sign them with pki-root directly
-    sign_intermediate "pki-root" \
+    log_success "Internal and Public CA certificates signed by Root"
+
+    # =========================================================================
+    # Step 7: Register signed certificates into their engines
+    # =========================================================================
+    log_section "Step 7: Register signed certificates"
+
+    register_cert() {
+        local engine=$1
+        local cert_file=$2
+
+        log "Registering certificate into engine: ${engine}"
+        log "- Certificate: ${cert_file}"
+
+        print_log_output_header
+        akashic-cli pki vault engine register -e "${engine}" --cert "${cert_file}" -t "${VAULT_TOKEN_FILE}"
+        local reg_result=$?
+        print_log_output_footer
+
+        if [[ ${reg_result} -eq 0 ]]; then
+            log_success "Certificate registered: ${engine}"
+        else
+            log_error "Failed to register certificate: ${engine}"
+            return 1
+        fi
+    }
+
+    # Register Internal CA and Public CA (activates them as signing CAs)
+    register_cert "pki-internal" "${CERTS_OUTPUT_DIR}/ca/internal-ca.crt" || return 1
+    register_cert "pki-public" "${CERTS_OUTPUT_DIR}/ca/public-ca.crt" || return 1
+
+    log_success "Internal and Public CA engines activated"
+
+    # =========================================================================
+    # Step 8: Sign mTLS CA CSRs with Internal CA
+    # =========================================================================
+    log_section "Step 8: Sign mTLS CA CSRs with Internal CA"
+
+    # Now that pki-internal is active, use it to sign the mTLS CAs
+    sign_intermediate "pki-internal" \
         "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.csr" \
         "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.crt" \
         "pki-mtls-akashic-ctrl" || return 1
 
-    sign_intermediate "pki-root" \
+    sign_intermediate "pki-internal" \
         "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.csr" \
         "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.crt" \
         "pki-mtls-ldap" || return 1
 
-    sign_intermediate "pki-root" \
+    sign_intermediate "pki-internal" \
         "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.csr" \
         "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.crt" \
         "pki-mtls-loki" || return 1
 
-    log_success "All intermediate CA certificates signed successfully"
+    log_success "All mTLS CA certificates signed by Internal CA"
+
+    # =========================================================================
+    # Step 9: Register mTLS CA certificates
+    # =========================================================================
+    log_section "Step 9: Register mTLS CA certificates"
+
+    register_cert "pki-mtls-akashic-ctrl" "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.crt" || return 1
+    register_cert "pki-mtls-ldap" "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.crt" || return 1
+    register_cert "pki-mtls-loki" "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.crt" || return 1
+
+    log_success "All mTLS CA engines activated"
 }
 
 main

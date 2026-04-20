@@ -231,6 +231,7 @@ const (
 	CsrOutput
 	CsrCommonName
 	SignCsrInput
+	RegisterCertInput
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -428,6 +429,12 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Name:    "csr",
 		Default: string(""),
 		Desc:    "Path to PEM-encoded CSR file to sign",
+	},
+	RegisterCertInput: {
+		Key:     "register.cert_input",
+		Name:    "cert",
+		Default: string(""),
+		Desc:    "Path to PEM-encoded signed certificate file to register",
 	},
 }
 
@@ -2594,6 +2601,99 @@ func (cmdCtx *CliContext) RunPkiVaultEngineSignIntermediateCmd(cmd *cobra.Comman
 				"CSR Input:      %s\n"+
 				"Output:         %s",
 			engineName, signResponse.Data.SerialNumber, ttl, csrInputPath, outputPath),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultEngineRegisterCmd(cmd *cobra.Command, args []string) error {
+	// Validate required flags
+	engineName := cmdCtx.cfg.GetString("engine.name")
+	if engineName == "" {
+		cmdCtx.printResultTable("REGISTER FAILED", []string{
+			"Engine name is required (--engine / -e)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	certInputPath := cmdCtx.cfg.GetString("register.cert_input")
+	if certInputPath == "" {
+		cmdCtx.printResultTable("REGISTER FAILED", []string{
+			"Certificate file is required (--cert)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.LogVerbose("Engine: %s, Certificate: %s", engineName, certInputPath)
+
+	// Read certificate file
+	certBytes, err := os.ReadFile(certInputPath)
+	if err != nil {
+		cmdCtx.printResultTable("REGISTER FAILED", []string{
+			fmt.Sprintf("Failed to read certificate file: %s", certInputPath),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	certPEM := string(certBytes)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("REGISTER FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Send set-signed request
+	apiPath := fmt.Sprintf("/v1/%s/intermediate/set-signed", engineName)
+	cmdCtx.LogVerbose("Registering certificate: POST %s", apiPath)
+
+	payload := map[string]interface{}{
+		"certificate": certPEM,
+	}
+
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, payload, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("REGISTER FAILED", []string{
+			"Failed to send set-signed request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		cmdCtx.printResultTable("REGISTER FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Parse response for issuer info
+	var registerResponse struct {
+		Data struct {
+			ImportedIssuers []string `json:"imported_issuers"`
+			ImportedKeys    []string `json:"imported_keys"`
+			ExistingIssuers []string `json:"existing_issuers"`
+			ExistingKeys    []string `json:"existing_keys"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &registerResponse); err != nil {
+		// Non-fatal — some Vault versions return minimal response for set-signed
+		cmdCtx.LogVerbose("Could not parse detailed response: %v", err)
+	}
+
+	// Display result
+	details := fmt.Sprintf("Engine: %s\nCertificate: %s", engineName, certInputPath)
+	if len(registerResponse.Data.ImportedIssuers) > 0 {
+		details += fmt.Sprintf("\nImported Issuers: %v", registerResponse.Data.ImportedIssuers)
+	}
+	if len(registerResponse.Data.ExistingIssuers) > 0 {
+		details += fmt.Sprintf("\nExisting Issuers: %v", registerResponse.Data.ExistingIssuers)
+	}
+
+	cmdCtx.printResultTable("REGISTER SUCCESS", []string{
+		details,
 	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 
 	return nil
