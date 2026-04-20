@@ -53,6 +53,150 @@ func (ctx *CliContext) LogVerbose(format string, args ...any) {
 	}
 }
 
+func (cmdCtx *CliContext) printResultTable(title string, data []string, footer string, isErr bool) {
+	termWidth, _, err := term.GetSize(int(syscall.Stdout))
+	if err != nil {
+		cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
+		termWidth = 80
+	} else {
+		termWidth -= 8 // Give some space for better readability
+	}
+	r := renderer.NewColorized(
+		renderer.ColorizedConfig{
+			Settings: tw.Settings{
+				Separators: tw.Separators{
+					BetweenRows: tw.On,
+				},
+			},
+			Header: renderer.Tint{
+				FG: renderer.Colors{common.Ternary(isErr, color.FgRed, color.FgGreen), color.Bold},
+				BG: renderer.Colors{},
+			},
+			Column: renderer.Tint{
+				FG: renderer.Colors{common.Ternary(isErr, color.FgMagenta, color.Reset)},
+				BG: renderer.Colors{},
+			},
+			Footer: renderer.Tint{
+				FG: renderer.Colors{common.Ternary(isErr, color.Reset, color.FgCyan)},
+				BG: renderer.Colors{},
+			},
+			Border: renderer.Tint{
+				FG: renderer.Colors{color.FgWhite},
+				BG: renderer.Colors{},
+			},
+			Separator: renderer.Tint{
+				FG: renderer.Colors{color.FgWhite},
+				BG: renderer.Colors{},
+			},
+			Symbols: tw.NewSymbols(tw.StyleRounded),
+		},
+	)
+	rowCfg := tw.CellConfig{
+		Formatting: tw.CellFormatting{
+			AutoWrap: tw.WrapBreak,
+		},
+		Padding: tw.CellPadding{
+			Global: tw.Padding{
+				Right: " ",
+				Left:  " ",
+			},
+		},
+		ColMaxWidths: tw.CellWidth{Global: termWidth},
+	}
+	footerCfg := tw.CellConfig{
+		Formatting: tw.CellFormatting{
+			AutoWrap: tw.WrapBreak,
+		},
+		Padding: tw.CellPadding{
+			Global: tw.Padding{
+				Right: " ",
+				Left:  " ",
+			},
+		},
+		ColMaxWidths: tw.CellWidth{Global: termWidth},
+	}
+	table := tablewriter.NewTable(os.Stdout,
+		tablewriter.WithRenderer(r),
+		tablewriter.WithRowConfig(rowCfg),
+		tablewriter.WithFooterConfig(footerCfg),
+	)
+
+	table.Header(title)
+	table.Bulk(data)
+	table.Footer(footer)
+	table.Render()
+}
+
+// resolveSecret resolves the AKASHIC_SECRET from env, file, or interactive prompt.
+func (cmdCtx *CliContext) resolveSecret() (string, error) {
+	secret := cmdCtx.cfg.GetString("secret")
+	if secret == "" && cmdCtx.cfg.IsSet("secret_path") {
+		cmdCtx.LogVerbose("Secret ENV not found, trying to read from secret_path")
+		s, err := os.ReadFile(cmdCtx.cfg.GetString("secret_path"))
+		if err == nil {
+			secret = strings.TrimSpace(string(s))
+		}
+	}
+	if secret == "" {
+		cmdCtx.LogVerbose("Secret still not found, prompting for passphrase")
+		fmt.Print("Enter passphrase: ")
+		passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
+		fmt.Println()
+		if err != nil {
+			return "", fmt.Errorf("failed to read passphrase: %v", err)
+		}
+		secret = string(passphraseBytes)
+	}
+	return strings.TrimSpace(secret), nil
+}
+
+// resolveVaultToken reads and decrypts a Vault root token from an encrypted file.
+func (cmdCtx *CliContext) resolveVaultToken() (string, error) {
+	rootTokenFile := cmdCtx.cfg.GetString("vault.root_token_file")
+	if rootTokenFile == "" {
+		return "", fmt.Errorf("root token file is required (--root-token / -t)")
+	}
+	tokenFileBytes, err := os.ReadFile(rootTokenFile)
+	if err != nil {
+		return "", fmt.Errorf("failed to read root token file %s: %v", rootTokenFile, err)
+	}
+	tokenFileContents := strings.TrimSpace(string(tokenFileBytes))
+
+	secret, err := cmdCtx.resolveSecret()
+	if err != nil {
+		return "", err
+	}
+
+	_, tokenData, err := ReadSecureToken(tokenFileContents, secret)
+	if err != nil {
+		return "", fmt.Errorf("failed to decrypt root token: %v", err)
+	}
+	cmdCtx.LogVerbose("Root token decrypted successfully")
+	return strings.TrimSpace(string(tokenData)), nil
+}
+
+// newAuthenticatedVaultClient creates an HTTP client configured for authenticated Vault API calls.
+// Returns the client and the decrypted vault token.
+func (cmdCtx *CliContext) newAuthenticatedVaultClient() (*HttpClient, string, error) {
+	address := cmdCtx.cfg.GetString("vault.address")
+	if address == "" {
+		return nil, "", fmt.Errorf("vault address is not specified")
+	}
+	tlsConfig, err := getVaultTlsConfig(cmdCtx)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create TLS configuration: %v", err)
+	}
+	client, err := NewHttpClient(cmdCtx, address, tlsConfig)
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create HTTP client: %v", err)
+	}
+	vaultToken, err := cmdCtx.resolveVaultToken()
+	if err != nil {
+		return nil, "", err
+	}
+	return client, vaultToken, nil
+}
+
 const (
 	SubjectRootToken  = "akashic/vault/root-token"
 	SubjectUnsealKeys = "akashic/vault/unseal-key"
@@ -79,6 +223,10 @@ const (
 	TokenFileOut
 	TokenFileOverride
 	VaultUnsealOnce
+	EngineDescription
+	EngineConfigFile
+	EngineConfig
+	VaultRootTokenFile
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -223,6 +371,34 @@ This flag can be called multiple times. If empty, it will be reading token from 
 			"- No learning or optimization between attempts\n" +
 			"- Best for: Debugging, testing known keys, or simple verification",
 	},
+	EngineDescription: {
+		Key:     "engine.description",
+		Name:    "description",
+		Short:   "d",
+		Default: string(""),
+		Desc:    "Description for the mounted engine",
+	},
+	EngineConfigFile: {
+		Key:     "engine.config_file",
+		Name:    "config-file",
+		Short:   "f",
+		Default: string(""),
+		Desc:    "Path to JSON file containing engine configuration (soft merges with defaults)",
+	},
+	EngineConfig: {
+		Key:     "engine.config",
+		Name:    "config",
+		Default: string(""),
+		Desc:    "Inline JSON string for engine configuration (soft merges over config file and defaults)",
+	},
+	VaultRootTokenFile: {
+		Key:     "vault.root_token_file",
+		Env:     "AKASHIC_VAULT_ROOT_TOKEN_FILE",
+		Name:    "root-token",
+		Short:   "t",
+		Default: string(""),
+		Desc:    "Path to encrypted root token file",
+	},
 }
 
 func FilterCliConfig(flagkeys ...FlagKey) []ConfigEntity[any] {
@@ -289,96 +465,23 @@ func getVaultTlsConfig(cmdCtx *CliContext) (*tls.Config, error) {
 }
 
 func (cmdCtx *CliContext) RunPkiVaultStatusCmd(cmd *cobra.Command, args []string) error {
-	printResult := func(title string, data []string, footer string, isErr bool) {
-		termWith, _, err := term.GetSize(int(syscall.Stdout))
-		if err != nil {
-			cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
-			termWith = 80
-		} else {
-			termWith -= 8 // Give some space for better readability
-		}
-		renderer := renderer.NewColorized(
-			renderer.ColorizedConfig{
-				Settings: tw.Settings{
-					Separators: tw.Separators{
-						BetweenRows: tw.On,
-					},
-				},
-				Header: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.FgRed, color.FgGreen), color.Bold},
-					BG: renderer.Colors{},
-				},
-				Column: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.FgMagenta, color.Reset)},
-					BG: renderer.Colors{},
-				},
-				Footer: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.Reset, color.FgCyan)},
-					BG: renderer.Colors{},
-				},
-				Border: renderer.Tint{
-					FG: renderer.Colors{color.FgWhite},
-					BG: renderer.Colors{},
-				},
-				Separator: renderer.Tint{
-					FG: renderer.Colors{color.FgWhite},
-					BG: renderer.Colors{},
-				},
-				Symbols: tw.NewSymbols(tw.StyleRounded),
-			},
-		)
-		rowCfg := tw.CellConfig{
-			Formatting: tw.CellFormatting{
-				AutoWrap: tw.WrapBreak,
-			},
-			Padding: tw.CellPadding{
-				Global: tw.Padding{
-					Right: " ",
-					Left:  " ",
-				},
-			},
-			ColMaxWidths: tw.CellWidth{Global: termWith},
-		}
-		footerCfg := tw.CellConfig{
-			Formatting: tw.CellFormatting{
-				AutoWrap: tw.WrapBreak,
-			},
-			Padding: tw.CellPadding{
-				Global: tw.Padding{
-					Right: " ",
-					Left:  " ",
-				},
-			},
-			ColMaxWidths: tw.CellWidth{Global: termWith},
-		}
-		table := tablewriter.NewTable(os.Stdout,
-			tablewriter.WithRenderer(renderer),
-			tablewriter.WithRowConfig(rowCfg),
-			tablewriter.WithFooterConfig(footerCfg),
-		)
-
-		table.Header(title)
-		table.Bulk(data)
-		table.Footer(footer)
-		table.Render()
-	}
 	address := cmdCtx.cfg.GetString("vault.address")
 	if address == "" {
-		printResult("VAULT STATUS FAILED", []string{
+		cmdCtx.printResultTable("VAULT STATUS FAILED", []string{
 			"Vault address is not specified",
 		}, "", true)
 		os.Exit(1)
 	}
 	tlsConfig, err := getVaultTlsConfig(cmdCtx)
 	if err != nil {
-		printResult("VAULT STATUS FAILED", []string{
+		cmdCtx.printResultTable("VAULT STATUS FAILED", []string{
 			"Failed to create TLS configuration",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	client, err := NewHttpClient(cmdCtx, address, tlsConfig)
 	if err != nil {
-		printResult("VAULT STATUS FAILED", []string{
+		cmdCtx.printResultTable("VAULT STATUS FAILED", []string{
 			"Failed to create HTTP client",
 		}, err.Error(), true)
 		os.Exit(1)
@@ -386,7 +489,7 @@ func (cmdCtx *CliContext) RunPkiVaultStatusCmd(cmd *cobra.Command, args []string
 
 	resp, body, err := client.SendRequest(http.MethodGet, "/v1/sys/health", nil)
 	if err != nil {
-		printResult("VAULT STATUS FAILED", []string{
+		cmdCtx.printResultTable("VAULT STATUS FAILED", []string{
 			"Failed to get Vault status",
 		}, err.Error(), true)
 		os.Exit(1)
@@ -394,14 +497,14 @@ func (cmdCtx *CliContext) RunPkiVaultStatusCmd(cmd *cobra.Command, args []string
 
 	output, err := common.ConvJsonToYaml(body)
 	if err != nil {
-		printResult("VAULT STATUS FAILED", []string{
+		cmdCtx.printResultTable("VAULT STATUS FAILED", []string{
 			"failed to convert JSON to YAML",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 
 	output = strings.TrimSuffix(output, "\n")
-	printResult("VAULT STATUS RESULT", []string{
+	cmdCtx.printResultTable("VAULT STATUS RESULT", []string{
 		output,
 	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 
@@ -409,103 +512,30 @@ func (cmdCtx *CliContext) RunPkiVaultStatusCmd(cmd *cobra.Command, args []string
 }
 
 func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) error {
-	printResult := func(title string, data []string, footer string, isErr bool) {
-		termWidth, _, err := term.GetSize(int(syscall.Stdout))
-		if err != nil {
-			cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
-			termWidth = 80
-		} else {
-			termWidth -= 8 // Give some space for better readability
-		}
-		renderer := renderer.NewColorized(
-			renderer.ColorizedConfig{
-				Settings: tw.Settings{
-					Separators: tw.Separators{
-						BetweenRows: tw.On,
-					},
-				},
-				Header: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.FgRed, color.FgGreen), color.Bold},
-					BG: renderer.Colors{},
-				},
-				Column: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.FgMagenta, color.Reset)},
-					BG: renderer.Colors{},
-				},
-				Footer: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.Reset, color.FgCyan)},
-					BG: renderer.Colors{},
-				},
-				Border: renderer.Tint{
-					FG: renderer.Colors{color.FgWhite},
-					BG: renderer.Colors{},
-				},
-				Separator: renderer.Tint{
-					FG: renderer.Colors{color.FgWhite},
-					BG: renderer.Colors{},
-				},
-				Symbols: tw.NewSymbols(tw.StyleRounded),
-			},
-		)
-		rowCfg := tw.CellConfig{
-			Formatting: tw.CellFormatting{
-				AutoWrap: tw.WrapBreak,
-			},
-			Padding: tw.CellPadding{
-				Global: tw.Padding{
-					Right: " ",
-					Left:  " ",
-				},
-			},
-			ColMaxWidths: tw.CellWidth{Global: termWidth},
-		}
-		footerCfg := tw.CellConfig{
-			Formatting: tw.CellFormatting{
-				AutoWrap: tw.WrapBreak,
-			},
-			Padding: tw.CellPadding{
-				Global: tw.Padding{
-					Right: " ",
-					Left:  " ",
-				},
-			},
-			ColMaxWidths: tw.CellWidth{Global: termWidth},
-		}
-		table := tablewriter.NewTable(os.Stdout,
-			tablewriter.WithRenderer(renderer),
-			tablewriter.WithRowConfig(rowCfg),
-			tablewriter.WithFooterConfig(footerCfg),
-		)
-
-		table.Header(title)
-		table.Bulk(data)
-		table.Footer(footer)
-		table.Render()
-	}
 	address := cmdCtx.cfg.GetString("vault.address")
 	if address == "" {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Vault address is not specified",
 		}, "", true)
 		os.Exit(1)
 	}
 	tlsConfig, err := getVaultTlsConfig(cmdCtx)
 	if err != nil {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Failed to create TLS configuration",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	getClient, err := NewHttpClient(cmdCtx, address, tlsConfig)
 	if err != nil {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Failed to create HTTP client",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	resp, body, err := getClient.SendRequest(http.MethodGet, "/v1/sys/init", nil)
 	if err != nil || resp.StatusCode != http.StatusOK {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Something went wrong while sending init request",
 		}, err.Error(), true)
 		os.Exit(1)
@@ -516,13 +546,13 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 	initResp := &initGetResponse{}
 	err = json.Unmarshal(body, initResp)
 	if err != nil {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Unable to parse init response",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	if initResp.Initialized {
-		printResult("VAULT INIT SUCCESS", []string{
+		cmdCtx.printResultTable("VAULT INIT SUCCESS", []string{
 			"Vault is already initialized!",
 		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 		os.Exit(0)
@@ -530,14 +560,14 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 	override := cmdCtx.cfg.GetBool("vault.init.file_override")
 	numKey := cmdCtx.cfg.GetInt("vault.keys")
 	if numKey < 1 {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Wrong number of keys specified",
 		}, "number of keys must be greater than 0", true)
 		os.Exit(1)
 	}
 	numThreshold := cmdCtx.cfg.GetInt("vault.thresholds")
 	if numThreshold < 1 || numThreshold > numKey {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Wrong number of key threshold specified",
 		}, "number of thresholds must be between 1 and number of keys", true)
 		os.Exit(1)
@@ -556,12 +586,12 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 				return nil
 			}
 		} else if err != nil {
-			printResult("VAULT INIT FAILED", []string{
+			cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 				"Failed to get key output directory info",
 			}, err.Error(), true)
 			os.Exit(1)
 		} else if !info.IsDir() {
-			printResult("VAULT INIT FAILED", []string{
+			cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 				"Something went wrong while preparing key output directory",
 			}, "key output directory is not a directory: "+cleanPath, true)
 			os.Exit(1)
@@ -591,7 +621,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 			fullPath := filepath.Join(keyOutDir, fileName)
 			fullPath, err := filepath.Abs(fullPath)
 			if err != nil {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					fmt.Sprintf("Failed to get absolute path of key output file \"%s\"", fullPath),
 				}, err.Error(), true)
 				os.Exit(1)
@@ -606,13 +636,13 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 		info, err := os.Stat(file)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					"Failed to get key output file info",
 				}, err.Error(), true)
 				os.Exit(1)
 			}
 		} else if info.IsDir() {
-			printResult("VAULT INIT FAILED", []string{
+			cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 				"Something went wrong while verifying key file",
 			}, fmt.Sprintf("key output file is a directory: %s", file), true)
 			os.Exit(1)
@@ -659,13 +689,13 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 		info, err := os.Stat(rootFile)
 		if err != nil {
 			if !os.IsNotExist(err) {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					"Failed to get root output directory info",
 				}, err.Error(), true)
 				os.Exit(1)
 			}
 		} else if info.IsDir() {
-			printResult("VAULT INIT FAILED", []string{
+			cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 				"Something went wrong while verifying root output file",
 			}, fmt.Sprintf("root output file should not be a directory: %s", rootFile), true)
 			os.Exit(1)
@@ -673,7 +703,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 			// confirm overwrite
 			absPath, err := filepath.Abs(rootFile)
 			if err != nil {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					fmt.Sprintf("Failed to get absolute path of root output file \"%s\"", rootFile),
 				}, err.Error(), true)
 				os.Exit(1)
@@ -708,7 +738,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 			passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
 			fmt.Println()
 			if err != nil {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					"Something went wrong while reading passphrase",
 				}, err.Error(), true)
 				os.Exit(1)
@@ -719,13 +749,13 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 			confirmBytes, err := term.ReadPassword(int(syscall.Stdin))
 			fmt.Println()
 			if err != nil {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					"Something went wrong while reading passphrase confirmation",
 				}, err.Error(), true)
 				os.Exit(1)
 			}
 			if string(confirmBytes) != secret {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					"Passphrases do not match",
 				}, "", true)
 				os.Exit(1)
@@ -744,7 +774,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 	}
 	postClient, err := NewHttpClient(cmdCtx, address, tlsConfig)
 	if err != nil {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Failed to create HTTP client",
 		}, err.Error(), true)
 		os.Exit(1)
@@ -752,7 +782,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 
 	resp, body, err = postClient.SendRequest(http.MethodPost, "/v1/sys/init", jsonPayload)
 	if err != nil {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Failed to send initialization request",
 		}, err.Error(), true)
 		os.Exit(1)
@@ -766,14 +796,14 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 	initResponse := InitResponse{}
 	err = json.Unmarshal(body, &initResponse)
 	if err != nil {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Something went wrong while parsing initialization response",
 			"You might need to reset the vault data volume and try again.",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	if len(initResponse.Keys) != numKey {
-		printResult("VAULT INIT FAILED", []string{
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Assertion failed",
 		}, fmt.Sprintf("expected %d keys, got %d", numKey, len(initResponse.Keys)), true)
 		os.Exit(1)
@@ -803,7 +833,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 				Cnt: TEXT,
 			})
 			if err != nil {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					"Something went wrong while issuing secure token",
 					"You might need to reset the vault data volume and try again.",
 				}, err.Error(), true)
@@ -814,7 +844,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 
 		if mkdirCallback != nil {
 			if err := mkdirCallback(); err != nil {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					"Failed to create key output directory",
 					"You might need to reset the vault data volume and try again.",
 				}, err.Error(), true)
@@ -840,7 +870,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 			fileName := keyFiles[i]
 			err := mkTokenFile(fileName, keyEncData[i])
 			if err != nil {
-				printResult("VAULT INIT FAILED", []string{
+				cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 					fmt.Sprintf("Failed to create secure token file \"%s\"", fileName),
 					"You might need to reset the vault data volume and try again.",
 				}, err.Error(), true)
@@ -865,21 +895,21 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 			Cnt: TEXT,
 		})
 		if err != nil {
-			printResult("VAULT INIT FAILED", []string{
+			cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 				"Something went wrong while issuing secure token",
 				"You might need to reset the vault data volume and try again.",
 			}, err.Error(), true)
 			os.Exit(1)
 		}
 		if mkrootCallback == nil {
-			printResult("VAULT INIT FAILED", []string{
+			cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 				"Assertion failed",
 				"You might need to reset the vault data volume and try again.",
 			}, "root secure token file creation callback is missing", true)
 			os.Exit(1)
 		}
 		if err := mkrootCallback([]byte(secureRootToken)); err != nil {
-			printResult("VAULT INIT FAILED", []string{
+			cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 				"Something went wrong while creating root secure token file",
 				"You might need to reset the vault data volume and try again.",
 			}, err.Error(), true)
@@ -889,7 +919,7 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 	}
 	reportBody = append(reportBody, rootStr)
 
-	printResult("VAULT INIT RESULT", reportBody, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+	cmdCtx.printResultTable("VAULT INIT RESULT", reportBody, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 
 	return nil
 }
@@ -898,28 +928,13 @@ func (cmdCtx *CliContext) RunTokenInspectCmd(cmd *cobra.Command, args []string) 
 	min := cmdCtx.cfg.GetBool("min_out")
 
 	// Get secret passphrase to decrypt token
-	secret := cmdCtx.cfg.GetString("secret")
-	if secret == "" && cmdCtx.cfg.IsSet("secret_path") {
-		cmdCtx.LogVerbose("Secret ENV not found, trying to read from secret_path")
-		s, err := os.ReadFile(cmdCtx.cfg.GetString("secret_path"))
-		if err == nil {
-			secret = strings.TrimSpace(string(s))
+	secret, err := cmdCtx.resolveSecret()
+	if err != nil {
+		if min {
+			os.Exit(1)
 		}
+		return err
 	}
-	if secret == "" {
-		cmdCtx.LogVerbose("Secret still not found, prompting for passphrase")
-		fmt.Print("Enter passphrase: ")
-		passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
-		fmt.Println()
-		if err != nil {
-			if min {
-				os.Exit(1)
-			}
-			return fmt.Errorf("failed to read passphrase: %v", err)
-		}
-		secret = string(passphraseBytes)
-	}
-	secret = strings.TrimSpace(secret)
 
 	// Get all file inputs
 	inFiles := cmdCtx.cfg.GetStringSlice("token.ins")
@@ -1213,79 +1228,6 @@ func (cmdCtx *CliContext) RunTokenInspectCmd(cmd *cobra.Command, args []string) 
 }
 func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string) error {
 	var err error
-	printResult := func(title string, data []string, footer string, isErr bool) {
-		termWidth, _, err := term.GetSize(int(syscall.Stdout))
-		if err != nil {
-			cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
-			termWidth = 80
-		} else {
-			termWidth -= 8 // Give some space for better readability
-		}
-		renderer := renderer.NewColorized(
-			renderer.ColorizedConfig{
-				Settings: tw.Settings{
-					Separators: tw.Separators{
-						BetweenRows: tw.On,
-					},
-				},
-				Header: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.FgRed, color.FgGreen), color.Bold},
-					BG: renderer.Colors{},
-				},
-				Column: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.Reset, color.Reset)},
-					BG: renderer.Colors{},
-				},
-				Footer: renderer.Tint{
-					FG: renderer.Colors{common.Ternary(isErr, color.Reset, color.FgCyan)},
-					BG: renderer.Colors{},
-				},
-				Border: renderer.Tint{
-					FG: renderer.Colors{color.FgWhite},
-					BG: renderer.Colors{},
-				},
-				Separator: renderer.Tint{
-					FG: renderer.Colors{color.FgWhite},
-					BG: renderer.Colors{},
-				},
-				Symbols: tw.NewSymbols(tw.StyleRounded),
-			},
-		)
-		rowCfg := tw.CellConfig{
-			Formatting: tw.CellFormatting{
-				AutoWrap: tw.WrapBreak,
-			},
-			Padding: tw.CellPadding{
-				Global: tw.Padding{
-					Right: " ",
-					Left:  " ",
-				},
-			},
-			ColMaxWidths: tw.CellWidth{Global: termWidth},
-		}
-		footerCfg := tw.CellConfig{
-			Formatting: tw.CellFormatting{
-				AutoWrap: tw.WrapBreak,
-			},
-			Padding: tw.CellPadding{
-				Global: tw.Padding{
-					Right: " ",
-					Left:  " ",
-				},
-			},
-			ColMaxWidths: tw.CellWidth{Global: termWidth},
-		}
-		table := tablewriter.NewTable(os.Stdout,
-			tablewriter.WithRenderer(renderer),
-			tablewriter.WithRowConfig(rowCfg),
-			tablewriter.WithFooterConfig(footerCfg),
-		)
-
-		table.Header(title)
-		table.Bulk(data)
-		table.Footer(footer)
-		table.Render()
-	}
 	const (
 		resultTitle       = "VAULT UNSEAL RESULT"
 		failedTitle       = "VAULT UNSEAL FAILED"
@@ -1348,40 +1290,40 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 	}
 	address := cmdCtx.cfg.GetString("vault.address")
 	if address == "" {
-		printResult(failedTitle, []string{
+		cmdCtx.printResultTable(failedTitle, []string{
 			"Vault address is not specified",
 		}, "", true)
 		os.Exit(1)
 	}
 	tlsConfig, err := getVaultTlsConfig(cmdCtx)
 	if err != nil {
-		printResult(failedTitle, []string{
+		cmdCtx.printResultTable(failedTitle, []string{
 			"Failed to create TLS configuration",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	client, err := NewHttpClient(cmdCtx, address, tlsConfig)
 	if err != nil {
-		printResult(failedTitle, []string{
+		cmdCtx.printResultTable(failedTitle, []string{
 			"Failed to create HTTP client",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	_, status, err := getUnsealStatus(client)
 	if err != nil {
-		printResult(failedTitle, []string{
+		cmdCtx.printResultTable(failedTitle, []string{
 			"Failed to get vault seal status",
 		}, err.Error(), true)
 		os.Exit(1)
 	}
 	if !status.Initialized {
-		printResult(failedTitle, []string{
+		cmdCtx.printResultTable(failedTitle, []string{
 			"Vault is not initialized",
 		}, "", true)
 		os.Exit(1)
 	}
 	if !status.Sealed {
-		printResult(resultTitle, []string{
+		cmdCtx.printResultTable(resultTitle, []string{
 			"Vault is already unsealed",
 		}, "", false)
 		return nil
@@ -1434,7 +1376,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 				} else {
 					msg = fmt.Sprintf("Failed to glob file pattern \"%v\": %v", f, err)
 				}
-				printResult(failedTitle, []string{
+				cmdCtx.printResultTable(failedTitle, []string{
 					msg,
 				}, err.Error(), true)
 				os.Exit(1)
@@ -1446,7 +1388,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 					}
 					addFileInput(file)
 				} else {
-					printResult(failedTitle, []string{
+					cmdCtx.printResultTable(failedTitle, []string{
 						fmt.Sprintf("Failed to access file: %v", file),
 					}, err.Error(), true)
 					os.Exit(1)
@@ -1463,7 +1405,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 			cmdCtx.LogVerbose("Secret ENV is not found, trying to read from secret path instead: %s", path)
 			s, err := os.ReadFile(path)
 			if err != nil {
-				printResult(failedTitle, []string{
+				cmdCtx.printResultTable(failedTitle, []string{
 					fmt.Sprintf("Failed to read secret from file: %v", path),
 				}, err.Error(), true)
 				os.Exit(1)
@@ -1476,7 +1418,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 			passphraseBytes, err := term.ReadPassword(int(syscall.Stdin))
 			fmt.Println()
 			if err != nil {
-				printResult(failedTitle, []string{
+				cmdCtx.printResultTable(failedTitle, []string{
 					"Failed to read passphrase",
 				}, err.Error(), true)
 				os.Exit(1)
@@ -1524,7 +1466,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 	}
 
 	if len(unsealKeys) == 0 {
-		printResult(failedTitle, []string{
+		cmdCtx.printResultTable(failedTitle, []string{
 			"No valid unseal key found",
 		}, "", true)
 		os.Exit(1)
@@ -1666,7 +1608,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 			data = append(data, detail)
 		}
 		isErr := result == resultFailed || result == resultUnknown
-		printResult(resultTblTitle, data, progressFooter, isErr)
+		cmdCtx.printResultTable(resultTblTitle, data, progressFooter, isErr)
 		return nil
 	}
 
@@ -1686,7 +1628,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 		cmdCtx.LogVerbose("Resetting the progress...")
 		_, rspBody, err := sendResetRequest(client)
 		if err != nil {
-			printResult(failedTitle, []string{
+			cmdCtx.printResultTable(failedTitle, []string{
 				"Failed to reset Vault",
 			}, err.Error(), true)
 			os.Exit(1)
@@ -1701,13 +1643,13 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 			for _, msg := range errMsgs {
 				footer += fmt.Sprintf("- %s\n", color.New(color.FgMagenta).Sprint(msg))
 			}
-			printResult(failedTitle, []string{
+			cmdCtx.printResultTable(failedTitle, []string{
 				"Failed to reset Vault",
 			}, footer, true)
 			os.Exit(1)
 		}
 		if !rspBody.Sealed {
-			printResult(resultTitle, []string{
+			cmdCtx.printResultTable(resultTitle, []string{
 				"Vault is already unsealed",
 			}, "", false)
 			return nil
@@ -1790,7 +1732,7 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 		cmdCtx.LogVerbose("Resetting the progress...")
 		_, rspBody, err := sendResetRequest(client)
 		if err != nil {
-			printResult(failedTitle, []string{
+			cmdCtx.printResultTable(failedTitle, []string{
 				"Failed to reset Vault",
 			}, err.Error(), true)
 			os.Exit(1)
@@ -1805,13 +1747,13 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 			for _, msg := range errMsgs {
 				footer += fmt.Sprintf("- %s\n", color.New(color.FgMagenta).Sprint(msg))
 			}
-			printResult(failedTitle, []string{
+			cmdCtx.printResultTable(failedTitle, []string{
 				"Failed to reset Vault",
 			}, footer, true)
 			os.Exit(1)
 		}
 		if !rspBody.Sealed {
-			printResult(resultTitle, []string{
+			cmdCtx.printResultTable(resultTitle, []string{
 				"Vault is already unsealed",
 			}, "", false)
 			return nil
@@ -1944,6 +1886,150 @@ func (cmdCtx *CliContext) RunPkiVaultUnsealCmd(cmd *cobra.Command, args []string
 		resultTblFooter = color.New(color.FgRed, color.Bold).Sprint("Failed to unseal vault - no valid key combination found")
 	}
 
-	printResult(resultTblTitle, resultTblBody, resultTblFooter, result == resultFailed || result == resultUnknown)
+	cmdCtx.printResultTable(resultTblTitle, resultTblBody, resultTblFooter, result == resultFailed || result == resultUnknown)
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultEngineMountCmd(cmd *cobra.Command, args []string) error {
+	// Parse mount path
+	mountPath := strings.Trim(args[0], "/")
+	if mountPath == "" {
+		cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+			"Mount path is required",
+		}, "", true)
+		os.Exit(1)
+	}
+	cmdCtx.LogVerbose("Mount path: %s", mountPath)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Check if engine is already mounted
+	resp, body, err := client.SendRequestWithToken(http.MethodGet, "/v1/sys/mounts", nil, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+			"Failed to check existing mounts",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+			"Failed to list existing mounts",
+		}, fmt.Sprintf("Status code: %d\n%s", resp.StatusCode, string(body)), true)
+		os.Exit(1)
+	}
+
+	var mountsResponse map[string]json.RawMessage
+	if err := json.Unmarshal(body, &mountsResponse); err != nil {
+		cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+			"Failed to parse mounts response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	// Vault may wrap mounts in a "data" key or return them at top level
+	mountsData := mountsResponse
+	if dataRaw, ok := mountsResponse["data"]; ok {
+		var dataMounts map[string]json.RawMessage
+		if json.Unmarshal(dataRaw, &dataMounts) == nil {
+			mountsData = dataMounts
+		}
+	}
+
+	lookupKey := mountPath + "/"
+	if _, exists := mountsData[lookupKey]; exists {
+		cmdCtx.printResultTable("ENGINE MOUNT SUCCESS", []string{
+			fmt.Sprintf("PKI engine already mounted at: %s", mountPath),
+		}, "Already mounted", false)
+		return nil
+	}
+
+	// Build cascading config: defaults → config file → inline config
+	config := map[string]interface{}{
+		"max_lease_ttl": "8760h",
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// Build mount request
+	description := cmdCtx.cfg.GetString("engine.description")
+	type MountRequest struct {
+		Type        string                 `json:"type"`
+		Description string                 `json:"description,omitempty"`
+		Config      map[string]interface{} `json:"config"`
+	}
+	payload := MountRequest{
+		Type:        "pki",
+		Description: description,
+		Config:      config,
+	}
+
+	cmdCtx.LogVerbose("Mounting PKI engine at: %s", mountPath)
+	resp, body, err = client.SendRequestWithToken(http.MethodPost, "/v1/sys/mounts/"+mountPath, payload, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+			"Failed to send mount request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("ENGINE MOUNT FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	descInfo := ""
+	if description != "" {
+		descInfo = fmt.Sprintf("\nDescription: %s", description)
+	}
+	configJSON, _ := json.MarshalIndent(config, "", "  ")
+	cmdCtx.printResultTable("ENGINE MOUNT SUCCESS", []string{
+		fmt.Sprintf("PKI engine mounted at: %s%s\nConfig: %s", mountPath, descInfo, string(configJSON)),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
 	return nil
 }

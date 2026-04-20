@@ -69,11 +69,15 @@ services:
       start_period: 10s
 
   # ═══════════════════════════════════════════════════════════════════════════════
-  # vault-init: Vault Initialization (STEP 3/3)
+  # vault-init: Vault Initialization & PKI Engine Setup (STEP 3/3)
   # ═══════════════════════════════════════════════════════════════════════════════
-  # Initializes Vault using Shamir's Secret Sharing (5 keys, 3 threshold).
-  # Encrypts root token and unseal keys with AKASHIC_SECRET (AES-256-GCM + HMAC).
+  # Three-step process:
+  #   1. Initialize Vault (Shamir 5/3, AES-256-GCM encrypted keys)
+  #   2. Unseal Vault (SAT-based intelligent key discovery)
+  #   3. Mount PKI engines (pki-root, pki-internal, pki-public, pki-mtls-*)
+  #
   # Output: ./.secrets/vault/ (root-token.enc + keys/vault-key-*.enc)
+  # Engine configs: ./services/vault/init/configs/*.json
   #
   # CRITICAL REQUIREMENTS:
   #   1. AKASHIC_SECRET must be set in .env (32+ chars, never commit)
@@ -81,10 +85,10 @@ services:
   #   3. Loss of AKASHIC_SECRET = cannot decrypt tokens = no vault access
   #
   # Decrypt tokens (run from host after compiling akashic-cli):
-  #   akashic-cli token inspect ./.secrets/vault/root-token.enc
+  #   akashic-cli pki token inspect -i ./.secrets/vault/root-token.enc
   #
-  # Idempotent: Skips if already initialized
-  # Manual control available: Comment out this service, run 'akashic-cli pki vault init' manually
+  # Idempotent: Skips already-initialized/unsealed/mounted steps
+  # Manual control: Comment out this service, run akashic-cli commands manually
   # Troubleshooting: docker compose logs vault-init
   vault-init:
     build:
@@ -98,6 +102,7 @@ services:
       AKASHIC_VAULT_ADDRESS: "https://vault:8200"
       AKASHIC_VAULT_TLS_CACERT: "/certs/vault/root-ca.crt"
       CERTS_OUTPUT_DIR: "/certs"
+      CONFIGS_DIR: "/configs"
       VAULT_TOKEN_FILE: "/vault/token/vault/root-token.enc"
       VAULT_KEY_DIR: "/vault/token/vault/keys"
       TZ: ${AKASHIC_TZ:-UTC}
@@ -105,6 +110,7 @@ services:
       - secrets:/vault/token
       - certs:/certs
       - ./services/vault/init/scripts:/scripts:ro
+      - ./services/vault/init/configs:/configs:ro
     entrypoint: ["/bin/bash"]
     command: ["/scripts/vault-init.sh"]
     depends_on:

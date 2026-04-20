@@ -47,13 +47,13 @@ type APIResponse struct {
 	Data    []byte
 }
 
-func (c *HttpClient) SendRequest(method, path string, body any) (*http.Response, []byte, error) {
+func (c *HttpClient) buildRequest(method, path string, body any) (*http.Request, error) {
 	var reqBody io.Reader
 	c.logVerbose("Request: %s %s", method, path)
 	if body != nil {
 		jsonBody, err := json.Marshal(body)
 		if err != nil {
-			return nil, nil, fmt.Errorf("failed to marshal request body: %v", err)
+			return nil, fmt.Errorf("failed to marshal request body: %v", err)
 		}
 		reqBody = bytes.NewReader(jsonBody)
 		c.logVerbose("Body: %s", string(jsonBody))
@@ -64,7 +64,7 @@ func (c *HttpClient) SendRequest(method, path string, body any) (*http.Response,
 	url := c.baseURL + path
 	req, err := http.NewRequestWithContext(c.cliCtx.ctx, method, url, reqBody)
 	if err != nil {
-		return nil, nil, fmt.Errorf("failed to create request: %v", err)
+		return nil, fmt.Errorf("failed to create request: %v", err)
 	}
 
 	if body != nil {
@@ -72,6 +72,10 @@ func (c *HttpClient) SendRequest(method, path string, body any) (*http.Response,
 	}
 	req.Header.Set("Accept", "application/json")
 
+	return req, nil
+}
+
+func (c *HttpClient) doRequest(req *http.Request) (*http.Response, []byte, error) {
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, nil, fmt.Errorf("request failed: %v", err)
@@ -87,4 +91,23 @@ func (c *HttpClient) SendRequest(method, path string, body any) (*http.Response,
 	c.logVerbose("Response Body: %s", string(respBody))
 
 	return resp, respBody, nil
+}
+
+func (c *HttpClient) SendRequest(method, path string, body any) (*http.Response, []byte, error) {
+	req, err := c.buildRequest(method, path, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	return c.doRequest(req)
+}
+
+func (c *HttpClient) SendRequestWithToken(method, path string, body any, token string) (*http.Response, []byte, error) {
+	req, err := c.buildRequest(method, path, body)
+	if err != nil {
+		return nil, nil, err
+	}
+	if token != "" {
+		req.Header.Set("X-Vault-Token", token)
+	}
+	return c.doRequest(req)
 }

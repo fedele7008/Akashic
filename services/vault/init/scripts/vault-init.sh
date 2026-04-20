@@ -11,18 +11,7 @@ AKASHIC_VAULT_TLS_CACERT="${AKASHIC_VAULT_TLS_CACERT:-/certs/vault/root-ca.crt}"
 CERTS_OUTPUT_DIR="${CERTS_OUTPUT_DIR:-/certs}"
 VAULT_TOKEN_FILE="${VAULT_TOKEN_FILE:-/vault/token/vault/root-token.enc}"
 VAULT_KEY_DIR="${VAULT_KEY_DIR:-/vault/token/vault/keys}"
-
-# PKI Configuration
-ROOT_CA_TTL="87600h"           # 10 years
-INTERMEDIATE_CA_TTL="43800h"   # 5 years
-MTLS_CA_TTL="43800h"           # 5 years
-SERVER_CERT_TTL="8760h"        # 1 year
-CLIENT_CERT_TTL="8760h"        # 1 year
-
-# Organization details
-ORG_NAME="Akashic"
-ORG_UNIT="Security"
-COUNTRY="US"
+CONFIGS_DIR="${CONFIGS_DIR:-/configs}"
 
 source "${SCRIPT_DIR}/util.sh"
 
@@ -36,7 +25,9 @@ main() {
         return 1
     fi
 
-    # Run vault initialization
+    # =========================================================================
+    # Step 1: Vault initialization
+    # =========================================================================
     log_section "Step 1: Vault initialization"
 
     # Check if vault is already initialized
@@ -66,6 +57,11 @@ main() {
         print_log_output_footer
     fi
 
+    # =========================================================================
+    # Step 2: Vault unseal
+    # =========================================================================
+    log_section "Step 2: Vault unseal"
+
     # Check if vault is already unsealed
     status_response=$(akashic-cli pki vault status || echo "{}") > /dev/null 2>&1
     echo "$status_response" | grep -q 'sealed: false'
@@ -92,7 +88,54 @@ main() {
     akashic-cli pki vault status
     print_log_output_footer
 
-    log_success "Vault initialization successful"
+    # =========================================================================
+    # Step 3: Mount PKI secret engines
+    # =========================================================================
+    log_section "Step 3: Mount PKI secret engines"
+
+    mount_engine() {
+        local path=$1
+        local description=$2
+        local config_file="${CONFIGS_DIR}/${path}.json"
+
+        log "Mounting PKI engine: ${path}"
+
+        local mount_args=("-t" "${VAULT_TOKEN_FILE}" "-d" "${description}")
+        if [[ -f "${config_file}" ]]; then
+            mount_args+=("-f" "${config_file}")
+            log "Using config: ${config_file}"
+        else
+            log_warning "Config file not found: ${config_file}, using defaults"
+        fi
+
+        print_log_output_header
+        akashic-cli pki vault engine mount "${path}" "${mount_args[@]}"
+        local mount_result=$?
+        print_log_output_footer
+
+        if [[ ${mount_result} -eq 0 ]]; then
+            log_success "PKI engine mounted: ${path}"
+        else
+            log_error "Failed to mount PKI engine: ${path}"
+            return 1
+        fi
+    }
+
+    # Root CA — offline anchor, 10-year TTL
+    mount_engine "pki-root" "Akashic Root CA" || return 1
+
+    # Internal CA — subordinate CA for non-public services, 5-year TTL
+    mount_engine "pki-internal" "Akashic Internal CA" || return 1
+
+    # Public CA — dev CA for browser-facing certs, 5-year TTL
+    mount_engine "pki-public" "Akashic Public CA (Development)" || return 1
+
+    # mTLS CAs — per-service isolation, 5-year TTL
+    mount_engine "pki-mtls-akashic-ctrl" "Akashic Control Plane mTLS CA" || return 1
+    mount_engine "pki-mtls-ldap" "LDAP mTLS CA" || return 1
+    mount_engine "pki-mtls-loki" "Loki mTLS CA" || return 1
+
+    log_success "All PKI engines mounted successfully"
 }
 
 main
