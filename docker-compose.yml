@@ -53,7 +53,6 @@ services:
       # Don't expose vault to public
       - "127.0.0.1:${AKASHIC_VAULT_HOST_PORT:-8200}:8200"
       - "127.0.0.1:${AKASHIC_VAULT_CLUSTER_PORT:-8201}:8201"
-      - "127.0.0.1:${AKASHIC_PKI_CRL_PORT:-8280}:8280"
     volumes:
       - vault_file:/vault/file
       - vault_logs:/vault/logs
@@ -104,6 +103,7 @@ services:
       AKASHIC_VAULT_TLS_CACERT: "/certs/vault/root-ca.crt"
       CERTS_OUTPUT_DIR: "/certs"
       CONFIGS_DIR: "/configs"
+      AKASHIC_PKI_CRL_BASE_URL: "${AKASHIC_PKI_CRL_BASE_URL:-http://localhost:8280}"
       VAULT_TOKEN_FILE: "/vault/token/vault/root-token.enc"
       VAULT_KEY_DIR: "/vault/token/vault/keys"
       TZ: ${AKASHIC_TZ:-UTC}
@@ -117,6 +117,30 @@ services:
     depends_on:
       vault:
         condition: service_healthy
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # proxy: Akashic Reverse Proxy (nginx)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # General-purpose nginx reverse proxy for the Akashic project.
+  # Each port maps to a different service:
+  #
+  # Port 8280 — PKI: CRL/CA Distribution (Vault)
+  #   GET /v1/{engine}/crl      → Certificate Revocation List (DER)
+  #   GET /v1/{engine}/crl/pem  → Certificate Revocation List (PEM)
+  #   GET /v1/{engine}/ca       → CA Certificate (DER)
+  #   GET /v1/{engine}/ca/pem   → CA Certificate (PEM)
+  #   All other paths           → 403 Forbidden
+  #
+  # Add new server blocks in nginx.conf and expose ports here as services grow.
+  proxy:
+    build: ./services/proxy
+    container_name: akashic-proxy
+    restart: unless-stopped
+    depends_on:
+      vault:
+        condition: service_healthy
+    ports:
+      - "${AKASHIC_NGINX_PORT:-8280}:8280"
 
 #   postgres:
 #     image: postgres:16-alpine

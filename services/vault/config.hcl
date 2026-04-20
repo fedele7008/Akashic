@@ -23,7 +23,7 @@ listener "tcp" {
 # Exposed on localhost for certificate revocation checks.
 # Users can optionally put nginx in front for custom DNS routing.
 listener "tcp" {
-  address     = "0.0.0.0:8280"
+  address     = "0.0.0.0:8281"
   tls_disable = true
 }
 

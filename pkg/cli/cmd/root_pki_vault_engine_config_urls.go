@@ -32,6 +32,7 @@ Configuration is merged from three sources (lowest to highest priority):
 		core.EngineConfigFile,
 		core.EngineConfig,
 		core.EngineName,
+		core.PkiCrlBaseUrl,
 	)...)
 
 	return cmd

@@ -232,6 +232,7 @@ const (
 	CsrCommonName
 	SignCsrInput
 	RegisterCertInput
+	PkiCrlBaseUrl
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -435,6 +436,13 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Name:    "cert",
 		Default: string(""),
 		Desc:    "Path to PEM-encoded signed certificate file to register",
+	},
+	PkiCrlBaseUrl: {
+		Key:     "pki.crl_base_url",
+		Env:     "AKASHIC_PKI_CRL_BASE_URL",
+		Name:    "base-url",
+		Default: string("http://localhost:8280"),
+		Desc:    "Base URL for CRL/CA distribution endpoints",
 	},
 }
 
@@ -2720,10 +2728,14 @@ func (cmdCtx *CliContext) RunPkiVaultEngineConfigUrlsCmd(cmd *cobra.Command, arg
 		os.Exit(1)
 	}
 
-	// Build cascading config: defaults (auto-generated from engine name) → file → inline
+	// Build cascading config: defaults (auto-generated from engine name + base URL) → file → inline
+	baseUrl := strings.TrimSuffix(cmdCtx.cfg.GetString("pki.crl_base_url"), "/")
+	if baseUrl == "" {
+		baseUrl = "http://localhost:8280"
+	}
 	config := map[string]interface{}{
-		"issuing_certificates":    []string{fmt.Sprintf("http://localhost:8280/v1/%s/ca", engineName)},
-		"crl_distribution_points": []string{fmt.Sprintf("http://localhost:8280/v1/%s/crl", engineName)},
+		"issuing_certificates":    []string{fmt.Sprintf("%s/v1/%s/ca", baseUrl, engineName)},
+		"crl_distribution_points": []string{fmt.Sprintf("%s/v1/%s/crl", baseUrl, engineName)},
 	}
 
 	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
