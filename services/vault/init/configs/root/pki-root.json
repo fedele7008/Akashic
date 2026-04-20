@@ -1,0 +1,6 @@
+{
+  "common_name": "Akashic Root CA",
+  "issuer_name": "root-ca",
+  "key_type": "rsa",
+  "key_bits": 4096
+}

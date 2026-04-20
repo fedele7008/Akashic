@@ -1,0 +1,6 @@
+{
+  "common_name": "LDAP mTLS CA",
+  "issuer_name": "ldap-mtls-ca",
+  "key_type": "rsa",
+  "key_bits": 2048
+}

@@ -1,0 +1,6 @@
+{
+  "common_name": "Akashic Internal CA",
+  "issuer_name": "intermediate-ca",
+  "key_type": "rsa",
+  "key_bits": 4096
+}

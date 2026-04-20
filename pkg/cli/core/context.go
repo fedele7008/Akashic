@@ -227,6 +227,9 @@ const (
 	EngineConfigFile
 	EngineConfig
 	VaultRootTokenFile
+	EngineName
+	CsrOutput
+	CsrCommonName
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -398,6 +401,26 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Short:   "t",
 		Default: string(""),
 		Desc:    "Path to encrypted root token file",
+	},
+	EngineName: {
+		Key:     "engine.name",
+		Name:    "engine",
+		Short:   "e",
+		Default: string(""),
+		Desc:    "Target PKI engine mount path",
+	},
+	CsrOutput: {
+		Key:     "csr.output",
+		Name:    "output",
+		Short:   "o",
+		Default: string(""),
+		Desc:    "Output file path for CSR",
+	},
+	CsrCommonName: {
+		Key:     "csr.common_name",
+		Name:    "cn",
+		Default: string(""),
+		Desc:    "Common name for the CSR (highest priority, overrides config)",
 	},
 }
 
@@ -2029,6 +2052,354 @@ func (cmdCtx *CliContext) RunPkiVaultEngineMountCmd(cmd *cobra.Command, args []s
 	configJSON, _ := json.MarshalIndent(config, "", "  ")
 	cmdCtx.printResultTable("ENGINE MOUNT SUCCESS", []string{
 		fmt.Sprintf("PKI engine mounted at: %s%s\nConfig: %s", mountPath, descInfo, string(configJSON)),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultEngineGenerateCsrInternalCmd(cmd *cobra.Command, args []string) error {
+	// Validate required flags
+	engineName := cmdCtx.cfg.GetString("engine.name")
+	if engineName == "" {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			"Engine name is required (--engine / -e)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	outputPath := cmdCtx.cfg.GetString("csr.output")
+	if outputPath == "" {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			"Output file is required (--output / -o)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.LogVerbose("Engine: %s, Output: %s", engineName, outputPath)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Build cascading config: defaults → config file → inline config → --cn flag
+	config := map[string]interface{}{
+		"key_type":     "rsa",
+		"key_bits":     4096,
+		"format":       "pem",
+		"organization": "Akashic",
+		"ou":           "Security",
+		"country":      "US",
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// --cn flag has highest priority
+	cnFlag := cmdCtx.cfg.GetString("csr.common_name")
+	if cnFlag != "" {
+		config["common_name"] = cnFlag
+	}
+
+	// Validate common_name is present
+	if _, ok := config["common_name"]; !ok {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			"common_name is required (use --cn or include in config file/inline)",
+		}, "", true)
+		os.Exit(1)
+	}
+	if cn, ok := config["common_name"].(string); ok && cn == "" {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			"common_name cannot be empty",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Send CSR generation request
+	apiPath := fmt.Sprintf("/v1/%s/intermediate/generate/internal", engineName)
+	cmdCtx.LogVerbose("Generating CSR: POST %s", apiPath)
+
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			"Failed to send CSR generation request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Parse response
+	var csrResponse struct {
+		Data struct {
+			CSR   string `json:"csr"`
+			KeyID string `json:"key_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &csrResponse); err != nil {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			"Failed to parse CSR response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if csrResponse.Data.CSR == "" {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			"CSR not found in Vault response",
+		}, string(body), true)
+		os.Exit(1)
+	}
+
+	// Write CSR to output file
+	outputDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			fmt.Sprintf("Failed to create output directory: %s", outputDir),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if err := os.WriteFile(outputPath, []byte(csrResponse.Data.CSR), 0o644); err != nil {
+		cmdCtx.printResultTable("CSR GENERATE FAILED", []string{
+			fmt.Sprintf("Failed to write CSR to file: %s", outputPath),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	// Display result
+	commonName := fmt.Sprintf("%v", config["common_name"])
+	keyType := fmt.Sprintf("%v", config["key_type"])
+	keyBits := fmt.Sprintf("%v", config["key_bits"])
+
+	cmdCtx.printResultTable("CSR GENERATE SUCCESS", []string{
+		fmt.Sprintf(
+			"Engine:      %s\n"+
+				"Common Name: %s\n"+
+				"Key ID:      %s\n"+
+				"Key Type:    %s (%s bits)\n"+
+				"Output:      %s",
+			engineName, commonName, csrResponse.Data.KeyID, keyType, keyBits, outputPath),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultEngineGenerateRootInternalCmd(cmd *cobra.Command, args []string) error {
+	// Validate required flags
+	engineName := cmdCtx.cfg.GetString("engine.name")
+	if engineName == "" {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			"Engine name is required (--engine / -e)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	outputPath := cmdCtx.cfg.GetString("csr.output")
+	if outputPath == "" {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			"Output file is required (--output / -o)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.LogVerbose("Engine: %s, Output: %s", engineName, outputPath)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Build cascading config: defaults → config file → inline config → --cn flag
+	config := map[string]interface{}{
+		"key_type":     "rsa",
+		"key_bits":     4096,
+		"format":       "pem",
+		"ttl":          "87600h",
+		"organization": "Akashic",
+		"ou":           "Security",
+		"country":      "US",
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// --cn flag has highest priority
+	cnFlag := cmdCtx.cfg.GetString("csr.common_name")
+	if cnFlag != "" {
+		config["common_name"] = cnFlag
+	}
+
+	// Validate common_name is present
+	if _, ok := config["common_name"]; !ok {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			"common_name is required (use --cn or include in config file/inline)",
+		}, "", true)
+		os.Exit(1)
+	}
+	if cn, ok := config["common_name"].(string); ok && cn == "" {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			"common_name cannot be empty",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Send root CA generation request
+	apiPath := fmt.Sprintf("/v1/%s/root/generate/internal", engineName)
+	cmdCtx.LogVerbose("Generating root CA: POST %s", apiPath)
+
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			"Failed to send root CA generation request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Parse response
+	var rootResponse struct {
+		Data struct {
+			Certificate string `json:"certificate"`
+			IssuingCA   string `json:"issuing_ca"`
+			KeyID       string `json:"key_id"`
+			SerialNum   string `json:"serial_number"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &rootResponse); err != nil {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			"Failed to parse root CA response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if rootResponse.Data.Certificate == "" {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			"Certificate not found in Vault response",
+		}, string(body), true)
+		os.Exit(1)
+	}
+
+	// Write certificate to output file
+	outputDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			fmt.Sprintf("Failed to create output directory: %s", outputDir),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if err := os.WriteFile(outputPath, []byte(rootResponse.Data.Certificate), 0o644); err != nil {
+		cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+			fmt.Sprintf("Failed to write certificate to file: %s", outputPath),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	// Display result
+	commonName := fmt.Sprintf("%v", config["common_name"])
+	keyType := fmt.Sprintf("%v", config["key_type"])
+	keyBits := fmt.Sprintf("%v", config["key_bits"])
+	ttl := fmt.Sprintf("%v", config["ttl"])
+
+	cmdCtx.printResultTable("ROOT GENERATE SUCCESS", []string{
+		fmt.Sprintf(
+			"Engine:      %s\n"+
+				"Common Name: %s\n"+
+				"Key ID:      %s\n"+
+				"Serial:      %s\n"+
+				"Key Type:    %s (%s bits)\n"+
+				"TTL:         %s\n"+
+				"Output:      %s",
+			engineName, commonName, rootResponse.Data.KeyID, rootResponse.Data.SerialNum, keyType, keyBits, ttl, outputPath),
 	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 
 	return nil

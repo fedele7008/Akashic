@@ -1,0 +1,6 @@
+{
+  "common_name": "Akashic Public CA (Development)",
+  "issuer_name": "public-ca",
+  "key_type": "rsa",
+  "key_bits": 4096
+}

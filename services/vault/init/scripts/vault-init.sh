@@ -96,7 +96,7 @@ main() {
     mount_engine() {
         local path=$1
         local description=$2
-        local config_file="${CONFIGS_DIR}/${path}.json"
+        local config_file="${CONFIGS_DIR}/mount/${path}.json"
 
         log "Mounting PKI engine: ${path}"
 
@@ -136,6 +136,84 @@ main() {
     mount_engine "pki-mtls-loki" "Loki mTLS CA" || return 1
 
     log_success "All PKI engines mounted successfully"
+
+    # =========================================================================
+    # Step 4: Generate Root CA
+    # =========================================================================
+    log_section "Step 4: Generate Root CA"
+
+    generate_root() {
+        local engine=$1
+        local output=$2
+        local config_file="${CONFIGS_DIR}/root/${engine}.json"
+
+        log "Generating root CA: ${engine}"
+
+        local gen_args=("-e" "${engine}" "-o" "${output}" "-t" "${VAULT_TOKEN_FILE}")
+        if [[ -f "${config_file}" ]]; then
+            gen_args+=("-f" "${config_file}")
+            log "Using config: ${config_file}"
+        else
+            log_warning "Config file not found: ${config_file}, using defaults"
+        fi
+
+        print_log_output_header
+        akashic-cli pki vault engine generate root internal "${gen_args[@]}"
+        local gen_result=$?
+        print_log_output_footer
+
+        if [[ ${gen_result} -eq 0 ]]; then
+            log_success "Root CA generated: ${output}"
+        else
+            log_error "Failed to generate root CA: ${engine}"
+            return 1
+        fi
+    }
+
+    generate_root "pki-root" "${CERTS_OUTPUT_DIR}/ca/roots/root-ca.crt" || return 1
+
+    log_success "Root CA generated successfully"
+
+    # =========================================================================
+    # Step 5: Generate Intermediate CA CSRs
+    # =========================================================================
+    log_section "Step 5: Generate Intermediate CA CSRs"
+
+    generate_csr() {
+        local engine=$1
+        local output=$2
+        local config_file="${CONFIGS_DIR}/csr/${engine}.json"
+
+        log "Generating CSR: ${engine}"
+
+        local gen_args=("-e" "${engine}" "-o" "${output}" "-t" "${VAULT_TOKEN_FILE}")
+        if [[ -f "${config_file}" ]]; then
+            gen_args+=("-f" "${config_file}")
+            log "Using config: ${config_file}"
+        else
+            log_warning "Config file not found: ${config_file}, using defaults"
+        fi
+
+        print_log_output_header
+        akashic-cli pki vault engine generate csr internal "${gen_args[@]}"
+        local gen_result=$?
+        print_log_output_footer
+
+        if [[ ${gen_result} -eq 0 ]]; then
+            log_success "CSR generated: ${output}"
+        else
+            log_error "Failed to generate CSR: ${engine}"
+            return 1
+        fi
+    }
+
+    generate_csr "pki-internal" "${CERTS_OUTPUT_DIR}/ca/internal-ca.csr" || return 1
+    generate_csr "pki-public" "${CERTS_OUTPUT_DIR}/ca/public-ca.csr" || return 1
+    generate_csr "pki-mtls-akashic-ctrl" "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.csr" || return 1
+    generate_csr "pki-mtls-ldap" "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.csr" || return 1
+    generate_csr "pki-mtls-loki" "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.csr" || return 1
+
+    log_success "All intermediate CA CSRs generated successfully"
 }
 
 main
