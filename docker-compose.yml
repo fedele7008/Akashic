@@ -167,6 +167,8 @@ services:
         condition: service_healthy
     ports:
       - "${AKASHIC_NGINX_PORT:-8280}:8280"
+    volumes:
+      - certs:/certs:ro
     networks:
       default:
         aliases:
@@ -176,15 +178,33 @@ services:
     image: postgres:16-alpine
     container_name: akashic-postgres
     restart: unless-stopped
+    user: postgres
     environment:
       POSTGRES_USER: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
       POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
       POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
       TZ: ${AKASHIC_TZ}
+    command: >
+      -c ssl=on
+      -c ssl_cert_file=/var/lib/postgresql/certs/postgres.crt
+      -c ssl_key_file=/var/lib/postgresql/certs/postgres.key
+      -c ssl_ca_file=/var/lib/postgresql/certs/trust-bundle.pem
+    entrypoint:
+      - sh
+      - -c
+      - |
+        mkdir -p /var/lib/postgresql/certs
+        cp /certs/postgres/postgres.crt /var/lib/postgresql/certs/
+        cp /certs/postgres/postgres.key /var/lib/postgresql/certs/
+        cp /certs/ca/trust/trust-bundle.pem /var/lib/postgresql/certs/
+        chmod 600 /var/lib/postgresql/certs/postgres.key
+        exec docker-entrypoint.sh "$$@"
+      - --
     ports:
       - "${AKASHIC_DATABASE_POSTGRES_HOST_PORT:-5432}:5432"
     volumes:
       - pg_data:/var/lib/postgresql/data
+      - certs:/certs:ro
     networks:
       default:
         aliases:
@@ -203,19 +223,26 @@ services:
       sh -c "redis-server
       --appendonly yes
       --save 900 1 --save 300 10 --save 60 10000
-      --requirepass ${AKASHIC_DATABASE_REDIS_PASSWORD}"
+      --requirepass ${AKASHIC_DATABASE_REDIS_PASSWORD}
+      --tls-port 6379
+      --port 0
+      --tls-cert-file /certs/redis/redis.crt
+      --tls-key-file /certs/redis/redis.key
+      --tls-ca-cert-file /certs/ca/trust/trust-bundle.pem
+      --tls-auth-clients no"
     environment:
       TZ: ${AKASHIC_TZ}
     ports:
       - "${AKASHIC_DATABASE_REDIS_HOST_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
+      - certs:/certs:ro
     networks:
       default:
         aliases:
           - redis.akashic.local
     healthcheck:
-      test: ["CMD", "redis-cli", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "redis-cli", "--tls", "--cacert", "/certs/ca/trust/trust-bundle.pem", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
       interval: 5s
       timeout: 3s
       retries: 20
@@ -229,6 +256,7 @@ services:
     volumes:
       - ./loki/config.yml:/etc/loki/config.yml:ro
       - loki_data:/loki
+      - certs:/certs:ro
     ports:
       - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
     networks:
@@ -249,6 +277,7 @@ services:
     volumes:
       - grafana_data:/var/lib/grafana
       - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - certs:/certs:ro
     ports:
       - "${AKASHIC_GF_HOST_PORT:-3000}:3000"
     depends_on:
@@ -273,13 +302,28 @@ services:
       LDAP_CONFIG_PASSWORD: ${AKASHIC_LDAP_CONFIG_PASSWORD}
       LDAP_RFC2307BIS_SCHEMA: "true"
       LDAP_REMOVE_CONFIG_AFTER_SETUP: "true"
-      LDAP_TLS: "false"
+      LDAP_TLS: "true"
+      LDAP_TLS_CRT_FILENAME: "ldap.crt"
+      LDAP_TLS_KEY_FILENAME: "ldap.key"
+      LDAP_TLS_CA_CRT_FILENAME: "trust-bundle.pem"
+      LDAP_TLS_VERIFY_CLIENT: "try"
+      LDAP_TLS_ENFORCE: "false"
+    entrypoint:
+      - bash
+      - -c
+      - |
+        cp /certs/ldap/ldap.crt /container/service/slapd/assets/certs/ldap.crt
+        cp /certs/ldap/ldap.key /container/service/slapd/assets/certs/ldap.key
+        cp /certs/ca/trust/trust-bundle.pem /container/service/slapd/assets/certs/trust-bundle.pem
+        chown -R openldap:openldap /container/service/slapd/assets/certs/
+        exec /container/tool/run
     ports:
       - "${AKASHIC_LDAP_HOST_PORT:-389}:389"
       - "${AKASHIC_LDAP_LDAPS_HOST_PORT:-636}:636"
     volumes:
       - ldap_data:/var/lib/ldap
       - ldap_config:/etc/ldap/slapd.d
+      - certs:/certs:ro
     networks:
       default:
         aliases:
@@ -301,10 +345,79 @@ services:
       PHPLDAPADMIN_HTTPS: "false"
     ports:
       - "${AKASHIC_PHPLDAPADMIN_HOST_PORT:-8090}:80"
+    volumes:
+      - certs:/certs:ro
     depends_on:
       - ldap
     profiles:
       - ldap
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Cert Watcher Sidecars
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Monitors certificate files for changes (written by vault-agent).
+  # Shares PID namespace with the target service to send signals.
+  # SIGHUP = graceful reload (postgres), SIGTERM = restart (redis, ldap, loki).
+
+  postgres-cert-watcher:
+    build: ./services/cert-watcher
+    container_name: akashic-postgres-cert-watcher
+    restart: unless-stopped
+    environment:
+      WATCH_FILES: "/certs/postgres/postgres.crt"
+      TARGET_CONTAINER: "akashic-postgres"
+      SIGNAL: "HUP"
+    volumes:
+      - certs:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - postgres
+
+  redis-cert-watcher:
+    build: ./services/cert-watcher
+    container_name: akashic-redis-cert-watcher
+    restart: unless-stopped
+    environment:
+      WATCH_FILES: "/certs/redis/redis.crt"
+      TARGET_CONTAINER: "akashic-redis"
+      SIGNAL: "TERM"
+    volumes:
+      - certs:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - redis
+
+  ldap-cert-watcher:
+    build: ./services/cert-watcher
+    container_name: akashic-ldap-cert-watcher
+    restart: unless-stopped
+    environment:
+      WATCH_FILES: "/certs/ldap/ldap.crt,/certs/ldap/mtls-ldap.crt"
+      TARGET_CONTAINER: "akashic-ldap"
+      SIGNAL: "TERM"
+    volumes:
+      - certs:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - ldap
+    profiles:
+      - ldap
+
+  loki-cert-watcher:
+    build: ./services/cert-watcher
+    container_name: akashic-loki-cert-watcher
+    restart: unless-stopped
+    environment:
+      WATCH_FILES: "/certs/loki/loki.crt,/certs/loki/mtls-loki.crt"
+      TARGET_CONTAINER: "akashic-loki"
+      SIGNAL: "TERM"
+    volumes:
+      - certs:/certs:ro
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    depends_on:
+      - loki
+    profiles:
+      - obs
 
 networks:
   default:

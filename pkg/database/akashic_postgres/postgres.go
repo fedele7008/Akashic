@@ -22,6 +22,7 @@ type Config struct {
 	Username        string
 	Password        string
 	SSLMode         string
+	SSLRootCert     string
 	MaxConns        int
 	MaxIdleConns    int
 	ConnLifetime    time.Duration
@@ -44,6 +45,7 @@ func New(configMgr *config.ConfigManager, akashicLogger *logging.Logger) (*DB, e
 		Username:        mConfig.Database.Postgres.Username,
 		Password:        mConfig.Database.Postgres.Password,
 		SSLMode:         mConfig.Database.Postgres.SSLMode,
+		SSLRootCert:     mConfig.Database.Postgres.SSLRootCert,
 		MaxConns:        mConfig.Database.Postgres.MaxConnections,
 		MaxIdleConns:    mConfig.Database.Postgres.MaxIdleConnections,
 		ConnLifetime:    mConfig.Database.Postgres.ConnectionLifetime,
@@ -54,6 +56,9 @@ func New(configMgr *config.ConfigManager, akashicLogger *logging.Logger) (*DB, e
 		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
 		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, cfg.SSLMode,
 	)
+	if cfg.SSLRootCert != "" {
+		dsn += fmt.Sprintf(" sslrootcert=%s", cfg.SSLRootCert)
+	}
 
 	akashicLogger.App.Info("Connecting to PostgreSQL",
 		zap.String("host", cfg.Host),

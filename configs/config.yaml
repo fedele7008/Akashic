@@ -3,14 +3,14 @@ server:
     host: "0.0.0.0"
     port: 8080
     tls:
-      enabled: false
+      enabled: true
       cert_file: "./certs/akashic/auth.crt"
       key_file: "./certs/akashic/auth.key"
   control:
     host: "127.0.0.1"
     port: 8081
     tls:
-      enabled: false
+      enabled: true
       cert_file: "./certs/akashic/ctrl.crt"
       key_file: "./certs/akashic/ctrl.key"
       ca_file: "./certs/ca/mtls/akashic-ctrl/akashic-ctrl-ca.crt"
@@ -22,7 +22,8 @@ database:
     database: ${AKASHIC_DATABASE_POSTGRES_DB}
     username: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
     password: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
-    ssl_mode: "disable"  # Use "disable" for development, "require" for production
+    ssl_mode: "verify-ca"  # disable | require | verify-ca | verify-full
+    ssl_root_cert: "./certs/ca/trust/trust-bundle.pem"
     max_connections: 100
     max_idle_connections: 10
     connection_lifetime: "1h"
@@ -34,6 +35,9 @@ database:
     pool_size: 10
     session_ttl: "24h"
     cache_ttl: "1h"
+    tls:
+      enabled: true
+      ca_file: "./certs/ca/trust/trust-bundle.pem"
 session:
   timeout: "30m"
   secure_cookies: true
@@ -215,7 +219,7 @@ bootstrap:
 ldap:
   # Connection settings
   host: localhost  # Docker service name for embedded, or "ldap.company.com" for external
-  port: 389     # 389 for LDAP, 636 for LDAPS
+  port: 636     # 389 for LDAP, 636 for LDAPS
   base_dn: "dc=akashic,dc=local"
 
   # Bind credentials (admin account for Akashic to use)
@@ -223,8 +227,9 @@ ldap:
   bind_password: "${AKASHIC_LDAP_ADMIN_PASSWORD}"
 
   # TLS settings
-  use_tls: false           # Set to true for LDAPS (port 636)
+  use_tls: true            # Set to true for LDAPS (port 636)
   tls_skip_verify: false   # Set to true for dev/self-signed certs (INSECURE)
+  tls_ca_file: "./certs/ca/trust/trust-bundle.pem"
 
   # User search configuration
   user_search_base: "ou=users,dc=akashic,dc=local"

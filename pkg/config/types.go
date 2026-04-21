@@ -362,6 +362,8 @@ type PostgresConfig struct {
 	Password string `mapstructure:"password" yaml:"password"`
 	// SSLMode for connection security (disable, require, verify-ca, verify-full)
 	SSLMode string `mapstructure:"ssl_mode" yaml:"ssl_mode"`
+	// SSLRootCert path to CA certificate for verify-ca/verify-full modes
+	SSLRootCert string `mapstructure:"ssl_root_cert" yaml:"ssl_root_cert"`
 	// MaxConnections for connection pool
 	MaxConnections int `mapstructure:"max_connections" yaml:"max_connections"`
 	// MaxIdleConnections for connection pool
@@ -386,6 +388,16 @@ type RedisConfig struct {
 	SessionTTL time.Duration `mapstructure:"session_ttl" yaml:"session_ttl"`
 	// CacheTTL for general caching
 	CacheTTL time.Duration `mapstructure:"cache_ttl" yaml:"cache_ttl"`
+	// TLS configuration for encrypted Redis connections
+	TLS RedisTLSConfig `mapstructure:"tls" yaml:"tls"`
+}
+
+// RedisTLSConfig defines TLS settings for Redis connections
+type RedisTLSConfig struct {
+	// Enabled controls whether TLS is used for Redis connections
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// CAFile path to CA certificate for server verification
+	CAFile string `mapstructure:"ca_file" yaml:"ca_file"`
 }
 
 // SessionConfig contains basic session management settings
@@ -454,6 +466,9 @@ type LDAPConfig struct {
 
 	// TLSSkipVerify skips TLS certificate verification (insecure - dev only)
 	TLSSkipVerify bool `mapstructure:"tls_skip_verify" yaml:"tls_skip_verify"`
+
+	// TLSCAFile path to CA certificate for LDAP server verification
+	TLSCAFile string `mapstructure:"tls_ca_file" yaml:"tls_ca_file"`
 
 	// UserSearchBase is the base DN for user searches
 	// Example: "ou=users,dc=akashic,dc=local"

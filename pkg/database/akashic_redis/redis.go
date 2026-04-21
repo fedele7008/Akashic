@@ -4,7 +4,10 @@ import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -52,7 +55,7 @@ func New(configMgr *config.ConfigManager, logger *logging.Logger) (*Client, erro
 		zap.Int("port", cfg.Port),
 		zap.Int("database", cfg.DB))
 
-	rdb := redis.NewClient(&redis.Options{
+	opts := &redis.Options{
 		Addr:         fmt.Sprintf("%s:%d", cfg.Host, cfg.Port),
 		Password:     cfg.Password,
 		DB:           cfg.DB,
@@ -62,7 +65,27 @@ func New(configMgr *config.ConfigManager, logger *logging.Logger) (*Client, erro
 		DialTimeout:  cfg.DialTimeout,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
-	})
+	}
+
+	// Configure TLS if enabled
+	if mConfig.Database.Redis.TLS.Enabled {
+		tlsConfig := &tls.Config{MinVersion: tls.VersionTLS12}
+		if mConfig.Database.Redis.TLS.CAFile != "" {
+			caCert, err := os.ReadFile(mConfig.Database.Redis.TLS.CAFile)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read Redis CA cert: %v", err)
+			}
+			caPool := x509.NewCertPool()
+			if !caPool.AppendCertsFromPEM(caCert) {
+				return nil, fmt.Errorf("failed to parse Redis CA cert")
+			}
+			tlsConfig.RootCAs = caPool
+		}
+		opts.TLSConfig = tlsConfig
+		logger.App.Info("Redis TLS enabled")
+	}
+
+	rdb := redis.NewClient(opts)
 
 	// Test connection
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
