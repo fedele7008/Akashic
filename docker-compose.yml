@@ -180,28 +180,41 @@ services:
         aliases:
           - proxy.akashic.local
 
-#   postgres:
-#     image: postgres:16-alpine
-#     container_name: akashic-postgres
-#     restart: unless-stopped
-#     environment:
-#       POSTGRES_USER: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
-#       POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
-#       POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
-#       TZ: ${AKASHIC_TZ}
-#     ports:
-#       - "${AKASHIC_DATABASE_POSTGRES_HOST_PORT:-5432}:5432"
-#     volumes:
-#       - pg_data:/var/lib/postgresql/data
-#     networks:
-#       default:
-#         aliases:
-#           - postgres.akashic.local
-#     healthcheck:
-#       test: ["CMD-SHELL", "pg_isready -U $${AKASHIC_DATABASE_POSTGRES_USERNAME} -d $${AKASHIC_DATABASE_POSTGRES_DB} || exit 1"]
-#       interval: 5s
-#       timeout: 3s
-#       retries: 20
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # postgres: PostgreSQL Database (TLS enabled)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Custom entrypoint copies certs from Vault Agent, fixes ownership (uid 70),
+  # and starts PostgreSQL with SSL enabled.
+  #
+  # Certificates: issued by vault-agent via pki-internal/server
+  # TLS: ssl=on, requires client to verify server cert (sslmode=verify-ca)
+  # Troubleshooting: docker compose logs postgres
+  postgres:
+    build: ./services/postgres
+    container_name: akashic-postgres
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+    environment:
+      POSTGRES_USER: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
+      TZ: ${AKASHIC_TZ:-UTC}
+    ports:
+      - "${AKASHIC_DATABASE_POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - certs:/certs-source:ro
+    networks:
+      default:
+        aliases:
+          - postgres.akashic.local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB} || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
 #   redis:
 #     image: redis:7-alpine
@@ -264,11 +277,11 @@ services:
 #     profiles:
 #       - obs
       
-#   adminer:
-#     image: adminer
-#     restart: always
-#     ports:
-#       - 25000:8080/tcp
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 25000:8080/tcp
 
 #   ldap:
 #     image: osixia/openldap:1.5.0
