@@ -312,6 +312,8 @@ type AuthServerConfig struct {
 	Host string `mapstructure:"host" yaml:"host"`
 	// Port number for the auth server (typically 8080)
 	Port int `mapstructure:"port" yaml:"port"`
+	// TLS configuration for HTTPS
+	TLS TLSConfig `mapstructure:"tls" yaml:"tls"`
 }
 
 // ControlServerConfig defines control plane management server settings

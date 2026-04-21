@@ -88,6 +88,18 @@ main() {
     akashic-cli pki vault status
     print_log_output_footer
 
+    # Write decrypted root token for vault-agent
+    VAULT_AGENT_TOKEN_FILE="/vault/token/vault/root-token"
+    log "Writing decrypted root token for vault-agent..."
+    akashic-cli pki token inspect -i "${VAULT_TOKEN_FILE}" -m > "${VAULT_AGENT_TOKEN_FILE}"
+    chmod 600 "${VAULT_AGENT_TOKEN_FILE}"
+    if [[ $? -eq 0 ]]; then
+        log_success "Vault agent token written: ${VAULT_AGENT_TOKEN_FILE}"
+    else
+        log_error "Failed to write vault agent token"
+        return 1
+    fi
+
     # =========================================================================
     # Step 3: Mount PKI secret engines
     # =========================================================================

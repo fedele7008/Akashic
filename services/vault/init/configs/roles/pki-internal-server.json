@@ -8,8 +8,8 @@
   "client_flag": false,
   "key_type": "rsa",
   "key_bits": 2048,
-  "ttl": "8760h",
-  "max_ttl": "8760h",
+  "ttl": "2160h",
+  "max_ttl": "4320h",
   "organization": ["Akashic"],
   "ou": ["Security"],
   "country": ["US"]

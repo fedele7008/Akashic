@@ -1,4 +1,4 @@
 {
   "common_name": "grafana.akashic.local",
-  "ttl": "8760h"
+  "ttl": "2160h"
 }

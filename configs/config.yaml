@@ -2,14 +2,18 @@ server:
   auth:
     host: "0.0.0.0"
     port: 8080
+    tls:
+      enabled: false
+      cert_file: "./certs/akashic/auth.crt"
+      key_file: "./certs/akashic/auth.key"
   control:
     host: "127.0.0.1"
     port: 8081
     tls:
-      enabled: true
-      cert_file: "./certs/server.crt"
-      key_file: "./certs/server.key"
-      ca_file: "./certs/ca.crt"
+      enabled: false
+      cert_file: "./certs/akashic/ctrl.crt"
+      key_file: "./certs/akashic/ctrl.key"
+      ca_file: "./certs/ca/mtls/akashic-ctrl/akashic-ctrl-ca.crt"
       client_auth_required: true
 database:
   postgres:

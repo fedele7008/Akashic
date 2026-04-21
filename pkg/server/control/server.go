@@ -5,8 +5,10 @@ import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
+	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/server/auth"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net"
@@ -25,6 +27,7 @@ type Server struct {
 	stateManager *StateManager
 	bootstrapMgr *bootstrap.Manager // Bootstrap manager (set after initialization)
 	config       *config.ConfigManager
+	certReloader *pki.CertReloader
 	startedAt    time.Time
 	shutdownFn   context.CancelFunc // Function to trigger app shutdown
 }
@@ -79,11 +82,32 @@ func (s *Server) Start() error {
 		IdleTimeout:  CtrlServerIdleTimeout,
 	}
 
+	// Configure TLS if enabled
+	tlsCfg := s.config.GetConfig().Server.Control.TLS
+	var listener net.Listener
+	if tlsCfg.Enabled {
+		tlsConfig, reloader, err := pki.NewServerTLSConfig(pki.ServerTLSOptions{
+			CertFile:           tlsCfg.CertFile,
+			KeyFile:            tlsCfg.KeyFile,
+			CAFile:             tlsCfg.CAFile,
+			ClientAuthRequired: tlsCfg.ClientAuthRequired,
+		}, s.logger.App)
+		if err != nil {
+			return fmt.Errorf("failed to configure TLS: %v", err)
+		}
+		s.certReloader = reloader
+		reloader.Start(s.ctx)
+		listener = tls.NewListener(ln, tlsConfig)
+		s.logger.App.Info("Control server TLS enabled (mTLS)", zap.String("address", addr))
+	} else {
+		listener = ln
+	}
+
 	s.logger.App.Info("Control server starting", zap.String("address", addr))
 
 	// Start server in goroutine with pre-bound listener
 	go func() {
-		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			s.logger.App.Error("Control server error", zap.Error(err))
 		}
 	}()

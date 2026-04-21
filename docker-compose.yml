@@ -123,6 +123,28 @@ services:
         condition: service_healthy
 
   # ═══════════════════════════════════════════════════════════════════════════════
+  # vault-agent: Certificate Auto-Renewal Agent
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Runs Vault Agent with pkiCert templates to automatically renew all
+  # leaf certificates before expiry (at ~2/3 TTL).
+  # Writes renewed certs to the shared certs volume.
+  # Services using GetCertificate pick up new certs automatically.
+  vault-agent:
+    image: hashicorp/vault:1.20
+    container_name: akashic-vault-agent
+    restart: unless-stopped
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+    command: agent -config=/config/agent.hcl
+    cap_add:
+      - IPC_LOCK
+    volumes:
+      - secrets:/vault/token:ro
+      - certs:/certs
+      - ./services/vault-agent:/config:ro
+
+  # ═══════════════════════════════════════════════════════════════════════════════
   # proxy: Akashic Reverse Proxy (nginx)
   # ═══════════════════════════════════════════════════════════════════════════════
   # General-purpose nginx reverse proxy for the Akashic project.
@@ -150,139 +172,139 @@ services:
         aliases:
           - proxy.akashic.local
 
-#   postgres:
-#     image: postgres:16-alpine
-#     container_name: akashic-postgres
-#     restart: unless-stopped
-#     environment:
-#       POSTGRES_USER: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
-#       POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
-#       POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
-#       TZ: ${AKASHIC_TZ}
-#     ports:
-#       - "${AKASHIC_DATABASE_POSTGRES_HOST_PORT:-5432}:5432"
-#     volumes:
-#       - pg_data:/var/lib/postgresql/data
-#     networks:
-#       default:
-#         aliases:
-#           - postgres.akashic.local
-#     healthcheck:
-#       test: ["CMD-SHELL", "pg_isready -U $${AKASHIC_DATABASE_POSTGRES_USERNAME} -d $${AKASHIC_DATABASE_POSTGRES_DB} || exit 1"]
-#       interval: 5s
-#       timeout: 3s
-#       retries: 20
+  postgres:
+    image: postgres:16-alpine
+    container_name: akashic-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
+      POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
+      POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
+      TZ: ${AKASHIC_TZ}
+    ports:
+      - "${AKASHIC_DATABASE_POSTGRES_HOST_PORT:-5432}:5432"
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    networks:
+      default:
+        aliases:
+          - postgres.akashic.local
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${AKASHIC_DATABASE_POSTGRES_USERNAME} -d $${AKASHIC_DATABASE_POSTGRES_DB} || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
-#   redis:
-#     image: redis:7-alpine
-#     container_name: akashic-redis
-#     restart: unless-stopped
-#     command: >
-#       sh -c "redis-server
-#       --appendonly yes
-#       --save 900 1 --save 300 10 --save 60 10000
-#       --requirepass ${AKASHIC_DATABASE_REDIS_PASSWORD}"
-#     environment:
-#       TZ: ${AKASHIC_TZ}
-#     ports:
-#       - "${AKASHIC_DATABASE_REDIS_HOST_PORT:-6379}:6379"
-#     volumes:
-#       - redis_data:/data
-#     networks:
-#       default:
-#         aliases:
-#           - redis.akashic.local
-#     healthcheck:
-#       test: ["CMD", "redis-cli", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
-#       interval: 5s
-#       timeout: 3s
-#       retries: 20
-#       start_period: 5s
+  redis:
+    image: redis:7-alpine
+    container_name: akashic-redis
+    restart: unless-stopped
+    command: >
+      sh -c "redis-server
+      --appendonly yes
+      --save 900 1 --save 300 10 --save 60 10000
+      --requirepass ${AKASHIC_DATABASE_REDIS_PASSWORD}"
+    environment:
+      TZ: ${AKASHIC_TZ}
+    ports:
+      - "${AKASHIC_DATABASE_REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      default:
+        aliases:
+          - redis.akashic.local
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 
-#   loki:
-#     image: grafana/loki:3.5.5
-#     container_name: akashic-loki
-#     restart: unless-stopped
-#     command: ["-config.file=/etc/loki/config.yml"]
-#     volumes:
-#       - ./loki/config.yml:/etc/loki/config.yml:ro
-#       - loki_data:/loki
-#     ports:
-#       - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
-#     networks:
-#       default:
-#         aliases:
-#           - loki.akashic.local
-#     profiles:
-#       - obs
+  loki:
+    image: grafana/loki:3.5.5
+    container_name: akashic-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yml"]
+    volumes:
+      - ./loki/config.yml:/etc/loki/config.yml:ro
+      - loki_data:/loki
+    ports:
+      - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
+    networks:
+      default:
+        aliases:
+          - loki.akashic.local
+    profiles:
+      - obs
 
-#   grafana:
-#     image: grafana/grafana
-#     container_name: akashic-grafana
-#     restart: unless-stopped
-#     environment:
-#       GF_SECURITY_ADMIN_USER: ${AKASHIC_GF_SECURITY_ADMIN_USER:-admin}
-#       GF_SECURITY_ADMIN_PASSWORD: ${AKASHIC_GF_SECURITY_ADMIN_PASSWORD}
-#       GF_USERS_DEFAULT_THEME: light
-#     volumes:
-#       - grafana_data:/var/lib/grafana
-#       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-#     ports:
-#       - "${AKASHIC_GF_HOST_PORT:-3000}:3000"
-#     depends_on:
-#       - loki
-#     profiles:
-#       - obs
+  grafana:
+    image: grafana/grafana
+    container_name: akashic-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: ${AKASHIC_GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${AKASHIC_GF_SECURITY_ADMIN_PASSWORD}
+      GF_USERS_DEFAULT_THEME: light
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports:
+      - "${AKASHIC_GF_HOST_PORT:-3000}:3000"
+    depends_on:
+      - loki
+    profiles:
+      - obs
       
-#   adminer:
-#     image: adminer
-#     restart: always
-#     ports:
-#       - 25000:8080/tcp
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 25000:8080/tcp
 
-#   ldap:
-#     image: osixia/openldap:1.5.0
-#     container_name: akashic-ldap
-#     restart: unless-stopped
-#     environment:
-#       LDAP_ORGANISATION: ${AKASHIC_LDAP_ORGANISATION:-Akashic}
-#       LDAP_DOMAIN: ${AKASHIC_LDAP_DOMAIN:-akashic.local}
-#       LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
-#       LDAP_CONFIG_PASSWORD: ${AKASHIC_LDAP_CONFIG_PASSWORD}
-#       LDAP_RFC2307BIS_SCHEMA: "true"
-#       LDAP_REMOVE_CONFIG_AFTER_SETUP: "true"
-#       LDAP_TLS: "false"
-#     ports:
-#       - "${AKASHIC_LDAP_HOST_PORT:-389}:389"
-#       - "${AKASHIC_LDAP_LDAPS_HOST_PORT:-636}:636"
-#     volumes:
-#       - ldap_data:/var/lib/ldap
-#       - ldap_config:/etc/ldap/slapd.d
-#     networks:
-#       default:
-#         aliases:
-#           - ldap.akashic.local
-#     healthcheck:
-#       test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=akashic,dc=local -D cn=admin,dc=akashic,dc=local -w $${AKASHIC_LDAP_ADMIN_PASSWORD} || exit 1"]
-#       interval: 10s
-#       timeout: 5s
-#       retries: 5
-#     profiles:
-#       - ldap
+  ldap:
+    image: osixia/openldap:1.5.0
+    container_name: akashic-ldap
+    restart: unless-stopped
+    environment:
+      LDAP_ORGANISATION: ${AKASHIC_LDAP_ORGANISATION:-Akashic}
+      LDAP_DOMAIN: ${AKASHIC_LDAP_DOMAIN:-akashic.local}
+      LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
+      LDAP_CONFIG_PASSWORD: ${AKASHIC_LDAP_CONFIG_PASSWORD}
+      LDAP_RFC2307BIS_SCHEMA: "true"
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "true"
+      LDAP_TLS: "false"
+    ports:
+      - "${AKASHIC_LDAP_HOST_PORT:-389}:389"
+      - "${AKASHIC_LDAP_LDAPS_HOST_PORT:-636}:636"
+    volumes:
+      - ldap_data:/var/lib/ldap
+      - ldap_config:/etc/ldap/slapd.d
+    networks:
+      default:
+        aliases:
+          - ldap.akashic.local
+    healthcheck:
+      test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=akashic,dc=local -D cn=admin,dc=akashic,dc=local -w $${AKASHIC_LDAP_ADMIN_PASSWORD} || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - ldap
 
-#   phpldapadmin:
-#     image: osixia/phpldapadmin:0.9.0
-#     container_name: akashic-phpldapadmin
-#     restart: unless-stopped
-#     environment:
-#       PHPLDAPADMIN_LDAP_HOSTS: ldap
-#       PHPLDAPADMIN_HTTPS: "false"
-#     ports:
-#       - "${AKASHIC_PHPLDAPADMIN_HOST_PORT:-8090}:80"
-#     depends_on:
-#       - ldap
-#     profiles:
-#       - ldap
+  phpldapadmin:
+    image: osixia/phpldapadmin:0.9.0
+    container_name: akashic-phpldapadmin
+    restart: unless-stopped
+    environment:
+      PHPLDAPADMIN_LDAP_HOSTS: ldap
+      PHPLDAPADMIN_HTTPS: "false"
+    ports:
+      - "${AKASHIC_PHPLDAPADMIN_HOST_PORT:-8090}:80"
+    depends_on:
+      - ldap
+    profiles:
+      - ldap
 
 networks:
   default:

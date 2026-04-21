@@ -4,7 +4,9 @@ import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
+	"akashic/akashic/pkg/pki"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,11 +18,12 @@ import (
 
 // Server represents the Auth Server (OAuth/OIDC endpoints)
 type Server struct {
-	config *config.ConfigManager
-	server *http.Server
-	logger *logging.Logger
-	mu     sync.RWMutex
-	state  ServerState
+	config       *config.ConfigManager
+	server       *http.Server
+	logger       *logging.Logger
+	certReloader *pki.CertReloader
+	mu           sync.RWMutex
+	state        ServerState
 }
 
 // ServerState represents the current state of the server
@@ -84,11 +87,35 @@ func (s *Server) Start(ctx context.Context) error {
 	s.state = StateRunning
 	s.mu.Unlock()
 
+	// Configure TLS if enabled
+	tlsCfg := s.config.GetConfig().Server.Auth.TLS
+	var listener net.Listener
+	if tlsCfg.Enabled {
+		tlsConfig, reloader, err := pki.NewServerTLSConfig(pki.ServerTLSOptions{
+			CertFile:           tlsCfg.CertFile,
+			KeyFile:            tlsCfg.KeyFile,
+			CAFile:             tlsCfg.CAFile,
+			ClientAuthRequired: tlsCfg.ClientAuthRequired,
+		}, s.logger.App)
+		if err != nil {
+			s.mu.Lock()
+			s.state = StateStopped
+			s.mu.Unlock()
+			return fmt.Errorf("failed to configure TLS: %v", err)
+		}
+		s.certReloader = reloader
+		reloader.Start(ctx)
+		listener = tls.NewListener(ln, tlsConfig)
+		s.logger.App.Info("Auth server TLS enabled", zap.String("address", addr))
+	} else {
+		listener = ln
+	}
+
 	s.logger.App.Info("Auth server starting", zap.String("address", addr))
 
 	// Start server in goroutine with pre-bound listener
 	go func() {
-		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
+		if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 			s.logger.App.Error("Auth server error", zap.Error(err))
 			s.mu.Lock()
 			s.state = StateStopped
