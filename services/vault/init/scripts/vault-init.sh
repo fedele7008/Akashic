@@ -514,6 +514,25 @@ main() {
         "${CERTS_OUTPUT_DIR}/grafana/loki-client.key" || return 1
 
     log_success "All leaf certificates issued"
+
+    # =========================================================================
+    # Step 13: Create Trust Bundles
+    # =========================================================================
+    log_section "Step 13: Create Trust Bundles"
+
+    mkdir -p "${CERTS_OUTPUT_DIR}/ca/trust"
+
+    # Internal trust bundle: Internal CA chain (already includes Root CA via pem_bundle format)
+    cp "${CERTS_OUTPUT_DIR}/ca/internal-ca.crt" "${CERTS_OUTPUT_DIR}/ca/trust/trust-bundle.pem"
+
+    if [[ $? -eq 0 ]]; then
+        log_success "Trust bundle created: ${CERTS_OUTPUT_DIR}/ca/trust/trust-bundle.pem"
+    else
+        log_error "Failed to create trust bundle"
+        return 1
+    fi
+
+    log_success "All trust bundles created"
 }
 
 main
