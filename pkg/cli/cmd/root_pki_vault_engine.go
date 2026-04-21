@@ -19,6 +19,7 @@ func NewEngineCmd(ctx *core.CliContext) *cobra.Command {
 	cmd.AddCommand(NewEngineRegisterCmd(ctx))
 	cmd.AddCommand(NewEngineConfigCmd(ctx))
 	cmd.AddCommand(NewEngineRoleCmd(ctx))
+	cmd.AddCommand(NewEngineIssueCmd(ctx))
 
 	return cmd
 }

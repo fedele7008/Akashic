@@ -1,0 +1,6 @@
+{
+  "common_name": "postgres.akashic.local",
+  "alt_names": "postgres.akashic.local,localhost",
+  "ip_sans": "127.0.0.1",
+  "ttl": "8760h"
+}

@@ -243,6 +243,8 @@ const (
 	SignCsrInput
 	RegisterCertInput
 	PkiCrlBaseUrl
+	IssueRole
+	IssueKeyOut
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -453,6 +455,19 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Name:    "base-url",
 		Default: string("http://localhost:8280"),
 		Desc:    "Base URL for CRL/CA distribution endpoints",
+	},
+	IssueRole: {
+		Key:     "issue.role",
+		Name:    "role",
+		Short:   "r",
+		Default: string(""),
+		Desc:    "Role name to issue certificate with",
+	},
+	IssueKeyOut: {
+		Key:     "issue.key_out",
+		Name:    "key-out",
+		Default: string(""),
+		Desc:    "Output file path for private key",
 	},
 }
 
@@ -2906,6 +2921,198 @@ func (cmdCtx *CliContext) RunPkiVaultEngineRoleCreateCmd(cmd *cobra.Command, arg
 	configJSON, _ := json.MarshalIndent(config, "", "  ")
 	cmdCtx.printResultTable("ROLE CREATE SUCCESS", []string{
 		fmt.Sprintf("Engine: %s\nRole:   %s\nConfig:\n%s", engineName, roleName, string(configJSON)),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultEngineIssueCmd(cmd *cobra.Command, args []string) error {
+	engineName := cmdCtx.cfg.GetString("engine.name")
+	if engineName == "" {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"Engine name is required (--engine / -e)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	roleName := cmdCtx.cfg.GetString("issue.role")
+	if roleName == "" {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"Role name is required (--role / -r)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	outputPath := cmdCtx.cfg.GetString("csr.output")
+	if outputPath == "" {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"Output file is required (--output / -o)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	keyOutPath := cmdCtx.cfg.GetString("issue.key_out")
+	if keyOutPath == "" {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"Key output file is required (--key-out)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.LogVerbose("Engine: %s, Role: %s, Output: %s, Key: %s", engineName, roleName, outputPath, keyOutPath)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Build cascading config: defaults → file → inline → --cn
+	config := map[string]interface{}{
+		"format": "pem",
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("ISSUE FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("ISSUE FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("ISSUE FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// --cn flag has highest priority
+	cnFlag := cmdCtx.cfg.GetString("csr.common_name")
+	if cnFlag != "" {
+		config["common_name"] = cnFlag
+	}
+
+	// Validate common_name
+	if _, ok := config["common_name"]; !ok {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"common_name is required (use --cn or include in config)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Send issue request
+	apiPath := fmt.Sprintf("/v1/%s/issue/%s", engineName, roleName)
+	cmdCtx.LogVerbose("Issuing certificate: POST %s", apiPath)
+
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"Failed to send issue request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Parse response
+	var issueResponse struct {
+		Data struct {
+			Certificate  string   `json:"certificate"`
+			PrivateKey   string   `json:"private_key"`
+			CAChain      []string `json:"ca_chain"`
+			SerialNumber string   `json:"serial_number"`
+			Expiration   int64    `json:"expiration"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &issueResponse); err != nil {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"Failed to parse issue response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if issueResponse.Data.Certificate == "" {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			"Certificate not found in response",
+		}, string(body), true)
+		os.Exit(1)
+	}
+
+	// Write certificate
+	outputDir := filepath.Dir(outputPath)
+	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			fmt.Sprintf("Failed to create output directory: %s", outputDir),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	if err := os.WriteFile(outputPath, []byte(issueResponse.Data.Certificate), 0o644); err != nil {
+		cmdCtx.printResultTable("ISSUE FAILED", []string{
+			fmt.Sprintf("Failed to write certificate: %s", outputPath),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	// Write private key
+	if issueResponse.Data.PrivateKey != "" {
+		keyDir := filepath.Dir(keyOutPath)
+		if err := os.MkdirAll(keyDir, 0o755); err != nil {
+			cmdCtx.printResultTable("ISSUE FAILED", []string{
+				fmt.Sprintf("Failed to create key output directory: %s", keyDir),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(keyOutPath, []byte(issueResponse.Data.PrivateKey), 0o600); err != nil {
+			cmdCtx.printResultTable("ISSUE FAILED", []string{
+				fmt.Sprintf("Failed to write private key: %s", keyOutPath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+	}
+
+	// Display result
+	commonName := fmt.Sprintf("%v", config["common_name"])
+	cmdCtx.printResultTable("ISSUE SUCCESS", []string{
+		fmt.Sprintf(
+			"Engine:      %s\n"+
+				"Role:        %s\n"+
+				"Common Name: %s\n"+
+				"Serial:      %s\n"+
+				"Certificate: %s\n"+
+				"Private Key: %s",
+			engineName, roleName, commonName, issueResponse.Data.SerialNumber, outputPath, keyOutPath),
 	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 
 	return nil

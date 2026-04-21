@@ -1,0 +1,6 @@
+{
+  "common_name": "loki.akashic.local",
+  "alt_names": "loki.akashic.local,localhost",
+  "ip_sans": "127.0.0.1",
+  "ttl": "8760h"
+}

@@ -410,6 +410,110 @@ main() {
     create_role "pki-mtls-loki" "client" || return 1
 
     log_success "All PKI roles created"
+
+    # =========================================================================
+    # Step 12: Issue Leaf Certificates
+    # =========================================================================
+    log_section "Step 12: Issue Leaf Certificates"
+
+    issue_cert() {
+        local engine=$1
+        local role=$2
+        local config_name=$3
+        local cert_out=$4
+        local key_out=$5
+        local config_file="${CONFIGS_DIR}/issue/${config_name}.json"
+
+        log "Issuing: ${config_name}"
+        log "- Engine: ${engine}, Role: ${role}"
+
+        local issue_args=("-e" "${engine}" "-r" "${role}" "-o" "${cert_out}" "--key-out" "${key_out}" "-t" "${VAULT_TOKEN_FILE}")
+        if [[ -f "${config_file}" ]]; then
+            issue_args+=("-f" "${config_file}")
+            log "- Config: ${config_file}"
+        else
+            log_error "- Config file not found: ${config_file}"
+            return 1
+        fi
+
+        print_log_output_header
+        akashic-cli pki vault engine issue "${issue_args[@]}"
+        local issue_result=$?
+        print_log_output_footer
+
+        if [[ ${issue_result} -eq 0 ]]; then
+            log_success "Certificate issued: ${cert_out}"
+        else
+            log_error "Failed to issue certificate: ${config_name}"
+            return 1
+        fi
+    }
+
+    # --- Internal server certificates (pki-internal/server) ---
+    issue_cert "pki-internal" "server" "akashic-ctrl" \
+        "${CERTS_OUTPUT_DIR}/akashic/ctrl.crt" \
+        "${CERTS_OUTPUT_DIR}/akashic/ctrl.key" || return 1
+
+    issue_cert "pki-internal" "server" "akashic-auth" \
+        "${CERTS_OUTPUT_DIR}/akashic/auth.crt" \
+        "${CERTS_OUTPUT_DIR}/akashic/auth.key" || return 1
+
+    issue_cert "pki-internal" "server" "postgres" \
+        "${CERTS_OUTPUT_DIR}/postgres/postgres.crt" \
+        "${CERTS_OUTPUT_DIR}/postgres/postgres.key" || return 1
+
+    issue_cert "pki-internal" "server" "redis" \
+        "${CERTS_OUTPUT_DIR}/redis/redis.crt" \
+        "${CERTS_OUTPUT_DIR}/redis/redis.key" || return 1
+
+    issue_cert "pki-internal" "server" "ldap-server" \
+        "${CERTS_OUTPUT_DIR}/ldap/ldap.crt" \
+        "${CERTS_OUTPUT_DIR}/ldap/ldap.key" || return 1
+
+    issue_cert "pki-internal" "server" "loki-server" \
+        "${CERTS_OUTPUT_DIR}/loki/loki.crt" \
+        "${CERTS_OUTPUT_DIR}/loki/loki.key" || return 1
+
+    # --- mTLS: Control Plane (pki-mtls-akashic-ctrl) ---
+    issue_cert "pki-mtls-akashic-ctrl" "server" "mtls-ctrl-server" \
+        "${CERTS_OUTPUT_DIR}/akashic/mtls-ctrl.crt" \
+        "${CERTS_OUTPUT_DIR}/akashic/mtls-ctrl.key" || return 1
+
+    issue_cert "pki-mtls-akashic-ctrl" "client" "mtls-ctrl-client-cli" \
+        "${CERTS_OUTPUT_DIR}/akashic-cli/akashic-ctrl-client.crt" \
+        "${CERTS_OUTPUT_DIR}/akashic-cli/akashic-ctrl-client.key" || return 1
+
+    issue_cert "pki-mtls-akashic-ctrl" "client" "mtls-ctrl-client-bff" \
+        "${CERTS_OUTPUT_DIR}/bff/akashic-ctrl-client.crt" \
+        "${CERTS_OUTPUT_DIR}/bff/akashic-ctrl-client.key" || return 1
+
+    # --- mTLS: LDAP (pki-mtls-ldap) ---
+    issue_cert "pki-mtls-ldap" "server" "mtls-ldap-server" \
+        "${CERTS_OUTPUT_DIR}/ldap/mtls-ldap.crt" \
+        "${CERTS_OUTPUT_DIR}/ldap/mtls-ldap.key" || return 1
+
+    issue_cert "pki-mtls-ldap" "client" "mtls-ldap-client-akashic" \
+        "${CERTS_OUTPUT_DIR}/akashic/ldap-client.crt" \
+        "${CERTS_OUTPUT_DIR}/akashic/ldap-client.key" || return 1
+
+    issue_cert "pki-mtls-ldap" "client" "mtls-ldap-client-phpldapadmin" \
+        "${CERTS_OUTPUT_DIR}/phpldapadmin/ldap-client.crt" \
+        "${CERTS_OUTPUT_DIR}/phpldapadmin/ldap-client.key" || return 1
+
+    # --- mTLS: Loki (pki-mtls-loki) ---
+    issue_cert "pki-mtls-loki" "server" "mtls-loki-server" \
+        "${CERTS_OUTPUT_DIR}/loki/mtls-loki.crt" \
+        "${CERTS_OUTPUT_DIR}/loki/mtls-loki.key" || return 1
+
+    issue_cert "pki-mtls-loki" "client" "mtls-loki-client-akashic" \
+        "${CERTS_OUTPUT_DIR}/akashic/loki-client.crt" \
+        "${CERTS_OUTPUT_DIR}/akashic/loki-client.key" || return 1
+
+    issue_cert "pki-mtls-loki" "client" "mtls-loki-client-grafana" \
+        "${CERTS_OUTPUT_DIR}/grafana/loki-client.crt" \
+        "${CERTS_OUTPUT_DIR}/grafana/loki-client.key" || return 1
+
+    log_success "All leaf certificates issued"
 }
 
 main

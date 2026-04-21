@@ -1,0 +1,6 @@
+{
+  "common_name": "ctrl.akashic.local",
+  "alt_names": "localhost",
+  "ip_sans": "127.0.0.1",
+  "ttl": "8760h"
+}
