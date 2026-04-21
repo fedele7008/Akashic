@@ -5,5 +5,5 @@
   "ttl=720h" -}}
 {{ .Key  | writeToFile "/certs/postgres/postgres.key" "root" "root" "0600" }}
 {{ .Cert | writeToFile "/certs/postgres/postgres.crt" "root" "root" "0644" }}
-{{ .CA   | writeToFile "/certs/postgres/ca.pem"       "root" "root" "0644" }}
+{{ join "" .CAChain | printf "%s\n" | writeToFile "/certs/postgres/ca.crt" "root" "root" "0644" }}
 {{- end -}}

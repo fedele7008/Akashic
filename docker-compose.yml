@@ -197,6 +197,7 @@ services:
       vault-agent:
         condition: service_started
     environment:
+      POSTGRES_TLS: "${AKASHIC_POSTGRES_TLS:-on}"
       POSTGRES_USER: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
       POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
       POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
