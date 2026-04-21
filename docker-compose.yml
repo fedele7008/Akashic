@@ -61,6 +61,10 @@ services:
     command: server
     cap_add:
       - IPC_LOCK
+    networks:
+      default:
+        aliases:
+          - vault.akashic.local
     healthcheck:
       test: ["CMD", "curl", "--cacert", "/vault/certs/vault/root-ca.crt", "https://localhost:8200/v1/sys/health"]
       interval: 10s
@@ -141,6 +145,10 @@ services:
         condition: service_healthy
     ports:
       - "${AKASHIC_NGINX_PORT:-8280}:8280"
+    networks:
+      default:
+        aliases:
+          - proxy.akashic.local
 
 #   postgres:
 #     image: postgres:16-alpine
@@ -155,6 +163,10 @@ services:
 #       - "${AKASHIC_DATABASE_POSTGRES_HOST_PORT:-5432}:5432"
 #     volumes:
 #       - pg_data:/var/lib/postgresql/data
+#     networks:
+#       default:
+#         aliases:
+#           - postgres.akashic.local
 #     healthcheck:
 #       test: ["CMD-SHELL", "pg_isready -U $${AKASHIC_DATABASE_POSTGRES_USERNAME} -d $${AKASHIC_DATABASE_POSTGRES_DB} || exit 1"]
 #       interval: 5s
@@ -176,6 +188,10 @@ services:
 #       - "${AKASHIC_DATABASE_REDIS_HOST_PORT:-6379}:6379"
 #     volumes:
 #       - redis_data:/data
+#     networks:
+#       default:
+#         aliases:
+#           - redis.akashic.local
 #     healthcheck:
 #       test: ["CMD", "redis-cli", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
 #       interval: 5s
@@ -193,6 +209,10 @@ services:
 #       - loki_data:/loki
 #     ports:
 #       - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
+#     networks:
+#       default:
+#         aliases:
+#           - loki.akashic.local
 #     profiles:
 #       - obs
 
@@ -238,6 +258,10 @@ services:
 #     volumes:
 #       - ldap_data:/var/lib/ldap
 #       - ldap_config:/etc/ldap/slapd.d
+#     networks:
+#       default:
+#         aliases:
+#           - ldap.akashic.local
 #     healthcheck:
 #       test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=akashic,dc=local -D cn=admin,dc=akashic,dc=local -w $${AKASHIC_LDAP_ADMIN_PASSWORD} || exit 1"]
 #       interval: 10s

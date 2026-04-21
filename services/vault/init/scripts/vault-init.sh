@@ -360,6 +360,56 @@ main() {
     configure_urls "pki-mtls-loki" || return 1
 
     log_success "All CRL/CA URLs configured"
+
+    # =========================================================================
+    # Step 11: Create PKI Roles
+    # =========================================================================
+    log_section "Step 11: Create PKI Roles"
+
+    create_role() {
+        local engine=$1
+        local role_name=$2
+        local config_file="${CONFIGS_DIR}/roles/${engine}-${role_name}.json"
+
+        log "Creating role: ${engine}/${role_name}"
+
+        local role_args=("-e" "${engine}" "-t" "${VAULT_TOKEN_FILE}")
+        if [[ -f "${config_file}" ]]; then
+            role_args+=("-f" "${config_file}")
+            log "- Using config: ${config_file}"
+        else
+            log_error "- Config file not found: ${config_file}"
+            return 1
+        fi
+
+        print_log_output_header
+        akashic-cli pki vault engine role create "${role_name}" "${role_args[@]}"
+        local role_result=$?
+        print_log_output_footer
+
+        if [[ ${role_result} -eq 0 ]]; then
+            log_success "Role created: ${engine}/${role_name}"
+        else
+            log_error "Failed to create role: ${engine}/${role_name}"
+            return 1
+        fi
+    }
+
+    # Internal CA roles
+    create_role "pki-internal" "server" || return 1
+
+    # Public CA roles
+    create_role "pki-public" "server" || return 1
+
+    # mTLS CA roles (server + client for each)
+    create_role "pki-mtls-akashic-ctrl" "server" || return 1
+    create_role "pki-mtls-akashic-ctrl" "client" || return 1
+    create_role "pki-mtls-ldap" "server" || return 1
+    create_role "pki-mtls-ldap" "client" || return 1
+    create_role "pki-mtls-loki" "server" || return 1
+    create_role "pki-mtls-loki" "client" || return 1
+
+    log_success "All PKI roles created"
 }
 
 main

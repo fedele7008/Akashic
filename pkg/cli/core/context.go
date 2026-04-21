@@ -2803,3 +2803,100 @@ func (cmdCtx *CliContext) RunPkiVaultEngineConfigUrlsCmd(cmd *cobra.Command, arg
 
 	return nil
 }
+
+func (cmdCtx *CliContext) RunPkiVaultEngineRoleCreateCmd(cmd *cobra.Command, args []string) error {
+	roleName := args[0]
+
+	engineName := cmdCtx.cfg.GetString("engine.name")
+	if engineName == "" {
+		cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+			"Engine name is required (--engine / -e)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.LogVerbose("Engine: %s, Role: %s", engineName, roleName)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Build config from file and/or inline (no defaults — must be explicit)
+	config := map[string]interface{}{}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	if len(config) == 0 {
+		cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+			"Role configuration is required (use --config-file / -f or --config)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Send role creation request
+	apiPath := fmt.Sprintf("/v1/%s/roles/%s", engineName, roleName)
+	cmdCtx.LogVerbose("Creating role: POST %s", apiPath)
+
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+			"Failed to send role creation request",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
+		cmdCtx.printResultTable("ROLE CREATE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	configJSON, _ := json.MarshalIndent(config, "", "  ")
+	cmdCtx.printResultTable("ROLE CREATE SUCCESS", []string{
+		fmt.Sprintf("Engine: %s\nRole:   %s\nConfig:\n%s", engineName, roleName, string(configJSON)),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
