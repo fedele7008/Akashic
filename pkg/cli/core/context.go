@@ -55,18 +55,16 @@ func (ctx *CliContext) LogVerbose(format string, args ...any) {
 
 func (cmdCtx *CliContext) printResultTable(title string, data []string, footer string, isErr bool) {
 	termWidth, _, err := term.GetSize(int(syscall.Stdout))
-	if err != nil {
-		cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
-		termWidth = 80
-	} else {
+	hasTerm := err == nil
+	if hasTerm {
 		termWidth -= 8 // Give some space for better readability
+	} else {
+		cmdCtx.LogVerbose("Failed to get terminal size: %v", err)
 	}
 	r := renderer.NewColorized(
 		renderer.ColorizedConfig{
 			Settings: tw.Settings{
-				Separators: tw.Separators{
-					BetweenRows: tw.On,
-				},
+				Separators: tw.Separators{},
 			},
 			Header: renderer.Tint{
 				FG: renderer.Colors{common.Ternary(isErr, color.FgRed, color.FgGreen), color.Bold},
@@ -93,7 +91,7 @@ func (cmdCtx *CliContext) printResultTable(title string, data []string, footer s
 	)
 	rowCfg := tw.CellConfig{
 		Formatting: tw.CellFormatting{
-			AutoWrap: tw.WrapBreak,
+			AutoWrap: tw.WrapNone,
 		},
 		Padding: tw.CellPadding{
 			Global: tw.Padding{
@@ -101,11 +99,10 @@ func (cmdCtx *CliContext) printResultTable(title string, data []string, footer s
 				Left:  " ",
 			},
 		},
-		ColMaxWidths: tw.CellWidth{Global: termWidth},
 	}
 	footerCfg := tw.CellConfig{
 		Formatting: tw.CellFormatting{
-			AutoWrap: tw.WrapBreak,
+			AutoWrap: tw.WrapNone,
 		},
 		Padding: tw.CellPadding{
 			Global: tw.Padding{
@@ -113,16 +110,29 @@ func (cmdCtx *CliContext) printResultTable(title string, data []string, footer s
 				Left:  " ",
 			},
 		},
-		ColMaxWidths: tw.CellWidth{Global: termWidth},
+	}
+	if hasTerm {
+		rowCfg.Formatting.AutoWrap = tw.WrapBreak
+		rowCfg.ColMaxWidths = tw.CellWidth{Global: termWidth}
+		footerCfg.Formatting.AutoWrap = tw.WrapBreak
+		footerCfg.ColMaxWidths = tw.CellWidth{Global: termWidth}
 	}
 	table := tablewriter.NewTable(os.Stdout,
 		tablewriter.WithRenderer(r),
 		tablewriter.WithRowConfig(rowCfg),
 		tablewriter.WithFooterConfig(footerCfg),
+		tablewriter.WithTrimSpace(tw.Off),
 	)
 
 	table.Header(title)
-	table.Bulk(data)
+	// Split multi-line strings into separate rows so the tablewriter
+	// correctly measures each line's width for column sizing.
+	for _, d := range data {
+		lines := strings.Split(d, "\n")
+		for _, line := range lines {
+			table.Append(line)
+		}
+	}
 	table.Footer(footer)
 	table.Render()
 }
