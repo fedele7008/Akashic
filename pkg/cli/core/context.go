@@ -245,6 +245,8 @@ const (
 	PkiCrlBaseUrl
 	IssueRole
 	IssueKeyOut
+	PolicyFile
+	ApproleOutput
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -468,6 +470,20 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Name:    "key-out",
 		Default: string(""),
 		Desc:    "Output file path for private key",
+	},
+	PolicyFile: {
+		Key:     "policy.file",
+		Name:    "file",
+		Short:   "f",
+		Default: string(""),
+		Desc:    "Path to policy file (HCL format)",
+	},
+	ApproleOutput: {
+		Key:     "approle.output",
+		Name:    "output",
+		Short:   "o",
+		Default: string(""),
+		Desc:    "Output file path for AppRole credentials",
 	},
 }
 
@@ -2200,6 +2216,28 @@ func (cmdCtx *CliContext) RunPkiVaultEngineGenerateCsrInternalCmd(cmd *cobra.Com
 		os.Exit(1)
 	}
 
+	// Check if intermediate CA was already set up (CSR → sign → register completed)
+	caCheckPath := fmt.Sprintf("/v1/%s/cert/ca", engineName)
+	cmdCtx.LogVerbose("Checking existing CA: GET %s", caCheckPath)
+	caResp, caBody, caErr := client.SendRequestWithToken(http.MethodGet, caCheckPath, nil, vaultToken)
+	if caErr == nil && caResp.StatusCode == http.StatusOK && strings.Contains(string(caBody), "BEGIN CERTIFICATE") {
+		cmdCtx.LogVerbose("Intermediate CA already active, skipping CSR generation")
+
+		// If output file doesn't exist, write the existing CSR file as a marker
+		if _, statErr := os.Stat(outputPath); statErr != nil {
+			outputDir := filepath.Dir(outputPath)
+			if err := os.MkdirAll(outputDir, 0o755); err == nil {
+				// Write a placeholder so subsequent steps see the file
+				os.WriteFile(outputPath, []byte("# CSR skipped — intermediate CA already active\n"), 0o644)
+			}
+		}
+
+		cmdCtx.printResultTable("CSR GENERATE SUCCESS", []string{
+			fmt.Sprintf("Intermediate CA already active on engine: %s\nOutput: %s", engineName, outputPath),
+		}, "Already exists", false)
+		return nil
+	}
+
 	// Send CSR generation request
 	apiPath := fmt.Sprintf("/v1/%s/intermediate/generate/internal", engineName)
 	cmdCtx.LogVerbose("Generating CSR: POST %s", apiPath)
@@ -2372,6 +2410,40 @@ func (cmdCtx *CliContext) RunPkiVaultEngineGenerateRootInternalCmd(cmd *cobra.Co
 		os.Exit(1)
 	}
 
+	// Check if root CA already exists
+	caCheckPath := fmt.Sprintf("/v1/%s/cert/ca", engineName)
+	cmdCtx.LogVerbose("Checking existing CA: GET %s", caCheckPath)
+	caResp, caBody, caErr := client.SendRequestWithToken(http.MethodGet, caCheckPath, nil, vaultToken)
+	if caErr == nil && caResp.StatusCode == http.StatusOK && len(caBody) > 0 {
+		// CA exists — check if it has actual PEM content (not empty JSON)
+		existingCert := string(caBody)
+
+		// Vault returns raw PEM for /cert/ca (not JSON-wrapped)
+		if strings.Contains(existingCert, "BEGIN CERTIFICATE") {
+			cmdCtx.LogVerbose("Root CA already exists, writing existing cert to output")
+
+			// Ensure output directory exists and write the existing cert
+			outputDir := filepath.Dir(outputPath)
+			if err := os.MkdirAll(outputDir, 0o755); err != nil {
+				cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+					fmt.Sprintf("Failed to create output directory: %s", outputDir),
+				}, err.Error(), true)
+				os.Exit(1)
+			}
+			if err := os.WriteFile(outputPath, caBody, 0o644); err != nil {
+				cmdCtx.printResultTable("ROOT GENERATE FAILED", []string{
+					fmt.Sprintf("Failed to write certificate to file: %s", outputPath),
+				}, err.Error(), true)
+				os.Exit(1)
+			}
+
+			cmdCtx.printResultTable("ROOT GENERATE SUCCESS", []string{
+				fmt.Sprintf("Root CA already exists on engine: %s\nOutput: %s", engineName, outputPath),
+			}, "Already exists", false)
+			return nil
+		}
+	}
+
 	// Send root CA generation request
 	apiPath := fmt.Sprintf("/v1/%s/root/generate/internal", engineName)
 	cmdCtx.LogVerbose("Generating root CA: POST %s", apiPath)
@@ -2479,6 +2551,16 @@ func (cmdCtx *CliContext) RunPkiVaultEngineSignIntermediateCmd(cmd *cobra.Comman
 	}
 
 	cmdCtx.LogVerbose("Signing engine: %s, CSR: %s, Output: %s", engineName, csrInputPath, outputPath)
+
+	// Check if signed certificate already exists at output path
+	if existingCert, statErr := os.ReadFile(outputPath); statErr == nil {
+		if strings.Contains(string(existingCert), "BEGIN CERTIFICATE") {
+			cmdCtx.printResultTable("SIGN INTERMEDIATE SUCCESS", []string{
+				fmt.Sprintf("Signed certificate already exists: %s", outputPath),
+			}, "Already exists", false)
+			return nil
+		}
+	}
 
 	// Read CSR file
 	csrBytes, err := os.ReadFile(csrInputPath)
@@ -2676,6 +2758,17 @@ func (cmdCtx *CliContext) RunPkiVaultEngineRegisterCmd(cmd *cobra.Command, args 
 			err.Error(),
 		}, "", true)
 		os.Exit(1)
+	}
+
+	// Check if intermediate CA is already registered
+	caCheckPath := fmt.Sprintf("/v1/%s/cert/ca", engineName)
+	cmdCtx.LogVerbose("Checking existing CA: GET %s", caCheckPath)
+	caResp, caBody, caErr := client.SendRequestWithToken(http.MethodGet, caCheckPath, nil, vaultToken)
+	if caErr == nil && caResp.StatusCode == http.StatusOK && strings.Contains(string(caBody), "BEGIN CERTIFICATE") {
+		cmdCtx.printResultTable("REGISTER SUCCESS", []string{
+			fmt.Sprintf("Certificate already registered on engine: %s", engineName),
+		}, "Already registered", false)
+		return nil
 	}
 
 	// Send set-signed request
@@ -2961,6 +3054,18 @@ func (cmdCtx *CliContext) RunPkiVaultEngineIssueCmd(cmd *cobra.Command, args []s
 
 	cmdCtx.LogVerbose("Engine: %s, Role: %s, Output: %s, Key: %s", engineName, roleName, outputPath, keyOutPath)
 
+	// Check if certificate and key already exist at output paths
+	if certData, certErr := os.ReadFile(outputPath); certErr == nil {
+		if keyData, keyErr := os.ReadFile(keyOutPath); keyErr == nil {
+			if strings.Contains(string(certData), "BEGIN CERTIFICATE") && strings.Contains(string(keyData), "PRIVATE KEY") {
+				cmdCtx.printResultTable("ISSUE SUCCESS", []string{
+					fmt.Sprintf("Certificate already exists: %s\nPrivate Key: %s", outputPath, keyOutPath),
+				}, "Already exists", false)
+				return nil
+			}
+		}
+	}
+
 	// Create authenticated Vault client
 	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
 	if err != nil {
@@ -3114,6 +3219,484 @@ func (cmdCtx *CliContext) RunPkiVaultEngineIssueCmd(cmd *cobra.Command, args []s
 				"Private Key: %s",
 			engineName, roleName, commonName, issueResponse.Data.SerialNumber, outputPath, keyOutPath),
 	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+// Vault Policy Commands
+func (cmdCtx *CliContext) RunPkiVaultPolicyCreateCmd(cmd *cobra.Command, args []string) error {
+	policyName := args[0]
+	if policyName == "" {
+		cmdCtx.printResultTable("POLICY CREATE FAILED", []string{
+			"Policy name is required",
+		}, "", true)
+		os.Exit(1)
+	}
+	cmdCtx.LogVerbose("Policy name: %s", policyName)
+
+	// Read policy file
+	policyFile := cmdCtx.cfg.GetString("policy.file")
+	if policyFile == "" {
+		cmdCtx.printResultTable("POLICY CREATE FAILED", []string{
+			"Policy file is required (--file / -f)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	policyBytes, err := os.ReadFile(policyFile)
+	if err != nil {
+		cmdCtx.printResultTable("POLICY CREATE FAILED", []string{
+			fmt.Sprintf("Failed to read policy file: %s", policyFile),
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	policyContent := string(policyBytes)
+	cmdCtx.LogVerbose("Policy file loaded: %s (%d bytes)", policyFile, len(policyContent))
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("POLICY CREATE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Check if policy already exists
+	apiPath := fmt.Sprintf("/v1/sys/policies/acl/%s", policyName)
+	resp, body, err := client.SendRequestWithToken(http.MethodGet, apiPath, nil, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("POLICY CREATE FAILED", []string{
+			"Failed to check existing policy",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		// Policy exists — check if content matches
+		var existing struct {
+			Data struct {
+				Policy string `json:"policy"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &existing) == nil && existing.Data.Policy != "" {
+			cmdCtx.printResultTable("POLICY CREATE SUCCESS", []string{
+				fmt.Sprintf("Policy already exists: %s", policyName),
+			}, "Already exists", false)
+			return nil
+		}
+	}
+
+	// Create or update policy
+	payload := map[string]interface{}{
+		"policy": policyContent,
+	}
+
+	cmdCtx.LogVerbose("Creating policy: PUT %s", apiPath)
+	resp, body, err = client.SendRequestWithToken(http.MethodPut, apiPath, payload, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("POLICY CREATE FAILED", []string{
+			"Failed to create policy",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("POLICY CREATE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	cmdCtx.printResultTable("POLICY CREATE SUCCESS", []string{
+		fmt.Sprintf("Policy: %s\nFile:   %s", policyName, policyFile),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+// Vault Auth Commands
+func (cmdCtx *CliContext) RunPkiVaultAuthEnableCmd(cmd *cobra.Command, args []string) error {
+	authType := args[0]
+	if authType == "" {
+		cmdCtx.printResultTable("AUTH ENABLE FAILED", []string{
+			"Auth type is required",
+		}, "", true)
+		os.Exit(1)
+	}
+	cmdCtx.LogVerbose("Auth type: %s", authType)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("AUTH ENABLE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Check if auth method is already enabled
+	resp, body, err := client.SendRequestWithToken(http.MethodGet, "/v1/sys/auth", nil, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("AUTH ENABLE FAILED", []string{
+			"Failed to list auth methods",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("AUTH ENABLE FAILED", []string{
+			"Failed to list auth methods",
+		}, fmt.Sprintf("Status code: %d\n%s", resp.StatusCode, string(body)), true)
+		os.Exit(1)
+	}
+
+	// Parse response — check for authType/ key in data
+	var authResponse map[string]json.RawMessage
+	if err := json.Unmarshal(body, &authResponse); err != nil {
+		cmdCtx.printResultTable("AUTH ENABLE FAILED", []string{
+			"Failed to parse auth list response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	authData := authResponse
+	if dataRaw, ok := authResponse["data"]; ok {
+		var dataParsed map[string]json.RawMessage
+		if json.Unmarshal(dataRaw, &dataParsed) == nil {
+			authData = dataParsed
+		}
+	}
+
+	lookupKey := authType + "/"
+	if _, exists := authData[lookupKey]; exists {
+		cmdCtx.printResultTable("AUTH ENABLE SUCCESS", []string{
+			fmt.Sprintf("Auth method already enabled: %s", authType),
+		}, "Already enabled", false)
+		return nil
+	}
+
+	// Enable auth method
+	description := cmdCtx.cfg.GetString("engine.description")
+	payload := map[string]interface{}{
+		"type": authType,
+	}
+	if description != "" {
+		payload["description"] = description
+	}
+
+	apiPath := fmt.Sprintf("/v1/sys/auth/%s", authType)
+	cmdCtx.LogVerbose("Enabling auth: POST %s", apiPath)
+	resp, body, err = client.SendRequestWithToken(http.MethodPost, apiPath, payload, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("AUTH ENABLE FAILED", []string{
+			"Failed to enable auth method",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("AUTH ENABLE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	descInfo := ""
+	if description != "" {
+		descInfo = fmt.Sprintf("\nDescription: %s", description)
+	}
+	cmdCtx.printResultTable("AUTH ENABLE SUCCESS", []string{
+		fmt.Sprintf("Auth method enabled: %s%s", authType, descInfo),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+// Vault AppRole Commands
+func (cmdCtx *CliContext) RunPkiVaultApproleCreateCmd(cmd *cobra.Command, args []string) error {
+	roleName := args[0]
+	if roleName == "" {
+		cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+			"Role name is required",
+		}, "", true)
+		os.Exit(1)
+	}
+	cmdCtx.LogVerbose("AppRole role name: %s", roleName)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Check if role already exists
+	apiPath := fmt.Sprintf("/v1/auth/approle/role/%s", roleName)
+	resp, body, err := client.SendRequestWithToken(http.MethodGet, apiPath, nil, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+			"Failed to check existing role",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		var existing struct {
+			Data struct {
+				TokenPolicies []string `json:"token_policies"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &existing) == nil && len(existing.Data.TokenPolicies) > 0 {
+			cmdCtx.printResultTable("APPROLE CREATE SUCCESS", []string{
+				fmt.Sprintf("AppRole already exists: %s\nPolicies: %v", roleName, existing.Data.TokenPolicies),
+			}, "Already exists", false)
+			return nil
+		}
+	}
+
+	// Build cascading config: defaults → config file → inline config
+	config := map[string]interface{}{
+		"token_period":   "768h",
+		"secret_id_ttl":  "0",
+		"bind_secret_id": true,
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// Create role
+	cmdCtx.LogVerbose("Creating AppRole: POST %s", apiPath)
+	resp, body, err = client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+			"Failed to create AppRole",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("APPROLE CREATE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	configJSON, _ := json.MarshalIndent(config, "", "  ")
+	cmdCtx.printResultTable("APPROLE CREATE SUCCESS", []string{
+		fmt.Sprintf("AppRole created: %s\nConfig:\n%s", roleName, string(configJSON)),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultApproleRoleIdCmd(cmd *cobra.Command, args []string) error {
+	roleName := args[0]
+	if roleName == "" {
+		cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+			"Role name is required",
+		}, "", true)
+		os.Exit(1)
+	}
+	cmdCtx.LogVerbose("Reading role-id for: %s", roleName)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Read role-id
+	apiPath := fmt.Sprintf("/v1/auth/approle/role/%s/role-id", roleName)
+	resp, body, err := client.SendRequestWithToken(http.MethodGet, apiPath, nil, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+			"Failed to read role-id",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	var roleIdResponse struct {
+		Data struct {
+			RoleId string `json:"role_id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &roleIdResponse); err != nil {
+		cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+			"Failed to parse role-id response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	roleId := roleIdResponse.Data.RoleId
+	if roleId == "" {
+		cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+			"Empty role-id returned",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Write to file if output path specified
+	outputPath := cmdCtx.cfg.GetString("approle.output")
+	if outputPath != "" {
+		dir := filepath.Dir(outputPath)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+				fmt.Sprintf("Failed to create output directory: %s", dir),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(outputPath, []byte(roleId), 0600); err != nil {
+			cmdCtx.printResultTable("APPROLE ROLE-ID FAILED", []string{
+				fmt.Sprintf("Failed to write role-id to: %s", outputPath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		cmdCtx.printResultTable("APPROLE ROLE-ID SUCCESS", []string{
+			fmt.Sprintf("Role:    %s\nRole-ID: %s\nSaved:   %s", roleName, roleId, outputPath),
+		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+	} else {
+		cmdCtx.printResultTable("APPROLE ROLE-ID SUCCESS", []string{
+			fmt.Sprintf("Role:    %s\nRole-ID: %s", roleName, roleId),
+		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+	}
+
+	return nil
+}
+
+func (cmdCtx *CliContext) RunPkiVaultApproleSecretIdCmd(cmd *cobra.Command, args []string) error {
+	roleName := args[0]
+	if roleName == "" {
+		cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+			"Role name is required",
+		}, "", true)
+		os.Exit(1)
+	}
+	cmdCtx.LogVerbose("Generating secret-id for: %s", roleName)
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Generate secret-id
+	apiPath := fmt.Sprintf("/v1/auth/approle/role/%s/secret-id", roleName)
+	resp, body, err := client.SendRequestWithToken(http.MethodPost, apiPath, map[string]interface{}{}, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+			"Failed to generate secret-id",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	var secretIdResponse struct {
+		Data struct {
+			SecretId         string `json:"secret_id"`
+			SecretIdAccessor string `json:"secret_id_accessor"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(body, &secretIdResponse); err != nil {
+		cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+			"Failed to parse secret-id response",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	secretId := secretIdResponse.Data.SecretId
+	if secretId == "" {
+		cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+			"Empty secret-id returned",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	accessor := secretIdResponse.Data.SecretIdAccessor
+
+	// Write to file if output path specified
+	outputPath := cmdCtx.cfg.GetString("approle.output")
+	if outputPath != "" {
+		dir := filepath.Dir(outputPath)
+		if err := os.MkdirAll(dir, 0700); err != nil {
+			cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+				fmt.Sprintf("Failed to create output directory: %s", dir),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		if err := os.WriteFile(outputPath, []byte(secretId), 0600); err != nil {
+			cmdCtx.printResultTable("APPROLE SECRET-ID FAILED", []string{
+				fmt.Sprintf("Failed to write secret-id to: %s", outputPath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		cmdCtx.printResultTable("APPROLE SECRET-ID SUCCESS", []string{
+			fmt.Sprintf("Role:     %s\nAccessor: %s\nSaved:    %s", roleName, accessor, outputPath),
+		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+	} else {
+		cmdCtx.printResultTable("APPROLE SECRET-ID SUCCESS", []string{
+			fmt.Sprintf("Role:      %s\nSecret-ID: %s\nAccessor:  %s", roleName, secretId, accessor),
+		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
+	}
 
 	return nil
 }

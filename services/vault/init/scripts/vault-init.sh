@@ -533,6 +533,103 @@ main() {
     fi
 
     log_success "All trust bundles created"
+
+    # =========================================================================
+    # Step 14: Create Vault Agent AppRole Authentication
+    # =========================================================================
+    log_section "Step 14: Create Vault Agent AppRole Authentication"
+
+    VAULT_AGENT_OUTPUT_DIR="${VAULT_AGENT_OUTPUT_DIR:-/vault/token/vault-agent}"
+
+    # ── 14a: Create cert-issuer policy ──────────────────────────
+    log "Creating cert-issuer policy..."
+
+    local policy_file="${CONFIGS_DIR}/policy/cert-issuer.hcl"
+    if [[ ! -f "${policy_file}" ]]; then
+        log_error "Policy file not found: ${policy_file}"
+        return 1
+    fi
+
+    print_log_output_header
+    akashic-cli pki vault policy create cert-issuer -f "${policy_file}" -t "${VAULT_TOKEN_FILE}"
+    local policy_result=$?
+    print_log_output_footer
+
+    if [[ ${policy_result} -eq 0 ]]; then
+        log_success "Policy cert-issuer ready"
+    else
+        log_error "Failed to create cert-issuer policy"
+        return 1
+    fi
+
+    # ── 14b: Enable AppRole auth method ─────────────────────────
+    log "Enabling AppRole auth method..."
+
+    print_log_output_header
+    akashic-cli pki vault auth enable approle -t "${VAULT_TOKEN_FILE}" -d "AppRole for service authentication"
+    local auth_result=$?
+    print_log_output_footer
+
+    if [[ ${auth_result} -eq 0 ]]; then
+        log_success "AppRole auth method ready"
+    else
+        log_error "Failed to enable AppRole auth method"
+        return 1
+    fi
+
+    # ── 14c: Create cert-agent role ─────────────────────────────
+    log "Creating cert-agent AppRole role..."
+
+    print_log_output_header
+    akashic-cli pki vault approle create cert-agent \
+        --config '{"token_policies":["cert-issuer"],"token_ttl":"1h","token_max_ttl":"4h"}' \
+        -t "${VAULT_TOKEN_FILE}"
+    local role_result=$?
+    print_log_output_footer
+
+    if [[ ${role_result} -eq 0 ]]; then
+        log_success "Role cert-agent ready"
+    else
+        log_error "Failed to create cert-agent role"
+        return 1
+    fi
+
+    # ── 14d: Extract role-id and generate secret-id ─────────────
+    log "Extracting role-id and generating secret-id..."
+
+    mkdir -p "${VAULT_AGENT_OUTPUT_DIR}"
+
+    # Get role-id
+    print_log_output_header
+    akashic-cli pki vault approle role-id cert-agent -t "${VAULT_TOKEN_FILE}" -o "${VAULT_AGENT_OUTPUT_DIR}/role-id"
+    local role_id_result=$?
+    print_log_output_footer
+
+    if [[ ${role_id_result} -eq 0 ]]; then
+        log_success "Role-id saved to ${VAULT_AGENT_OUTPUT_DIR}/role-id"
+    else
+        log_error "Failed to read role-id"
+        return 1
+    fi
+
+    # Generate secret-id (skip if file already exists)
+    if [[ -f "${VAULT_AGENT_OUTPUT_DIR}/secret-id" ]]; then
+        log "Secret-id file already exists, skipping generation"
+    else
+        print_log_output_header
+        akashic-cli pki vault approle secret-id cert-agent -t "${VAULT_TOKEN_FILE}" -o "${VAULT_AGENT_OUTPUT_DIR}/secret-id"
+        local secret_id_result=$?
+        print_log_output_footer
+
+        if [[ ${secret_id_result} -eq 0 ]]; then
+            log_success "Secret-id saved to ${VAULT_AGENT_OUTPUT_DIR}/secret-id"
+        else
+            log_error "Failed to generate secret-id"
+            return 1
+        fi
+    fi
+
+    log_success "Vault Agent AppRole authentication configured"
 }
 
 main

@@ -110,6 +110,7 @@ services:
       AKASHIC_PKI_CRL_BASE_URL: "${AKASHIC_PKI_CRL_BASE_URL:-http://localhost:8280}"
       VAULT_TOKEN_FILE: "/vault/token/vault/root-token.enc"
       VAULT_KEY_DIR: "/vault/token/vault/keys"
+      VAULT_AGENT_OUTPUT_DIR: "/vault/token/vault-agent"
       TZ: ${AKASHIC_TZ:-UTC}
     volumes:
       - secrets:/vault/token
