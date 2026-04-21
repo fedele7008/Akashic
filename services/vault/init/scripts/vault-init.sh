@@ -458,9 +458,7 @@ main() {
         "${CERTS_OUTPUT_DIR}/akashic/auth.crt" \
         "${CERTS_OUTPUT_DIR}/akashic/auth.key" || return 1
 
-    issue_cert "pki-internal" "server" "postgres" \
-        "${CERTS_OUTPUT_DIR}/postgres/postgres.crt" \
-        "${CERTS_OUTPUT_DIR}/postgres/postgres.key" || return 1
+    # postgres cert is now issued by vault-agent (see services/vault-agent/templates/postgres.tpl)
 
     issue_cert "pki-internal" "server" "redis" \
         "${CERTS_OUTPUT_DIR}/redis/redis.crt" \
@@ -612,21 +610,17 @@ main() {
         return 1
     fi
 
-    # Generate secret-id (skip if file already exists)
-    if [[ -f "${VAULT_AGENT_OUTPUT_DIR}/secret-id" ]]; then
-        log "Secret-id file already exists, skipping generation"
-    else
-        print_log_output_header
-        akashic-cli pki vault approle secret-id cert-agent -t "${VAULT_TOKEN_FILE}" -o "${VAULT_AGENT_OUTPUT_DIR}/secret-id"
-        local secret_id_result=$?
-        print_log_output_footer
+    # Generate secret-id (always regenerate — old secret-ids are invalid after Vault re-init)
+    print_log_output_header
+    akashic-cli pki vault approle secret-id cert-agent -t "${VAULT_TOKEN_FILE}" -o "${VAULT_AGENT_OUTPUT_DIR}/secret-id"
+    local secret_id_result=$?
+    print_log_output_footer
 
-        if [[ ${secret_id_result} -eq 0 ]]; then
-            log_success "Secret-id saved to ${VAULT_AGENT_OUTPUT_DIR}/secret-id"
-        else
-            log_error "Failed to generate secret-id"
-            return 1
-        fi
+    if [[ ${secret_id_result} -eq 0 ]]; then
+        log_success "Secret-id saved to ${VAULT_AGENT_OUTPUT_DIR}/secret-id"
+    else
+        log_error "Failed to generate secret-id"
+        return 1
     fi
 
     log_success "Vault Agent AppRole authentication configured"

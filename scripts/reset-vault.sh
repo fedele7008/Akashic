@@ -7,7 +7,11 @@ if [[ "$current_dir_name" != "Akashic" ]]; then
   echo "Current directory is ${current_dir_name}, Please run this script in the Akashic root directory."
 fi
 
-rm -r ./certs/vault
+# Clean all certs and secrets — a Vault reset invalidates everything
+# (the certs were signed by the old CA chain and can't be reused)
+find ./certs -mindepth 1 ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {} + 2>/dev/null || true
+rm -rf ./.secrets/vault
+rm -rf ./.secrets/vault-agent
 docker compose ps | grep "akashic-vault" > /dev/null 2>&1
 if [ $? -eq 0 ]; then
   echo "Stopping and removing Akashic Vault container..."

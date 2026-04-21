@@ -124,6 +124,35 @@ services:
         condition: service_healthy
 
   # ═══════════════════════════════════════════════════════════════════════════════
+  # vault-agent: Certificate Lifecycle Manager
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Issues and auto-renews leaf certificates via Vault's PKI engines.
+  # Authenticates with AppRole (role-id + secret-id from vault-init Step 14).
+  #
+  # Each template uses a single pkiCert call with writeToFile to produce
+  # separate .crt, .key, and ca.pem files. Certs are renewed at ~2/3 TTL.
+  #
+  # Templates: ./services/vault-agent/templates/*.tpl
+  # Currently manages: PostgreSQL
+  # Troubleshooting: docker compose logs vault-agent
+  vault-agent:
+    build: ./services/vault-agent
+    container_name: akashic-vault-agent
+    restart: unless-stopped
+    depends_on:
+      vault-init:
+        condition: service_completed_successfully
+    environment:
+      TZ: ${AKASHIC_TZ:-UTC}
+    volumes:
+      - certs:/certs
+      - secrets:/vault-agent/auth:ro
+    networks:
+      default:
+        aliases:
+          - vault-agent.akashic.local
+
+  # ═══════════════════════════════════════════════════════════════════════════════
   # proxy: Akashic Reverse Proxy (nginx)
   # ═══════════════════════════════════════════════════════════════════════════════
   # General-purpose nginx reverse proxy for the Akashic project.
