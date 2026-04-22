@@ -178,6 +178,8 @@ services:
     environment:
       ADMINER_AUTH_USER: ${AKASHIC_ADMINER_AUTH_USER:-}
       ADMINER_AUTH_PASSWORD: ${AKASHIC_ADMINER_AUTH_PASSWORD:-}
+      REDISINSIGHT_AUTH_USER: ${AKASHIC_REDISINSIGHT_AUTH_USER:-}
+      REDISINSIGHT_AUTH_PASSWORD: ${AKASHIC_REDISINSIGHT_AUTH_PASSWORD:-}
     ports:
       - "${AKASHIC_NGINX_PORT:-8280}:8280"
     volumes:
@@ -258,7 +260,11 @@ services:
         aliases:
           - redis.akashic.local
     healthcheck:
-      test: ["CMD", "redis-cli", "--tls", "--cacert", "/certs/ca.crt", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
+      test: ["CMD", "healthcheck.sh"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
 #       interval: 5s
 #       timeout: 3s
 #       retries: 20
@@ -304,6 +310,26 @@ services:
     restart: always
     ports:
       - 127.0.0.1:25000:8080/tcp
+
+  redisinsight:
+    build: ./services/redisinsight
+    container_name: akashic-redisinsight
+    restart: unless-stopped
+    depends_on:
+      redis:
+        condition: service_healthy
+    environment:
+      RI_ENCRYPTION_KEY: "${AKASHIC_SECRET}"
+      RI_ENCRYPTION_KEYTAR: "false"
+      RI_REDIS_HOST: redis
+      RI_REDIS_PORT: 6379
+      RI_REDIS_PASSWORD: ${AKASHIC_DATABASE_REDIS_PASSWORD}
+      RI_REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
+    ports:
+      - 127.0.0.1:25001:5540/tcp
+    volumes:
+      - redisinsight_data:/data
+      - certs:/certs:ro
 
 #   ldap:
 #     image: osixia/openldap:1.5.0
@@ -374,5 +400,6 @@ volumes:
   grafana_data:
   ldap_data:
   ldap_config:
+  redisinsight_data:
   vault_logs:
   vault_file:

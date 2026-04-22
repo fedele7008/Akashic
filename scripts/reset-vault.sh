@@ -18,3 +18,4 @@ if [ $? -eq 0 ]; then
   docker compose down
 fi
 docker volume rm $(docker volume ls --format 'table {{.Name}}' | grep "vault")
+docker volume rm akashic_redisinsight_data 2>/dev/null || true
