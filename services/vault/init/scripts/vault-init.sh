@@ -334,13 +334,18 @@ main() {
     # =========================================================================
     log_section "Step 10: Configure CRL/CA URLs"
 
+    local crl_base_url="${AKASHIC_PKI_CRL_BASE_URL:-http://localhost:8280}"
+    log "CRL/CA base URL: ${crl_base_url}"
+
     configure_urls() {
         local engine=$1
 
         log "Configuring URLs: ${engine}"
+        log "- CA:  ${crl_base_url}/v1/${engine}/ca"
+        log "- CRL: ${crl_base_url}/v1/${engine}/crl"
 
         print_log_output_header
-        akashic-cli pki vault engine config urls -e "${engine}" -t "${VAULT_TOKEN_FILE}"
+        akashic-cli pki vault engine config urls -e "${engine}" --base-url "${crl_base_url}" -t "${VAULT_TOKEN_FILE}"
         local url_result=$?
         print_log_output_footer
 
@@ -624,6 +629,69 @@ main() {
     fi
 
     log_success "Vault Agent AppRole authentication configured"
+
+    # =========================================================================
+    # Step 15: Create Vault Admin User (userpass)
+    # =========================================================================
+    VAULT_ADMIN_USERNAME="${VAULT_ADMIN_USERNAME:-}"
+    VAULT_ADMIN_PASSWORD="${VAULT_ADMIN_PASSWORD:-}"
+
+    if [[ -z "${VAULT_ADMIN_USERNAME}" ]] || [[ -z "${VAULT_ADMIN_PASSWORD}" ]]; then
+        log_section "Step 15: Create Vault Admin User (skipped)"
+        log "VAULT_ADMIN_USERNAME or VAULT_ADMIN_PASSWORD not set, skipping admin user creation"
+    else
+        log_section "Step 15: Create Vault Admin User"
+
+        # ── 15a: Create admin policy ────────────────────────────────
+        log "Creating admin policy..."
+
+        print_log_output_header
+        akashic-cli pki vault policy create admin -f "${CONFIGS_DIR}/policy/admin.hcl" -t "${VAULT_TOKEN_FILE}"
+        local admin_policy_result=$?
+        print_log_output_footer
+
+        if [[ ${admin_policy_result} -eq 0 ]]; then
+            log_success "Policy admin ready"
+        else
+            log_error "Failed to create admin policy"
+            return 1
+        fi
+
+        # ── 15b: Enable userpass auth method ────────────────────────
+        log "Enabling userpass auth method..."
+
+        print_log_output_header
+        akashic-cli pki vault auth enable userpass -t "${VAULT_TOKEN_FILE}" -d "Username/password authentication for human operators"
+        local userpass_result=$?
+        print_log_output_footer
+
+        if [[ ${userpass_result} -eq 0 ]]; then
+            log_success "Userpass auth method ready"
+        else
+            log_error "Failed to enable userpass auth method"
+            return 1
+        fi
+
+        # ── 15c: Create admin user ─────────────────────────────────
+        log "Creating admin user: ${VAULT_ADMIN_USERNAME}"
+
+        print_log_output_header
+        akashic-cli pki vault userpass create "${VAULT_ADMIN_USERNAME}" \
+            --password "${VAULT_ADMIN_PASSWORD}" \
+            --config '{"token_policies":["admin"]}' \
+            -t "${VAULT_TOKEN_FILE}"
+        local admin_user_result=$?
+        print_log_output_footer
+
+        if [[ ${admin_user_result} -eq 0 ]]; then
+            log_success "Admin user created: ${VAULT_ADMIN_USERNAME}"
+        else
+            log_error "Failed to create admin user"
+            return 1
+        fi
+
+        log_success "Vault admin user configured"
+    fi
 }
 
 main

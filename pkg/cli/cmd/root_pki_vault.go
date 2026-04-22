@@ -27,6 +27,7 @@ func NewVaultCmd(ctx *core.CliContext) *cobra.Command {
 	cmd.AddCommand(NewVaultPolicyCmd(ctx))
 	cmd.AddCommand(NewVaultAuthCmd(ctx))
 	cmd.AddCommand(NewVaultApproleCmd(ctx))
+	cmd.AddCommand(NewVaultUserpassCmd(ctx))
 
 	return cmd
 }

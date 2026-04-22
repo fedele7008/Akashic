@@ -111,6 +111,8 @@ services:
       VAULT_TOKEN_FILE: "/vault/token/vault/root-token.enc"
       VAULT_KEY_DIR: "/vault/token/vault/keys"
       VAULT_AGENT_OUTPUT_DIR: "/vault/token/vault-agent"
+      VAULT_ADMIN_USERNAME: "${AKASHIC_VAULT_USERNAME:-}"
+      VAULT_ADMIN_PASSWORD: "${AKASHIC_VAULT_PASSWORD:-}"
       TZ: ${AKASHIC_TZ:-UTC}
     volumes:
       - secrets:/vault/token

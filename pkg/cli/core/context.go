@@ -247,6 +247,7 @@ const (
 	IssueKeyOut
 	PolicyFile
 	ApproleOutput
+	UserpassPassword
 )
 
 var CliConfigMap = map[FlagKey]ConfigEntity[any]{
@@ -484,6 +485,14 @@ This flag can be called multiple times. If empty, it will be reading token from 
 		Short:   "o",
 		Default: string(""),
 		Desc:    "Output file path for AppRole credentials",
+	},
+	UserpassPassword: {
+		Key:     "userpass.password",
+		Env:     "AKASHIC_VAULT_PASSWORD",
+		Name:    "password",
+		Short:   "p",
+		Default: string(""),
+		Desc:    "Password for the userpass account",
 	},
 }
 
@@ -3697,6 +3706,141 @@ func (cmdCtx *CliContext) RunPkiVaultApproleSecretIdCmd(cmd *cobra.Command, args
 			fmt.Sprintf("Role:      %s\nSecret-ID: %s\nAccessor:  %s", roleName, secretId, accessor),
 		}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 	}
+
+	return nil
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Vault Userpass Commands
+// ═══════════════════════════════════════════════════════════════════════════════
+
+func (cmdCtx *CliContext) RunPkiVaultUserpassCreateCmd(cmd *cobra.Command, args []string) error {
+	username := args[0]
+	if username == "" {
+		cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+			"Username is required",
+		}, "", true)
+		os.Exit(1)
+	}
+	cmdCtx.LogVerbose("Userpass username: %s", username)
+
+	password := cmdCtx.cfg.GetString("userpass.password")
+	if password == "" {
+		cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+			"Password is required (--password / -p or AKASHIC_VAULT_PASSWORD env)",
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Create authenticated Vault client
+	client, vaultToken, err := cmdCtx.newAuthenticatedVaultClient()
+	if err != nil {
+		cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+			err.Error(),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Check if user already exists
+	apiPath := fmt.Sprintf("/v1/auth/userpass/users/%s", username)
+	resp, body, err := client.SendRequestWithToken(http.MethodGet, apiPath, nil, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+			"Failed to check existing user",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode == http.StatusOK {
+		var existing struct {
+			Data struct {
+				TokenPolicies []string `json:"token_policies"`
+			} `json:"data"`
+		}
+		if json.Unmarshal(body, &existing) == nil {
+			cmdCtx.printResultTable("USERPASS CREATE SUCCESS", []string{
+				fmt.Sprintf("User already exists: %s\nPolicies: %v", username, existing.Data.TokenPolicies),
+			}, "Already exists", false)
+			return nil
+		}
+	}
+
+	// Build cascading config: defaults → config file → inline config
+	config := map[string]interface{}{
+		"password": password,
+	}
+
+	configFilePath := cmdCtx.cfg.GetString("engine.config_file")
+	if configFilePath != "" {
+		fileBytes, err := os.ReadFile(configFilePath)
+		if err != nil {
+			cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+				fmt.Sprintf("Failed to read config file: %s", configFilePath),
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		var fileConfig map[string]interface{}
+		if err := json.Unmarshal(fileBytes, &fileConfig); err != nil {
+			cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+				"Failed to parse config file (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range fileConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from file: %s", configFilePath)
+	}
+
+	inlineConfig := cmdCtx.cfg.GetString("engine.config")
+	if inlineConfig != "" {
+		var parsedConfig map[string]interface{}
+		if err := json.Unmarshal([]byte(inlineConfig), &parsedConfig); err != nil {
+			cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+				"Failed to parse inline config (must be valid JSON)",
+			}, err.Error(), true)
+			os.Exit(1)
+		}
+		for k, v := range parsedConfig {
+			config[k] = v
+		}
+		cmdCtx.LogVerbose("Config merged from inline flag")
+	}
+
+	// Always ensure password is in the payload (inline config shouldn't override it)
+	config["password"] = password
+
+	// Create user
+	cmdCtx.LogVerbose("Creating userpass user: POST %s", apiPath)
+	resp, body, err = client.SendRequestWithToken(http.MethodPost, apiPath, config, vaultToken)
+	if err != nil {
+		cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+			"Failed to create userpass user",
+		}, err.Error(), true)
+		os.Exit(1)
+	}
+
+	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
+		cmdCtx.printResultTable("USERPASS CREATE FAILED", []string{
+			fmt.Sprintf("Vault returned status %d", resp.StatusCode),
+			string(body),
+		}, "", true)
+		os.Exit(1)
+	}
+
+	// Build display config (hide password)
+	displayConfig := make(map[string]interface{})
+	for k, v := range config {
+		if k == "password" {
+			displayConfig[k] = "********"
+		} else {
+			displayConfig[k] = v
+		}
+	}
+	configJSON, _ := json.MarshalIndent(displayConfig, "", "  ")
+	cmdCtx.printResultTable("USERPASS CREATE SUCCESS", []string{
+		fmt.Sprintf("User: %s\nConfig:\n%s", username, string(configJSON)),
+	}, fmt.Sprintf("Status code: %d", resp.StatusCode), false)
 
 	return nil
 }
