@@ -173,6 +173,9 @@ services:
     depends_on:
       vault:
         condition: service_healthy
+    environment:
+      ADMINER_AUTH_USER: ${AKASHIC_ADMINER_AUTH_USER:-}
+      ADMINER_AUTH_PASSWORD: ${AKASHIC_ADMINER_AUTH_PASSWORD:-}
     ports:
       - "${AKASHIC_NGINX_PORT:-8280}:8280"
     networks:
@@ -282,7 +285,7 @@ services:
     image: adminer
     restart: always
     ports:
-      - 25000:8080/tcp
+      - 127.0.0.1:25000:8080/tcp
 
 #   ldap:
 #     image: osixia/openldap:1.5.0
