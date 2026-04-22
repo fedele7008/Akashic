@@ -178,6 +178,8 @@ services:
       ADMINER_AUTH_PASSWORD: ${AKASHIC_ADMINER_AUTH_PASSWORD:-}
     ports:
       - "${AKASHIC_NGINX_PORT:-8280}:8280"
+    volumes:
+      - certs:/certs:ro
     networks:
       default:
         aliases:

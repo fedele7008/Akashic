@@ -13,8 +13,9 @@ Host-level nginx (HTTPS termination)   <-- required for production
   v
 Akashic proxy (port 8280)              <-- this service
   |
-  +-- pki.*        --> vault:8281       (CRL/CA distribution, unauthenticated)
+  +-- vault.*      --> vault:8200       (Vault UI + API, HTTPS upstream, Vault's own auth)
   +-- adminer.*    --> adminer:8080     (database UI, basic auth + rate limited)
+  +-- pki paths    --> vault:8281       (CRL/CA distribution, unauthenticated)
   +-- (default)    --> 403 Forbidden
 ```
 
@@ -60,6 +61,24 @@ Example:
 ```bash
 curl http://localhost:8280/v1/pki-root/ca/pem
 curl http://localhost:8280/v1/pki-internal/crl/pem
+```
+
+### Vault UI and API
+
+| | |
+|---|---|
+| **Subdomain** | `vault.*` |
+| **Auth** | Vault's own auth (token, userpass, OIDC, etc.) |
+| **Rate limit** | None |
+
+Proxies to the Vault HTTPS listener (port 8200). The proxy verifies Vault's TLS certificate against the bootstrap CA (`/certs/vault/root-ca.crt`).
+
+All paths are forwarded: `/ui/` for the web interface, `/v1/` for API calls. Vault handles its own authentication -- no proxy-level auth is applied.
+
+Example:
+```
+https://vault.akashic.example.com/ui/      # Vault web UI
+https://vault.akashic.example.com/v1/sys/health  # API health check
 ```
 
 ### Adminer (Database UI)
@@ -133,8 +152,8 @@ Services also expose their own ports for direct access:
 
 | Service | Direct URL | Notes |
 |---------|-----------|-------|
-| Adminer | `http://localhost:25000` | No basic auth, no rate limit (bound to 127.0.0.1 only) |
 | Vault UI | `https://localhost:8200/ui` | Vault's own TLS, requires root token |
+| Adminer | `http://localhost:25000` | No basic auth, no rate limit (bound to 127.0.0.1 only) |
 
 Direct port access bypasses the proxy entirely -- no basic auth, no rate limiting, no subdomain routing. Only use this for local development.
 
