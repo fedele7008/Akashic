@@ -465,9 +465,7 @@ main() {
 
     # postgres cert is now issued by vault-agent (see services/vault-agent/templates/postgres.tpl)
 
-    issue_cert "pki-internal" "server" "redis" \
-        "${CERTS_OUTPUT_DIR}/redis/redis.crt" \
-        "${CERTS_OUTPUT_DIR}/redis/redis.key" || return 1
+    # redis cert is now issued by vault-agent (see services/vault-agent/templates/redis.tpl)
 
     issue_cert "pki-internal" "server" "ldap-server" \
         "${CERTS_OUTPUT_DIR}/ldap/ldap.crt" \

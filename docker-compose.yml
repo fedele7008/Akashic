@@ -224,27 +224,41 @@ services:
       timeout: 3s
       retries: 20
 
-#   redis:
-#     image: redis:7-alpine
-#     container_name: akashic-redis
-#     restart: unless-stopped
-#     command: >
-#       sh -c "redis-server
-#       --appendonly yes
-#       --save 900 1 --save 300 10 --save 60 10000
-#       --requirepass ${AKASHIC_DATABASE_REDIS_PASSWORD}"
-#     environment:
-#       TZ: ${AKASHIC_TZ}
-#     ports:
-#       - "${AKASHIC_DATABASE_REDIS_HOST_PORT:-6379}:6379"
-#     volumes:
-#       - redis_data:/data
-#     networks:
-#       default:
-#         aliases:
-#           - redis.akashic.local
-#     healthcheck:
-#       test: ["CMD", "redis-cli", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # redis: Redis Cache/Session Store (TLS enabled)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Custom entrypoint copies certs from Vault Agent, fixes ownership (uid 999),
+  # and starts Redis with TLS on the main port (plain port disabled).
+  #
+  # Certificates: issued by vault-agent via pki-internal/server
+  # TLS hot-reload: cert-watcher uses CONFIG SET (no restart needed)
+  # Troubleshooting: docker compose logs redis
+  redis:
+    build: ./services/redis
+    container_name: akashic-redis
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+    command: >-
+      --appendonly yes
+      --save 900 1 --save 300 10 --save 60 10000
+      --requirepass ${AKASHIC_DATABASE_REDIS_PASSWORD}
+    environment:
+      REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
+      REDIS_PASSWORD: ${AKASHIC_DATABASE_REDIS_PASSWORD}
+      TZ: ${AKASHIC_TZ:-UTC}
+    ports:
+      - "${AKASHIC_DATABASE_REDIS_HOST_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+      - certs:/certs-source:ro
+    networks:
+      default:
+        aliases:
+          - redis.akashic.local
+    healthcheck:
+      test: ["CMD", "redis-cli", "--tls", "--cacert", "/certs/ca.crt", "-a", "${AKASHIC_DATABASE_REDIS_PASSWORD}", "ping"]
 #       interval: 5s
 #       timeout: 3s
 #       retries: 20

@@ -38,3 +38,11 @@ template {
   source      = "/templates/postgres.tpl"
   destination = "/certs/postgres/.rendered"
 }
+
+# ─────────────────────────────────────────────────────────────
+# Redis server certificate (pki-internal/server)
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/redis.tpl"
+  destination = "/certs/redis/.rendered"
+}

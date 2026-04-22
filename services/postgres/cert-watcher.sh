@@ -54,8 +54,17 @@ inotifywait -m -e close_write --format '%f' "$CERT_SRC" | while read file; do
         # Update root.crt for psql client verification
         cp "$CERT_SRC/ca.crt" "/root/.postgresql/root.crt"
 
-        # ── Reload PostgreSQL (SIGHUP to PID 1) ─────────────────
-        su postgres -c "pg_ctl reload"
+        # ── Reload PostgreSQL ────────────────────────────────────
+        NEW_SERIAL=$(openssl x509 -noout -serial -in "$CERT_DST/server.crt" 2>/dev/null | cut -d= -f2)
+        NEW_EXPIRY=$(openssl x509 -noout -enddate -in "$CERT_DST/server.crt" 2>/dev/null | cut -d= -f2)
+
+        echo "[cert-watcher] Applying new certificate:"
+        echo "[cert-watcher]   Serial:  ${NEW_SERIAL:-unknown}"
+        echo "[cert-watcher]   Expires: ${NEW_EXPIRY:-unknown}"
+
+        RELOAD_RESULT=$(su postgres -c "pg_ctl reload" 2>&1)
+        echo "[cert-watcher]   pg_ctl: $RELOAD_RESULT"
+
         echo "[cert-watcher] PostgreSQL reloaded with new certificates."
 
         # Reset tracking for next renewal cycle
