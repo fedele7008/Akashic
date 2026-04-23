@@ -34,7 +34,11 @@ if [ "$LDAP_TLS_MODE" = "on" ]; then
     # (for DH params / trust concatenation). We alias it to our CA chain.
     cp "$CERT_SRC/ca.crt"   "$CERT_DST/trust-bundle.pem"
 
-    # osixia image handles chown internally via its startup scripts
+    # slapd runs as openldap (uid 911). Cert files copied by root default to
+    # root:root ownership, which makes the key unreadable (0600) to slapd.
+    # osixia's chown during startup doesn't reliably cover these files after
+    # our entrypoint copies them, so we chown explicitly.
+    chown openldap:openldap "$CERT_DST/ldap.crt" "$CERT_DST/ldap.key" "$CERT_DST/ca.crt" "$CERT_DST/trust-bundle.pem"
     chmod 0644 "$CERT_DST/ldap.crt" "$CERT_DST/ca.crt" "$CERT_DST/trust-bundle.pem"
     chmod 0600 "$CERT_DST/ldap.key"
 
