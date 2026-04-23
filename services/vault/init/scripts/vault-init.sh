@@ -447,9 +447,7 @@ main() {
 
     # ldap cert is now issued by vault-agent (see services/vault-agent/templates/ldap.tpl)
 
-    issue_cert "pki-internal" "server" "loki-server" \
-        "${CERTS_OUTPUT_DIR}/loki/loki.crt" \
-        "${CERTS_OUTPUT_DIR}/loki/loki.key" || return 1
+    # loki cert is now issued by vault-agent (see services/vault-agent/templates/loki.tpl)
 
     # --- mTLS: Control Plane (pki-mtls-akashic-ctrl) ---
     issue_cert "pki-mtls-akashic-ctrl" "server" "mtls-ctrl-server" \

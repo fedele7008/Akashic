@@ -54,3 +54,11 @@ template {
   source      = "/templates/ldap.tpl"
   destination = "/certs/ldap/.rendered"
 }
+
+# ─────────────────────────────────────────────────────────────
+# Loki server certificate (pki-internal/server)
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/loki.tpl"
+  destination = "/certs/loki/.rendered"
+}

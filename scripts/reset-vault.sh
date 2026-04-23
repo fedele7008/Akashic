@@ -22,3 +22,5 @@ docker volume rm akashic_redisinsight_data 2>/dev/null || true
 # LDAP's cn=config stores TLS cert trust state tied to the old CA chain.
 # A vault reset issues a new CA chain, so LDAP state must be wiped too.
 docker volume rm akashic_ldap_data akashic_ldap_config 2>/dev/null || true
+# Grafana's provisioning state has the old CA cert inlined in the datasource.
+docker volume rm akashic_grafana_data 2>/dev/null || true

@@ -267,45 +267,74 @@ services:
       timeout: 3s
       retries: 20
       start_period: 5s
-#       interval: 5s
-#       timeout: 3s
-#       retries: 20
-#       start_period: 5s
 
-#   loki:
-#     image: grafana/loki:3.5.5
-#     container_name: akashic-loki
-#     restart: unless-stopped
-#     command: ["-config.file=/etc/loki/config.yml"]
-#     volumes:
-#       - ./loki/config.yml:/etc/loki/config.yml:ro
-#       - loki_data:/loki
-#     ports:
-#       - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
-#     networks:
-#       default:
-#         aliases:
-#           - loki.akashic.local
-#     profiles:
-#       - obs
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # loki: Grafana Loki (log aggregation, TLS enabled)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Custom entrypoint copies certs from Vault Agent and selects either
+  # config.yml (plain) or config.tls.yml (TLS) based on LOKI_TLS_MODE.
+  #
+  # Certificates: issued by vault-agent via pki-internal/server
+  # TLS hot-reload: Loki re-reads cert files on each new TLS handshake
+  # Troubleshooting: docker compose logs loki
+  loki:
+    build: ./services/loki
+    container_name: akashic-loki
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+    environment:
+      LOKI_TLS_MODE: "${AKASHIC_LOKI_TLS:-on}"
+      TZ: ${AKASHIC_TZ:-UTC}
+    ports:
+      - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
+    volumes:
+      - loki_data:/loki
+      - certs:/certs-source:ro
+    networks:
+      default:
+        aliases:
+          - loki.akashic.local
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
-#   grafana:
-#     image: grafana/grafana
-#     container_name: akashic-grafana
-#     restart: unless-stopped
-#     environment:
-#       GF_SECURITY_ADMIN_USER: ${AKASHIC_GF_SECURITY_ADMIN_USER:-admin}
-#       GF_SECURITY_ADMIN_PASSWORD: ${AKASHIC_GF_SECURITY_ADMIN_PASSWORD}
-#       GF_USERS_DEFAULT_THEME: light
-#     volumes:
-#       - grafana_data:/var/lib/grafana
-#       - ./grafana/provisioning:/etc/grafana/provisioning:ro
-#     ports:
-#       - "${AKASHIC_GF_HOST_PORT:-3000}:3000"
-#     depends_on:
-#       - loki
-#     profiles:
-#       - obs
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # grafana: Grafana dashboard (TLS-aware Loki datasource)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Entrypoint generates /etc/grafana/provisioning/datasources/loki.yml at
+  # startup based on LOKI_TLS_MODE -- HTTPS with CA verification when on,
+  # plain HTTP when off.
+  #
+  # Accessible via proxy at grafana.<domain>. Has own admin login, so no
+  # proxy-level basic auth.
+  grafana:
+    build: ./services/grafana
+    container_name: akashic-grafana
+    restart: unless-stopped
+    depends_on:
+      loki:
+        condition: service_healthy
+    environment:
+      LOKI_TLS_MODE: "${AKASHIC_LOKI_TLS:-on}"
+      GF_SECURITY_ADMIN_USER: ${AKASHIC_GF_SECURITY_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${AKASHIC_GF_SECURITY_ADMIN_PASSWORD}
+      GF_USERS_DEFAULT_THEME: light
+      # When running behind a reverse proxy, tell Grafana to trust the
+      # X-Forwarded-Proto/Host headers so links and redirects use the
+      # external HTTPS URL instead of the internal HTTP URL.
+      GF_SERVER_SERVE_FROM_SUB_PATH: "false"
+      GF_AUTH_PROXY_ENABLED: "false"
+      TZ: ${AKASHIC_TZ:-UTC}
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - certs:/certs-source:ro
+    ports:
+      - 127.0.0.1:${AKASHIC_GF_HOST_PORT:-3000}:3000/tcp
       
   adminer:
     image: adminer
