@@ -130,10 +130,8 @@ main() {
     # Public CA — dev CA for browser-facing certs, 5-year TTL
     mount_engine "pki-public" "Akashic Public CA (Development)" || return 1
 
-    # mTLS CAs — per-service isolation, 5-year TTL
+    # mTLS CA — control plane client authentication (CLI, BFF)
     mount_engine "pki-mtls-akashic-ctrl" "Akashic Control Plane mTLS CA" || return 1
-    mount_engine "pki-mtls-ldap" "LDAP mTLS CA" || return 1
-    mount_engine "pki-mtls-loki" "Loki mTLS CA" || return 1
 
     log_success "All PKI engines mounted successfully"
 
@@ -210,8 +208,6 @@ main() {
     generate_csr "pki-internal" "${CERTS_OUTPUT_DIR}/ca/internal-ca.csr" || return 1
     generate_csr "pki-public" "${CERTS_OUTPUT_DIR}/ca/public-ca.csr" || return 1
     generate_csr "pki-mtls-akashic-ctrl" "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.csr" || return 1
-    generate_csr "pki-mtls-ldap" "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.csr" || return 1
-    generate_csr "pki-mtls-loki" "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.csr" || return 1
 
     log_success "All intermediate CA CSRs generated successfully"
 
@@ -306,17 +302,7 @@ main() {
         "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.crt" \
         "pki-mtls-akashic-ctrl" || return 1
 
-    sign_intermediate "pki-internal" \
-        "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.csr" \
-        "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.crt" \
-        "pki-mtls-ldap" || return 1
-
-    sign_intermediate "pki-internal" \
-        "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.csr" \
-        "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.crt" \
-        "pki-mtls-loki" || return 1
-
-    log_success "All mTLS CA certificates signed by Internal CA"
+    log_success "mTLS CA certificate signed by Internal CA"
 
     # =========================================================================
     # Step 9: Register mTLS CA certificates
@@ -324,10 +310,8 @@ main() {
     log_section "Step 9: Register mTLS CA certificates"
 
     register_cert "pki-mtls-akashic-ctrl" "${CERTS_OUTPUT_DIR}/ca/mtls/akashic-ctrl/akashic-ctrl-ca.crt" || return 1
-    register_cert "pki-mtls-ldap" "${CERTS_OUTPUT_DIR}/ca/mtls/ldap/ldap-ca.crt" || return 1
-    register_cert "pki-mtls-loki" "${CERTS_OUTPUT_DIR}/ca/mtls/loki/loki-ca.crt" || return 1
 
-    log_success "All mTLS CA engines activated"
+    log_success "mTLS CA engine activated"
 
     # =========================================================================
     # Step 10: Configure CRL/CA URLs
@@ -361,8 +345,6 @@ main() {
     configure_urls "pki-internal" || return 1
     configure_urls "pki-public" || return 1
     configure_urls "pki-mtls-akashic-ctrl" || return 1
-    configure_urls "pki-mtls-ldap" || return 1
-    configure_urls "pki-mtls-loki" || return 1
 
     log_success "All CRL/CA URLs configured"
 
@@ -406,13 +388,9 @@ main() {
     # Public CA roles
     create_role "pki-public" "server" || return 1
 
-    # mTLS CA roles (server + client for each)
+    # mTLS CA roles (control plane only)
     create_role "pki-mtls-akashic-ctrl" "server" || return 1
     create_role "pki-mtls-akashic-ctrl" "client" || return 1
-    create_role "pki-mtls-ldap" "server" || return 1
-    create_role "pki-mtls-ldap" "client" || return 1
-    create_role "pki-mtls-loki" "server" || return 1
-    create_role "pki-mtls-loki" "client" || return 1
 
     log_success "All PKI roles created"
 
@@ -487,32 +465,6 @@ main() {
     issue_cert "pki-mtls-akashic-ctrl" "client" "mtls-ctrl-client-bff" \
         "${CERTS_OUTPUT_DIR}/bff/akashic-ctrl-client.crt" \
         "${CERTS_OUTPUT_DIR}/bff/akashic-ctrl-client.key" || return 1
-
-    # --- mTLS: LDAP (pki-mtls-ldap) ---
-    issue_cert "pki-mtls-ldap" "server" "mtls-ldap-server" \
-        "${CERTS_OUTPUT_DIR}/ldap/mtls-ldap.crt" \
-        "${CERTS_OUTPUT_DIR}/ldap/mtls-ldap.key" || return 1
-
-    issue_cert "pki-mtls-ldap" "client" "mtls-ldap-client-akashic" \
-        "${CERTS_OUTPUT_DIR}/akashic/ldap-client.crt" \
-        "${CERTS_OUTPUT_DIR}/akashic/ldap-client.key" || return 1
-
-    issue_cert "pki-mtls-ldap" "client" "mtls-ldap-client-phpldapadmin" \
-        "${CERTS_OUTPUT_DIR}/phpldapadmin/ldap-client.crt" \
-        "${CERTS_OUTPUT_DIR}/phpldapadmin/ldap-client.key" || return 1
-
-    # --- mTLS: Loki (pki-mtls-loki) ---
-    issue_cert "pki-mtls-loki" "server" "mtls-loki-server" \
-        "${CERTS_OUTPUT_DIR}/loki/mtls-loki.crt" \
-        "${CERTS_OUTPUT_DIR}/loki/mtls-loki.key" || return 1
-
-    issue_cert "pki-mtls-loki" "client" "mtls-loki-client-akashic" \
-        "${CERTS_OUTPUT_DIR}/akashic/loki-client.crt" \
-        "${CERTS_OUTPUT_DIR}/akashic/loki-client.key" || return 1
-
-    issue_cert "pki-mtls-loki" "client" "mtls-loki-client-grafana" \
-        "${CERTS_OUTPUT_DIR}/grafana/loki-client.crt" \
-        "${CERTS_OUTPUT_DIR}/grafana/loki-client.key" || return 1
 
     log_success "All leaf certificates issued"
 
