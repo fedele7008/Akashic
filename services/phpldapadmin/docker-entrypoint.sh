@@ -37,10 +37,11 @@ if [ "$LDAP_TLS_MODE" = "on" ]; then
     echo "[phpldapadmin] StartTLS to ldap.akashic.local:389 configured via docker-compose env."
 else
     # When TLS is off, unset the docker-compose-provided TLS config and let the
-    # startup yaml (processed after env vars are read) set a simple hostname.
+    # startup yaml (processed before env vars are defined) set a non-TLS host
+    # with the same login.bind_id so the admin DN stays pre-filled.
     unset PHPLDAPADMIN_LDAP_HOSTS
     cat > "$ENV_FILE" <<'EOF'
-PHPLDAPADMIN_LDAP_HOSTS: ldap.akashic.local
+PHPLDAPADMIN_LDAP_HOSTS: "#PYTHON2BASH:[{'ldap.akashic.local': [{'server': [{'tls': False}, {'port': 389}]}, {'login': [{'bind_id': 'cn=admin,dc=akashic,dc=local'}]}]}]"
 EOF
     echo "[phpldapadmin] TLS disabled -- connecting to ldap.akashic.local:389 (no TLS)"
 fi
