@@ -269,46 +269,73 @@ services:
       start_period: 5s
 
   # ═══════════════════════════════════════════════════════════════════════════════
-  # loki: Grafana Loki (log aggregation, TLS enabled)
+  # loki: Grafana Loki backend (plain HTTP, internal only)
   # ═══════════════════════════════════════════════════════════════════════════════
-  # Custom entrypoint copies certs from Vault Agent and selects either
-  # config.yml (plain) or config.tls.yml (TLS) based on LOKI_TLS_MODE.
+  # Stock grafana/loki image, plain HTTP on 3100. Not exposed to the host.
+  # TLS termination is handled by the loki-proxy service in front of this.
   #
-  # Certificates: issued by vault-agent via pki-internal/server
-  # TLS hot-reload: Loki re-reads cert files on each new TLS handshake
+  # Network alias: loki-runtime.akashic.local (the proxy owns loki.akashic.local)
   # Troubleshooting: docker compose logs loki
   loki:
-    build: ./services/loki
+    image: grafana/loki:3.5.5
     container_name: akashic-loki
+    restart: unless-stopped
+    command: ["-config.file=/etc/loki/config.yml"]
+    environment:
+      TZ: ${AKASHIC_TZ:-UTC}
+    volumes:
+      - loki_data:/loki
+      - ./services/loki/config.yml:/etc/loki/config.yml:ro
+    networks:
+      default:
+        aliases:
+          - loki-runtime.akashic.local
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # loki-proxy: TLS-termination proxy for Loki (internal + 127.0.0.1 host)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # nginx that sits in front of Loki. Listens on 3100 -- with TLS when
+  # AKASHIC_LOKI_PROXY_TLS=on (default), plain HTTP when off. Forwards to
+  # loki-runtime.akashic.local:3100 (plain) in both cases.
+  #
+  # Accessible from:
+  #  - Docker containers in akashic-net: {https,http}://loki.akashic.local:3100
+  #  - Host machine (bound to 127.0.0.1): {https,http}://localhost:3100
+  #
+  # Bound to 127.0.0.1 on the host, so it's NOT publicly reachable -- only
+  # processes on the same machine (e.g. the Akashic Go server running on
+  # the host) can reach the Loki API via this proxy.
+  #
+  # Certificates (TLS mode only): issued by vault-agent via pki-internal/server
+  # TLS rotation: cert-watcher runs `nginx -s reload` on cert change
+  # Troubleshooting: docker compose logs loki-proxy
+  loki-proxy:
+    build: ./services/loki-proxy
+    container_name: akashic-loki-proxy
     restart: unless-stopped
     depends_on:
       vault-agent:
         condition: service_started
+      loki:
+        condition: service_started
     environment:
-      LOKI_TLS_MODE: "${AKASHIC_LOKI_TLS:-on}"
+      LOKI_TLS_MODE: "${AKASHIC_LOKI_PROXY_TLS:-on}"
       TZ: ${AKASHIC_TZ:-UTC}
     ports:
-      - "${AKASHIC_LOKI_HOST_PORT:-3100}:3100"
+      # Bind to 127.0.0.1 only -- never publicly exposed
+      - "127.0.0.1:${AKASHIC_LOKI_PROXY_HOST_PORT:-3100}:3100"
     volumes:
-      - loki_data:/loki
       - certs:/certs-source:ro
     networks:
       default:
         aliases:
           - loki.akashic.local
-    healthcheck:
-      test: ["CMD", "healthcheck.sh"]
-      interval: 10s
-      timeout: 5s
-      retries: 10
-      start_period: 15s
 
   # ═══════════════════════════════════════════════════════════════════════════════
-  # grafana: Grafana dashboard (TLS-aware Loki datasource)
+  # grafana: Grafana dashboard
   # ═══════════════════════════════════════════════════════════════════════════════
   # Entrypoint generates /etc/grafana/provisioning/datasources/loki.yml at
-  # startup based on LOKI_TLS_MODE -- HTTPS with CA verification when on,
-  # plain HTTP when off.
+  # startup, pointing to https://loki.akashic.local:3100 (the loki-proxy).
   #
   # Accessible via proxy at grafana.<domain>. Has own admin login, so no
   # proxy-level basic auth.
@@ -317,10 +344,10 @@ services:
     container_name: akashic-grafana
     restart: unless-stopped
     depends_on:
-      loki:
-        condition: service_healthy
+      loki-proxy:
+        condition: service_started
     environment:
-      LOKI_TLS_MODE: "${AKASHIC_LOKI_TLS:-on}"
+      LOKI_TLS_MODE: "${AKASHIC_LOKI_PROXY_TLS:-on}"
       GF_SECURITY_ADMIN_USER: ${AKASHIC_GF_SECURITY_ADMIN_USER:-admin}
       GF_SECURITY_ADMIN_PASSWORD: ${AKASHIC_GF_SECURITY_ADMIN_PASSWORD}
       GF_USERS_DEFAULT_THEME: light

@@ -66,6 +66,28 @@ func NewConfigManager(cmd *cobra.Command, app common.AkashicApp) (*ConfigManager
 		return nil, fmt.Errorf("failed to load .env file: %v", err)
 	}
 
+	// Derive AKASHIC_LOKI_API_URL from the loki-proxy env vars if it wasn't
+	// set explicitly. Toggling AKASHIC_LOKI_PROXY_TLS (on|off) switches the
+	// URL scheme between https and http automatically, so users don't have
+	// to keep two env vars in sync.
+	if os.Getenv("AKASHIC_LOKI_API_URL") == "" {
+		scheme := "https"
+		if strings.EqualFold(os.Getenv("AKASHIC_LOKI_PROXY_TLS"), "off") {
+			scheme = "http"
+		}
+		host := os.Getenv("AKASHIC_LOKI_PROXY_HOST")
+		if host == "" {
+			host = "localhost"
+		}
+		port := os.Getenv("AKASHIC_LOKI_PROXY_HOST_PORT")
+		if port == "" {
+			port = "3100"
+		}
+		derived := fmt.Sprintf("%s://%s:%s/loki/api/v1/push", scheme, host, port)
+		os.Setenv("AKASHIC_LOKI_API_URL", derived)
+		m.verbosePrintlnf("Derived AKASHIC_LOKI_API_URL=%s", derived)
+	}
+
 	// Set defaults before loading config
 	setDefaults(v)
 

@@ -56,9 +56,11 @@ template {
 }
 
 # ─────────────────────────────────────────────────────────────
-# Loki server certificate (pki-internal/server)
+# Loki proxy server certificate (pki-internal/server)
+#   Issued for the loki-proxy (nginx) that terminates TLS in front
+#   of the plain-HTTP Loki backend. CN = loki.akashic.local.
 # ─────────────────────────────────────────────────────────────
 template {
   source      = "/templates/loki.tpl"
-  destination = "/certs/loki/.rendered"
+  destination = "/certs/loki-proxy/.rendered"
 }

@@ -1,20 +1,18 @@
 #!/bin/sh
 set -e
 
-CERT_SRC="/certs-source/loki"
-LOKI_TLS_MODE="${LOKI_TLS_MODE:-off}"
+CERT_SRC="/certs-source/loki-proxy"
+LOKI_TLS_MODE="${LOKI_TLS_MODE:-on}"
 DATASOURCE_DIR="/etc/grafana/provisioning/datasources"
 
 mkdir -p "$DATASOURCE_DIR"
 
 if [ "$LOKI_TLS_MODE" = "on" ]; then
-    echo "[grafana] TLS enabled -- waiting for Loki CA cert..."
+    echo "[grafana] TLS mode -- waiting for Loki proxy CA cert..."
     while [ ! -f "$CERT_SRC/ca.crt" ]; do sleep 1; done
 
-    # Generate datasource pointing to https://loki with CA cert verification.
-    # Grafana's datasource YAML supports inlining CA cert as PEM string.
-    # Content of a YAML block scalar must be indented MORE than the parent key,
-    # so tlsCACert at 6 spaces -> content at 8 spaces.
+    # YAML block scalar requires content indented MORE than the parent key.
+    # tlsCACert lives at 6 spaces, so the PEM body goes at 8.
     CA_CERT=$(awk 'NF { sub("\r$", ""); printf "        %s\n", $0 }' "$CERT_SRC/ca.crt")
     cat > "$DATASOURCE_DIR/loki.yml" <<EOF
 apiVersion: 1
@@ -30,9 +28,9 @@ datasources:
       tlsCACert: |
 $CA_CERT
 EOF
-    echo "[grafana] Datasource configured for HTTPS with Akashic CA verification."
+    echo "[grafana] Datasource: https://loki.akashic.local:3100 (TLS via loki-proxy, CA-verified)"
 else
-    cat > "$DATASOURCE_DIR/loki.yml" <<EOF
+    cat > "$DATASOURCE_DIR/loki.yml" <<'EOF'
 apiVersion: 1
 datasources:
   - name: Loki
@@ -41,11 +39,10 @@ datasources:
     url: http://loki.akashic.local:3100
     isDefault: true
 EOF
-    echo "[grafana] Datasource configured for plain HTTP (no TLS)."
+    echo "[grafana] Datasource: http://loki.akashic.local:3100 (plain via loki-proxy, no TLS)"
 fi
 
 # Fix ownership (Grafana runs as uid 472)
 chown -R 472:0 "$DATASOURCE_DIR" 2>/dev/null || true
 
-# Delegate to Grafana's original entrypoint
 exec /run.sh "$@"
