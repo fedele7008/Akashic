@@ -14,6 +14,7 @@ import (
 	"akashic/akashic/pkg/database/akashic_redis"
 	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/auth"
 	"akashic/akashic/pkg/server/control"
@@ -22,6 +23,13 @@ import (
 	"go.uber.org/zap"
 	"go.yaml.in/yaml/v3"
 )
+
+// zapWatcherLogger adapts *zap.SugaredLogger to pki.WatcherLogger.
+type zapWatcherLogger struct{ *zap.SugaredLogger }
+
+func (z zapWatcherLogger) Infof(tpl string, args ...any)  { z.SugaredLogger.Infof(tpl, args...) }
+func (z zapWatcherLogger) Warnf(tpl string, args ...any)  { z.SugaredLogger.Warnf(tpl, args...) }
+func (z zapWatcherLogger) Errorf(tpl string, args ...any) { z.SugaredLogger.Errorf(tpl, args...) }
 
 type AkashicApp struct {
 	ctx                   context.Context
@@ -359,6 +367,39 @@ func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 			}
 		}
 	})
+
+	// Start the optional in-process cert watcher. It only watches the
+	// reloaders that exist at this moment; if the auth server is restarted
+	// later (via POST /auth/restart), the new reloader is picked up on the
+	// next Vault Agent rotation only if POST /tls/reload is called in the
+	// interim. For most operators this is fine because auth restarts are rare.
+	if app.Config.GetConfig().PKI.CertWatcherEnabled {
+		reloaders := collectReloaders(app.ControlServer, app.AuthServer)
+		if len(reloaders) > 0 {
+			debounce := app.Config.GetConfig().PKI.CertWatcherDebounce
+			watcher, werr := pki.NewWatcher(reloaders, debounce, zapWatcherLogger{app.Logger.App.Sugar()})
+			if werr != nil {
+				app.Logger.App.Warn("cert watcher failed to start; continuing without hot-reload",
+					zap.Error(werr))
+			} else {
+				watchCtx, cancelWatch := context.WithCancel(app.ctx)
+				go watcher.Run(watchCtx)
+				app.AddCloser(func() {
+					cancelWatch()
+					if err := watcher.Close(); err != nil {
+						app.Logger.App.Warn("cert watcher close error", zap.Error(err))
+					}
+				})
+				app.Logger.App.Info("cert watcher running",
+					zap.Int("reloaders", len(reloaders)),
+					zap.Duration("debounce", debounce))
+			}
+		} else {
+			app.Logger.App.Info("cert watcher skipped (no TLS listeners have reloaders)")
+		}
+	} else {
+		app.Logger.App.Info("cert watcher disabled via config")
+	}
 
 	app.Logger.App.Info("Akashic server started successfully",
 		zap.String("control_api", fmt.Sprintf("http://%s", app.ControlServer.GetAddress())),

@@ -65,6 +65,13 @@ func NewStateManager(authServer *auth.Server, logger *logging.Logger) *StateMana
 	}
 }
 
+// GetAuthServer exposes the managed auth.Server for callers that need to
+// operate directly on it (e.g. TLS cert reload). Prefer state-aware methods
+// (Start/Stop/Restart) when managing lifecycle.
+func (sm *StateManager) GetAuthServer() *auth.Server {
+	return sm.authServer
+}
+
 // GetState returns the current state
 func (sm *StateManager) GetState() AuthServerState {
 	sm.mu.RLock()

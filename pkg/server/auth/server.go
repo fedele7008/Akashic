@@ -4,7 +4,9 @@ import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
+	"akashic/akashic/pkg/pki"
 	"context"
+	"crypto/tls"
 	"fmt"
 	"net"
 	"net/http"
@@ -16,11 +18,12 @@ import (
 
 // Server represents the Auth Server (OAuth/OIDC endpoints)
 type Server struct {
-	config *config.ConfigManager
-	server *http.Server
-	logger *logging.Logger
-	mu     sync.RWMutex
-	state  ServerState
+	config       *config.ConfigManager
+	server       *http.Server
+	logger       *logging.Logger
+	mu           sync.RWMutex
+	state        ServerState
+	certReloader *pki.Reloader
 }
 
 // ServerState represents the current state of the server
@@ -57,6 +60,7 @@ func (s *Server) Start(ctx context.Context) error {
 	}
 
 	addr := s.GetAddress()
+	tlsCfg := s.config.GetConfig().Server.Auth.TLS
 
 	// Pre-bind listener to detect port conflicts immediately
 	ln, err := net.Listen("tcp", addr)
@@ -81,15 +85,41 @@ func (s *Server) Start(ctx context.Context) error {
 		IdleTimeout:  AuthServerIdleTimeout,
 	}
 
+	// If TLS is enabled, install a cert reloader. The GetCertificate callback
+	// is re-read on every handshake, so rotation swaps in the new cert with
+	// zero listener restarts.
+	if tlsCfg.Enabled {
+		reloader, rerr := pki.NewReloader("auth-server", tlsCfg.CertFile, tlsCfg.KeyFile)
+		if rerr != nil {
+			ln.Close()
+			s.mu.Unlock()
+			return fmt.Errorf("auth server TLS init: %v", rerr)
+		}
+		s.certReloader = reloader
+		s.server.TLSConfig = &tls.Config{
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: reloader.GetCertificate,
+		}
+	}
+
 	s.state = StateRunning
 	s.mu.Unlock()
 
-	s.logger.App.Info("Auth server starting", zap.String("address", addr))
+	s.logger.App.Info("Auth server starting",
+		zap.String("address", addr),
+		zap.Bool("tls", tlsCfg.Enabled),
+	)
 
-	// Start server in goroutine with pre-bound listener
 	go func() {
-		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			s.logger.App.Error("Auth server error", zap.Error(err))
+		var serveErr error
+		if tlsCfg.Enabled {
+			// cert/key args are empty because we source them from TLSConfig.GetCertificate
+			serveErr = s.server.ServeTLS(ln, "", "")
+		} else {
+			serveErr = s.server.Serve(ln)
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			s.logger.App.Error("Auth server error", zap.Error(serveErr))
 			s.mu.Lock()
 			s.state = StateStopped
 			s.mu.Unlock()
@@ -98,6 +128,28 @@ func (s *Server) Start(ctx context.Context) error {
 
 	s.logger.App.Info("Auth server started successfully", zap.String("address", addr))
 	return nil
+}
+
+// ReloadCert re-reads the auth server's cert/key from disk. Safe to call
+// while the server is handling traffic; returns an error if the new files
+// don't parse (e.g. rotation in progress) so the caller can retry.
+func (s *Server) ReloadCert() error {
+	s.mu.RLock()
+	r := s.certReloader
+	s.mu.RUnlock()
+	if r == nil {
+		return fmt.Errorf("auth server has no cert reloader (TLS not enabled)")
+	}
+	return r.Reload()
+}
+
+// CertReloader exposes the underlying reloader so the optional in-process
+// cert-watcher (see pkg/pki/cert_watcher.go) can subscribe to it. Returns
+// nil before Start() completes, or when TLS is disabled.
+func (s *Server) CertReloader() *pki.Reloader {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.certReloader
 }
 
 // Stop stops the auth server gracefully

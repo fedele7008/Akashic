@@ -26,6 +26,11 @@ type Config struct {
 	MaxIdleConns    int
 	ConnLifetime    time.Duration
 	ConnMaxIdleTime time.Duration
+
+	// TLS (Phase 4)
+	TLSEnabled    bool
+	TLSCACertPath string
+	TLSServerName string
 }
 
 // DB wraps gorm.DB with additional functionality
@@ -37,29 +42,32 @@ type DB struct {
 // New creates a new GORM database connection
 func New(configMgr *config.ConfigManager, akashicLogger *logging.Logger) (*DB, error) {
 	mConfig := configMgr.GetConfig()
+	pg := mConfig.Database.Postgres
 	cfg := Config{
-		Host:            mConfig.Database.Postgres.Host,
-		Port:            mConfig.Database.Postgres.Port,
-		Database:        mConfig.Database.Postgres.Database,
-		Username:        mConfig.Database.Postgres.Username,
-		Password:        mConfig.Database.Postgres.Password,
-		SSLMode:         mConfig.Database.Postgres.SSLMode,
-		MaxConns:        mConfig.Database.Postgres.MaxConnections,
-		MaxIdleConns:    mConfig.Database.Postgres.MaxIdleConnections,
-		ConnLifetime:    mConfig.Database.Postgres.ConnectionLifetime,
+		Host:            pg.Host,
+		Port:            pg.Port,
+		Database:        pg.Database,
+		Username:        pg.Username,
+		Password:        pg.Password,
+		SSLMode:         pg.SSLMode,
+		MaxConns:        pg.MaxConnections,
+		MaxIdleConns:    pg.MaxIdleConnections,
+		ConnLifetime:    pg.ConnectionLifetime,
 		ConnMaxIdleTime: 30 * time.Minute,
+		TLSEnabled:      pg.TLS.Enabled,
+		TLSCACertPath:   pg.TLS.CACertPath,
+		TLSServerName:   pg.TLS.ServerName,
 	}
 
-	dsn := fmt.Sprintf(
-		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, cfg.SSLMode,
-	)
+	dsn := buildDSN(&cfg)
 
 	akashicLogger.App.Info("Connecting to PostgreSQL",
 		zap.String("host", cfg.Host),
 		zap.Int("port", cfg.Port),
 		zap.String("database", cfg.Database),
-		zap.String("user", cfg.Username))
+		zap.String("user", cfg.Username),
+		zap.Bool("tls", cfg.TLSEnabled),
+		zap.String("sslmode", effectiveSSLMode(&cfg)))
 
 	// Configure GORM logger (silent in production, warn in development)
 	var gormLogger logger.Interface
@@ -169,4 +177,31 @@ func (db *DB) Close() error {
 		return err
 	}
 	return sqlDB.Close()
+}
+
+// effectiveSSLMode returns "disable" when TLS is off regardless of the configured
+// SSLMode (so an operator who forgot to flip ssl_mode back when toggling TLS off
+// still gets a plain connection instead of a dial failure).
+func effectiveSSLMode(cfg *Config) string {
+	if !cfg.TLSEnabled {
+		return "disable"
+	}
+	if cfg.SSLMode == "" || cfg.SSLMode == "disable" {
+		return "verify-full"
+	}
+	return cfg.SSLMode
+}
+
+// buildDSN assembles the libpq-style connection string. sslrootcert is only
+// included when TLS is enabled; some driver versions reject the parameter when
+// sslmode=disable.
+func buildDSN(cfg *Config) string {
+	dsn := fmt.Sprintf(
+		"host=%s port=%d dbname=%s user=%s password=%s sslmode=%s",
+		cfg.Host, cfg.Port, cfg.Database, cfg.Username, cfg.Password, effectiveSSLMode(cfg),
+	)
+	if cfg.TLSEnabled && cfg.TLSCACertPath != "" {
+		dsn += fmt.Sprintf(" sslrootcert=%s", cfg.TLSCACertPath)
+	}
+	return dsn
 }

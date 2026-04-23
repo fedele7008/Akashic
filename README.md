@@ -996,10 +996,11 @@ go run ./cmd/akashic run --host 0.0.0.0 --port 9090
   - [ ] Readiness vs liveness
 
 #### Deployment
-- [ ] **Docker Compose**
-  - [ ] `obs` profile (Loki + Grafana)
-  - [ ] `fe` profile (Frontend + BFF)
-  - [ ] Default profile (Redis + PostgreSQL + Akashic)
+- [x] **Docker Compose**
+  - [x] Default stack: Vault + Postgres + Redis + LDAP + Loki + Grafana + proxy
+        (everything runs with `docker compose up`, no profile needed)
+  - [x] `app` profile (Akashic IDP server containerized; host-run remains default)
+  - [ ] `fe` profile (Frontend + BFF) — planned
 
 - [ ] **Kubernetes Manifests**
   - [ ] Deployment configs

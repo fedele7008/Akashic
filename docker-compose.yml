@@ -135,7 +135,8 @@ services:
   # separate .crt, .key, and ca.pem files. Certs are renewed at ~2/3 TTL.
   #
   # Templates: ./services/vault-agent/templates/*.tpl
-  # Currently manages: PostgreSQL
+  # Manages: postgres, redis, ldap, loki-proxy, akashic-ctrl, akashic-auth,
+  #          akashic-mtls-ctrl, akashic-cli-client, bff-client
   # Troubleshooting: docker compose logs vault-agent
   vault-agent:
     build: ./services/vault-agent
@@ -460,6 +461,69 @@ services:
       - 127.0.0.1:${AKASHIC_PHPLDAPADMIN_HOST_PORT:-25002}:80/tcp
     volumes:
       - certs:/certs-source:ro
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # akashic: Akashic IDP Server (Phase 4)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Container-mode run of the Akashic Go server. Host-mode (`go run ./cmd/akashic
+  # run`) remains the default dev flow; enable this service via the `app` profile
+  # when you want the full-stack containerized:
+  #
+  #     docker compose --profile app up -d
+  #
+  # (All dependency services — postgres, redis, ldap, loki, grafana, etc. — run
+  # by default with no profile; only `app` is opt-in.)
+  #
+  # The server reads TLS on/off per-dependency from .env (AKASHIC_POSTGRES_TLS,
+  # AKASHIC_REDIS_TLS, AKASHIC_LDAP_TLS, AKASHIC_LOKI_PROXY_TLS). Certs come
+  # from the shared `certs` volume, written by vault-agent in-place, and
+  # hot-reloaded by the in-process watcher (AKASHIC_PKI_CERT_WATCHER_ENABLED).
+  #
+  # Troubleshooting: docker compose logs akashic
+  akashic:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: ./services/akashic/Dockerfile
+    container_name: akashic-server
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Dependency hosts resolve via docker-network aliases inside the container.
+      AKASHIC_DATABASE_POSTGRES_HOST: postgres.akashic.local
+      AKASHIC_DATABASE_REDIS_HOST: redis.akashic.local
+      AKASHIC_LDAP_HOST: ldap.akashic.local
+      AKASHIC_LOKI_PROXY_HOST: loki.akashic.local
+      # TLS toggles come from .env; re-declared here so `docker compose config`
+      # resolves them at the expected point.
+      AKASHIC_POSTGRES_TLS: "${AKASHIC_POSTGRES_TLS:-on}"
+      AKASHIC_REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
+      AKASHIC_LDAP_TLS: "${AKASHIC_LDAP_TLS:-on}"
+      AKASHIC_LOKI_PROXY_TLS: "${AKASHIC_LOKI_PROXY_TLS:-on}"
+      # Credentials
+      AKASHIC_DATABASE_POSTGRES_USERNAME: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
+      AKASHIC_DATABASE_POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
+      AKASHIC_DATABASE_POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
+      AKASHIC_DATABASE_REDIS_PASSWORD: ${AKASHIC_DATABASE_REDIS_PASSWORD}
+      AKASHIC_LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
+      AKASHIC_SECRET: ${AKASHIC_SECRET}
+      TZ: ${AKASHIC_TZ:-UTC}
+    ports:
+      # Auth server: public; Control server: loopback-only.
+      - "${AKASHIC_AUTH_HOST_PORT:-8080}:8080"
+      - "127.0.0.1:${AKASHIC_CTRL_HOST_PORT:-8081}:8081"
+    volumes:
+      - certs:/certs:ro
+    networks:
+      default:
+        aliases:
+          - akashic.akashic.local
 
 networks:
   default:

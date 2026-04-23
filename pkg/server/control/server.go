@@ -5,8 +5,10 @@ import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
+	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/server/auth"
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"fmt"
 	"net"
@@ -27,6 +29,7 @@ type Server struct {
 	config       *config.ConfigManager
 	startedAt    time.Time
 	shutdownFn   context.CancelFunc // Function to trigger app shutdown
+	certReloader *pki.Reloader
 }
 
 const (
@@ -56,6 +59,8 @@ func (s *Server) Start() error {
 	}
 
 	addr := s.GetAddress()
+	cfg := s.config.GetConfig()
+	tlsCfg := cfg.Server.Control.TLS
 
 	// Pre-bind listener to detect port conflicts immediately
 	ln, err := net.Listen("tcp", addr)
@@ -64,11 +69,7 @@ func (s *Server) Start() error {
 	}
 
 	mux := http.NewServeMux()
-
-	// Register routes
 	s.registerRoutes(mux)
-
-	// Build middleware chain
 	handler := s.buildMiddlewareChain(mux)
 
 	s.server = &http.Server{
@@ -79,17 +80,73 @@ func (s *Server) Start() error {
 		IdleTimeout:  CtrlServerIdleTimeout,
 	}
 
-	s.logger.App.Info("Control server starting", zap.String("address", addr))
+	// Install TLS + mTLS when enabled. The control plane is the server side
+	// of a private mTLS relationship signed by pki-mtls-akashic-ctrl, so we
+	// demand client certs issued by that CA.
+	if tlsCfg.Enabled {
+		reloader, rerr := pki.NewReloader("control-server", tlsCfg.CertFile, tlsCfg.KeyFile)
+		if rerr != nil {
+			ln.Close()
+			return fmt.Errorf("control server TLS init: %v", rerr)
+		}
+		s.certReloader = reloader
 
-	// Start server in goroutine with pre-bound listener
+		tlsc := &tls.Config{
+			MinVersion:     tls.VersionTLS12,
+			GetCertificate: reloader.GetCertificate,
+		}
+		if tlsCfg.ClientAuthRequired {
+			tlsc.ClientAuth = tls.RequireAndVerifyClientCert
+			if tlsCfg.CAFile != "" {
+				pool, cerr := pki.LoadCAPool(tlsCfg.CAFile)
+				if cerr != nil {
+					ln.Close()
+					return fmt.Errorf("control server mTLS CA load: %v", cerr)
+				}
+				tlsc.ClientCAs = pool
+			}
+		}
+		s.server.TLSConfig = tlsc
+	}
+
+	s.logger.App.Info("Control server starting",
+		zap.String("address", addr),
+		zap.Bool("tls", tlsCfg.Enabled),
+		zap.Bool("mtls", tlsCfg.Enabled && tlsCfg.ClientAuthRequired),
+	)
+
 	go func() {
-		if err := s.server.Serve(ln); err != nil && err != http.ErrServerClosed {
-			s.logger.App.Error("Control server error", zap.Error(err))
+		var serveErr error
+		if tlsCfg.Enabled {
+			serveErr = s.server.ServeTLS(ln, "", "")
+		} else {
+			serveErr = s.server.Serve(ln)
+		}
+		if serveErr != nil && serveErr != http.ErrServerClosed {
+			s.logger.App.Error("Control server error", zap.Error(serveErr))
 		}
 	}()
 
 	s.logger.App.Info("Control server started successfully", zap.String("address", addr))
 	return nil
+}
+
+// ReloadCert re-reads the control server's cert/key from disk. When mTLS is
+// enabled, ClientCAs is intentionally NOT reloaded here because the trust
+// root itself shouldn't be changing on a leaf-cert rotation -- if the CA
+// bundle rotates, restart the process or extend this to re-read CAFile.
+func (s *Server) ReloadCert() error {
+	if s.certReloader == nil {
+		return fmt.Errorf("control server has no cert reloader (TLS not enabled)")
+	}
+	return s.certReloader.Reload()
+}
+
+// CertReloader exposes the underlying reloader so the optional in-process
+// cert-watcher (see pkg/pki/cert_watcher.go) can subscribe to it. Returns
+// nil when TLS is disabled.
+func (s *Server) CertReloader() *pki.Reloader {
+	return s.certReloader
 }
 
 // Stop stops the control server gracefully
@@ -169,18 +226,20 @@ func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
 		}
 	}
 
-	// Build mTLS config
+	// Build mTLS middleware config. Actual cert verification is enforced by
+	// the TLS listener above (ClientAuth = RequireAndVerifyClientCert);
+	// this middleware layer is for DN extraction and audit logging.
 	var mtlsConfig *middleware.MTLSConfig
 	if cfg.Server.Control.TLS.Enabled && cfg.Server.Control.TLS.ClientAuthRequired {
-		// Load CA certificate pool if CA file is specified
 		var caPool *x509.CertPool
 		if cfg.Server.Control.TLS.CAFile != "" {
-			// Note: In production, load the CA file here
-			// For now, we'll use nil which means no verification
-			// This will be implemented when TLS is fully set up
-			caPool = nil
+			if pool, cerr := pki.LoadCAPool(cfg.Server.Control.TLS.CAFile); cerr == nil {
+				caPool = pool
+			} else {
+				s.logger.App.Warn("control mTLS middleware: CA pool load failed, DN extraction only",
+					zap.Error(cerr))
+			}
 		}
-
 		mtlsConfig = &middleware.MTLSConfig{
 			RequireClientCert:        true,
 			TrustedCAs:               caPool,

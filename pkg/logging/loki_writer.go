@@ -5,6 +5,8 @@ import (
 	"akashic/akashic/pkg/config"
 	"bytes"
 	"compress/gzip"
+	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strings"
 	"sync"
 	"time"
 )
@@ -196,10 +199,20 @@ func (w *LokiWriter) flushLoop() {
 	}
 }
 
-func NewLokiWriter(cfg *config.SinkConfig, fixedLabels config.StaticLabel) (io.WriteCloser, error) {
+func NewLokiWriter(cfg *config.SinkConfig, fixedLabels config.StaticLabel, tlsCfg *config.LokiTLSConfig) (io.WriteCloser, error) {
 	if cfg.LokiURL == "" {
 		return nil, fmt.Errorf("SinkConfig missing loki_url")
 	}
+
+	httpClient := &http.Client{Timeout: time.Duration(ifZero(cfg.ClientTimeoutMs, config.DefaultClientTimeoutMs)) * time.Millisecond}
+	if strings.HasPrefix(strings.ToLower(cfg.LokiURL), "https://") {
+		tr, err := buildLokiTransport(tlsCfg)
+		if err != nil {
+			return nil, fmt.Errorf("build Loki HTTPS transport: %v", err)
+		}
+		httpClient.Transport = tr
+	}
+
 	w := &LokiWriter{
 		url:         cfg.LokiURL,
 		user:        cfg.BasicAuthUser,
@@ -219,12 +232,40 @@ func NewLokiWriter(cfg *config.SinkConfig, fixedLabels config.StaticLabel) (io.W
 		quit:    make(chan struct{}),
 		flush:   make(chan struct{}, 1),
 		breaker: common.NewBreaker(ifZero(cfg.BreakerMaxRetries, config.DefaultBreakerMaxRetries), time.Duration(ifZero(cfg.BreakerCooldownMs, config.DefaultBreakerCooldownMs))*time.Millisecond),
-		client:  &http.Client{Timeout: time.Duration(ifZero(cfg.ClientTimeoutMs, config.DefaultClientTimeoutMs)) * time.Millisecond},
+		client:  httpClient,
 	}
 	w.timer = time.NewTimer(w.batchFlushPeriod)
 	w.wg.Add(1)
 	go w.flushLoop()
 	return w, nil
+}
+
+// buildLokiTransport constructs an http.Transport with TLS settings pointing
+// at the loki-proxy. The sink's URL dictates *whether* we speak TLS (its scheme),
+// but the CA bundle and SNI come from config.LokiTLSConfig — that way per-sink
+// tweaks don't duplicate the trust material.
+func buildLokiTransport(cfg *config.LokiTLSConfig) (*http.Transport, error) {
+	tlsC := &tls.Config{
+		MinVersion: tls.VersionTLS12,
+	}
+	if cfg != nil {
+		tlsC.InsecureSkipVerify = cfg.SkipVerify
+		if cfg.ServerName != "" {
+			tlsC.ServerName = cfg.ServerName
+		}
+		if !cfg.SkipVerify && cfg.CACertPath != "" {
+			pem, err := os.ReadFile(cfg.CACertPath)
+			if err != nil {
+				return nil, fmt.Errorf("read Loki CA bundle %s: %v", cfg.CACertPath, err)
+			}
+			pool := x509.NewCertPool()
+			if !pool.AppendCertsFromPEM(pem) {
+				return nil, fmt.Errorf("Loki CA bundle %s contained no valid certificates", cfg.CACertPath)
+			}
+			tlsC.RootCAs = pool
+		}
+	}
+	return &http.Transport{TLSClientConfig: tlsC}, nil
 }
 
 func (w *LokiWriter) Write(p []byte) (n int, err error) {

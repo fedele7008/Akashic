@@ -88,8 +88,37 @@ func NewConfigManager(cmd *cobra.Command, app common.AkashicApp) (*ConfigManager
 		m.verbosePrintlnf("Derived AKASHIC_LOKI_API_URL=%s", derived)
 	}
 
+	// Bridge the Phase 3 short-form TLS toggles to the Go config keys so that
+	// the .env convention (`AKASHIC_POSTGRES_TLS=on`) drives the nested struct
+	// field (`database.postgres.tls.enabled`). The on/off hook does the string
+	// parsing; all we need here is the name mapping.
+	//
+	// We only set the long-form var if it's not already set explicitly — that
+	// way an operator can override per-field if they want finer control.
+	tlsAliases := map[string]string{
+		"AKASHIC_POSTGRES_TLS":   "AKASHIC_DATABASE_POSTGRES_TLS_ENABLED",
+		"AKASHIC_REDIS_TLS":      "AKASHIC_DATABASE_REDIS_TLS_ENABLED",
+		"AKASHIC_LDAP_TLS":       "AKASHIC_LDAP_USE_TLS",
+		"AKASHIC_LOKI_PROXY_TLS": "AKASHIC_LOGGING_LOKI_TLS_ENABLED",
+	}
+	for short, long := range tlsAliases {
+		if v := os.Getenv(short); v != "" && os.Getenv(long) == "" {
+			os.Setenv(long, v)
+			m.verbosePrintlnf("Aliased %s=%s → %s", short, v, long)
+		}
+	}
+
 	// Set defaults before loading config
 	setDefaults(v)
+
+	// When running inside a container the Vault Agent cert volume is mounted
+	// at /certs, not ./certs. Override the file-path defaults before Viper
+	// unmarshalling so the code paths below see the right location without
+	// every operator having to set them explicitly.
+	if IsRunningInContainer() {
+		applyContainerPathDefaults(v)
+		m.verbosePrintlnf("Detected container runtime; using /certs path defaults")
+	}
 
 	// Setup environment variables
 	v.SetEnvPrefix(EnvVarPrefix)
@@ -188,6 +217,47 @@ func stringToDurationHookFunc() mapstructure.DecodeHookFunc {
 	}
 }
 
+// IsRunningInContainer returns true if this process appears to be running
+// inside a Docker container. Used to choose between host-run default paths
+// ("./certs/...") and container default paths ("/certs/..."). The check is
+// intentionally best-effort; operators who need override control can set
+// the explicit config keys.
+func IsRunningInContainer() bool {
+	if _, err := os.Stat("/.dockerenv"); err == nil {
+		return true
+	}
+	// cgroup check catches containers that don't bind-mount /.dockerenv
+	// (uncommon but possible with rootless podman, etc.).
+	if data, err := os.ReadFile("/proc/1/cgroup"); err == nil {
+		s := string(data)
+		if strings.Contains(s, "docker") || strings.Contains(s, "containerd") {
+			return true
+		}
+	}
+	return false
+}
+
+// stringToBoolOnOffHookFunc returns a decode hook that accepts the Phase 3
+// "on"/"off" string convention (plus the usual true/false/yes/no/1/0) on any
+// string-to-bool conversion. This lets .env vars like AKASHIC_REDIS_TLS=on
+// land in a Go `bool` field without forcing the docker side to say "true".
+func stringToBoolOnOffHookFunc() mapstructure.DecodeHookFunc {
+	return func(f, t reflect.Type, data any) (any, error) {
+		if f.Kind() != reflect.String || t.Kind() != reflect.Bool {
+			return data, nil
+		}
+		s := strings.ToLower(strings.TrimSpace(data.(string)))
+		switch s {
+		case "on", "true", "yes", "y", "1", "enable", "enabled":
+			return true, nil
+		case "off", "false", "no", "n", "0", "disable", "disabled", "":
+			return false, nil
+		default:
+			return data, fmt.Errorf("cannot parse %q as bool (expected on/off or true/false)", s)
+		}
+	}
+}
+
 func (m *ConfigManager) LoadConfig() error {
 
 	// Parse config file flag
@@ -237,11 +307,13 @@ func (m *ConfigManager) LoadConfig() error {
 	// Create config struct and unmarshal from viper with custom decode hooks
 	config := &Config{}
 
-	// Configure mapstructure with custom decode hooks for our enum types and time.Duration
+	// Configure mapstructure with custom decode hooks for our enum types, time.Duration,
+	// and the Phase 3 on/off string → bool convention used across .env toggles.
 	decoder, err := mapstructure.NewDecoder(&mapstructure.DecoderConfig{
 		DecodeHook: mapstructure.ComposeDecodeHookFunc(
 			stringToLoggingEnumHookFunc(),
 			stringToDurationHookFunc(),
+			stringToBoolOnOffHookFunc(),
 		),
 		Metadata:   nil,
 		Result:     config,

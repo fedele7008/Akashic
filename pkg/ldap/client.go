@@ -2,7 +2,9 @@ package ldap
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -36,42 +38,56 @@ func New(cfg *config.LDAPConfig, logger *logging.Logger) *Client {
 	}
 }
 
-// Connect establishes a connection to the LDAP server and performs bind
+// Connect establishes a connection to the LDAP server and performs bind.
+//
+// Phase 4: TLS negotiation is driven by config.TLSMode (ldaps|starttls|plain).
+// When empty, UseTLS=true implies "ldaps" and UseTLS=false implies "plain".
+// The CA bundle at TLSCACertPath is loaded once per Connect; TLSSkipVerify
+// bypasses verification entirely (dev only).
 func (c *Client) Connect() error {
 	var err error
 
-	// Build LDAP URL based on TLS configuration
+	mode := c.resolveTLSMode()
+
 	var ldapURL string
-	if c.config.UseTLS {
+	switch mode {
+	case "ldaps":
 		ldapURL = fmt.Sprintf("ldaps://%s:%d", c.config.Host, c.config.Port)
-	} else {
+	default: // "starttls" or "plain"
 		ldapURL = fmt.Sprintf("ldap://%s:%d", c.config.Host, c.config.Port)
 	}
 
 	c.logger.App.Info("connecting to LDAP server",
 		zap.String("url", ldapURL),
-		zap.Bool("tls", c.config.UseTLS),
+		zap.String("tls_mode", mode),
 	)
 
-	// Configure TLS if enabled
 	var tlsConfig *tls.Config
-	if c.config.UseTLS {
-		tlsConfig = &tls.Config{
-			ServerName:         c.config.Host,
-			InsecureSkipVerify: c.config.TLSSkipVerify,
+	if mode == "ldaps" || mode == "starttls" {
+		tlsConfig, err = c.buildTLSConfig()
+		if err != nil {
+			return fmt.Errorf("failed to build LDAP TLS config: %v", err)
 		}
 	}
 
-	// Connect to LDAP server using DialURL (recommended method)
-	c.conn, err = ldap.DialURL(ldapURL, ldap.DialWithTLSConfig(tlsConfig))
+	if mode == "ldaps" {
+		c.conn, err = ldap.DialURL(ldapURL, ldap.DialWithTLSConfig(tlsConfig))
+	} else {
+		c.conn, err = ldap.DialURL(ldapURL)
+	}
 	if err != nil {
 		return fmt.Errorf("failed to connect to LDAP server: %v", err)
 	}
 
-	// Set connection timeout
 	c.conn.SetTimeout(10 * time.Second)
 
-	// Bind as admin user
+	if mode == "starttls" {
+		if err := c.conn.StartTLS(tlsConfig); err != nil {
+			c.conn.Close()
+			return fmt.Errorf("StartTLS failed: %v", err)
+		}
+	}
+
 	if err := c.conn.Bind(c.config.BindDN, c.config.BindPassword); err != nil {
 		c.conn.Close()
 		return fmt.Errorf("failed to bind as admin: %v", err)
@@ -82,6 +98,64 @@ func (c *Client) Connect() error {
 	)
 
 	return nil
+}
+
+// resolveTLSMode picks the connection mode from explicit config, falling back
+// to port-based inference when TLSMode is empty:
+//
+//   - UseTLS=false                      → "plain"
+//   - UseTLS=true, Port == StartTLSPort → "starttls" (default StartTLSPort=389)
+//   - UseTLS=true, Port == LDAPSPort    → "ldaps"    (default LDAPSPort=636)
+//   - UseTLS=true, neither              → "ldaps" + warning
+//
+// The port comparison is against configurable fields (AKASHIC_LDAP_STARTTLS_PORT
+// and AKASHIC_LDAP_LDAPS_PORT), so a deployment that puts LDAPS on a non-
+// standard port can still drive the inference correctly without hardcoding
+// 389/636 anywhere. The warning branch nudges operators toward setting
+// AKASHIC_LDAP_TLS_MODE explicitly rather than relying on the fallback.
+func (c *Client) resolveTLSMode() string {
+	if m := strings.ToLower(strings.TrimSpace(c.config.TLSMode)); m != "" {
+		return m
+	}
+	if !c.config.UseTLS {
+		return "plain"
+	}
+	switch c.config.Port {
+	case c.config.StartTLSPort:
+		return "starttls"
+	case c.config.LDAPSPort:
+		return "ldaps"
+	default:
+		c.logger.App.Warn("LDAP port matches neither starttls_port nor ldaps_port; defaulting to ldaps",
+			zap.Int("port", c.config.Port),
+			zap.Int("starttls_port", c.config.StartTLSPort),
+			zap.Int("ldaps_port", c.config.LDAPSPort),
+			zap.String("hint", "set AKASHIC_LDAP_TLS_MODE=starttls|ldaps|plain to override"),
+		)
+		return "ldaps"
+	}
+}
+
+// buildTLSConfig assembles the TLS context used for both LDAPS and StartTLS.
+// Verification is on by default; TLSSkipVerify is a dev-only escape hatch.
+func (c *Client) buildTLSConfig() (*tls.Config, error) {
+	tlsCfg := &tls.Config{
+		MinVersion:         tls.VersionTLS12,
+		ServerName:         c.config.Host,
+		InsecureSkipVerify: c.config.TLSSkipVerify,
+	}
+	if !c.config.TLSSkipVerify && c.config.TLSCACertPath != "" {
+		pem, err := os.ReadFile(c.config.TLSCACertPath)
+		if err != nil {
+			return nil, fmt.Errorf("read LDAP CA bundle %s: %v", c.config.TLSCACertPath, err)
+		}
+		pool := x509.NewCertPool()
+		if !pool.AppendCertsFromPEM(pem) {
+			return nil, fmt.Errorf("LDAP CA bundle %s contained no valid certificates", c.config.TLSCACertPath)
+		}
+		tlsCfg.RootCAs = pool
+	}
+	return tlsCfg, nil
 }
 
 // Close closes the LDAP connection

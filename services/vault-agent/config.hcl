@@ -64,3 +64,51 @@ template {
   source      = "/templates/loki.tpl"
   destination = "/certs/loki-proxy/.rendered"
 }
+
+# ─────────────────────────────────────────────────────────────
+# Akashic control server certificate (pki-internal/server)
+#   Used for the public TLS listener on the control plane. CN =
+#   ctrl.akashic.local. Separate from the mTLS-trust cert below.
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/akashic-ctrl.tpl"
+  destination = "/certs/akashic/.ctrl-rendered"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Akashic auth server certificate (pki-internal/server)
+#   Used for the OAuth/OIDC TLS listener. CN = auth.akashic.local.
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/akashic-auth.tpl"
+  destination = "/certs/akashic/.auth-rendered"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Akashic control server mTLS cert (pki-mtls-akashic-ctrl/server)
+#   Issued from the private mTLS CA so that only CLI + BFF clients
+#   signed by the same CA can reach /auth/* control endpoints.
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/akashic-mtls-ctrl.tpl"
+  destination = "/certs/akashic/.mtls-ctrl-rendered"
+}
+
+# ─────────────────────────────────────────────────────────────
+# Akashic CLI mTLS client cert (pki-mtls-akashic-ctrl/client)
+#   Used by akashic-cli to authenticate against the control plane.
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/akashic-cli-client.tpl"
+  destination = "/certs/akashic-cli/.rendered"
+}
+
+# ─────────────────────────────────────────────────────────────
+# BFF mTLS client cert (pki-mtls-akashic-ctrl/client)
+#   Used by the BFF (Backend-For-Frontend) to authenticate against
+#   the control plane on behalf of admin web sessions.
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/bff-client.tpl"
+  destination = "/certs/bff/.rendered"
+}

@@ -287,3 +287,56 @@ func (s *Server) handleServerQuit(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 }
+
+// handleTLSReload re-reads the cert/key files for both the control and
+// auth servers. Safe to retry on error -- the previous cert stays active
+// when a reload fails (e.g. Vault Agent is mid-rotation).
+//
+// Only the leaf certs are reloaded. If the underlying CA bundle rotates
+// (rare), restart the process instead.
+func (s *Server) handleTLSReload(w http.ResponseWriter, r *http.Request) {
+	s.logger.App.Debug("CTRL: Handling TLS reload request")
+	if r.Method != http.MethodPost {
+		response.WriteJSON(w, response.StatusMethodNotAllowed,
+			response.Fail(response.ErrMethodNotAllowed, fmt.Sprintf("%s method not allowed", r.Method), map[string]any{
+				"allowed_methods": []string{http.MethodPost},
+				"received_method": r.Method,
+			}))
+		return
+	}
+
+	s.logger.App.Info("Reloading TLS certificates")
+
+	results := map[string]any{}
+	var failures []string
+
+	if s.certReloader != nil {
+		if err := s.ReloadCert(); err != nil {
+			failures = append(failures, fmt.Sprintf("control: %v", err))
+			results["control"] = map[string]any{"reloaded": false, "error": err.Error()}
+		} else {
+			results["control"] = map[string]any{"reloaded": true}
+		}
+	} else {
+		results["control"] = map[string]any{"reloaded": false, "reason": "TLS not enabled"}
+	}
+
+	if authServer := s.stateManager.GetAuthServer(); authServer != nil {
+		if err := authServer.ReloadCert(); err != nil {
+			// Don't treat "TLS not enabled" as a hard failure; just report it.
+			results["auth"] = map[string]any{"reloaded": false, "error": err.Error()}
+		} else {
+			results["auth"] = map[string]any{"reloaded": true}
+		}
+	}
+
+	if len(failures) > 0 {
+		response.WriteJSON(w, response.StatusInternalServerError,
+			response.Fail(response.ErrTLSReloadFailed, "one or more reloads failed", results))
+		s.logger.App.Error("TLS reload had failures", zap.Any("results", results))
+		return
+	}
+
+	s.logger.App.Info("TLS certificates reloaded", zap.Any("results", results))
+	response.WriteJSON(w, response.StatusOK, response.Success(results))
+}

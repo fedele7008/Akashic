@@ -269,13 +269,14 @@ type ChannelConfig struct {
 
 // LoggingConfig defines the complete logging configuration
 type LoggingConfig struct {
-	ServiceName      string        `mapstructure:"service_name" yaml:"service_name"`
-	Environment      string        `mapstructure:"environment" yaml:"environment"`
-	EncoderConfig    EncoderConfig `mapstructure:"encoder" yaml:"encoder"`
-	App              ChannelConfig `mapstructure:"app" yaml:"app"`
-	Security         ChannelConfig `mapstructure:"security" yaml:"security"`
-	Audit            ChannelConfig `mapstructure:"audit" yaml:"audit"`
-	ForceAuditAppend bool          `mapstructure:"force_audit_append" yaml:"force_audit_append"`
+	ServiceName      string         `mapstructure:"service_name" yaml:"service_name"`
+	Environment      string         `mapstructure:"environment" yaml:"environment"`
+	EncoderConfig    EncoderConfig  `mapstructure:"encoder" yaml:"encoder"`
+	App              ChannelConfig  `mapstructure:"app" yaml:"app"`
+	Security         ChannelConfig  `mapstructure:"security" yaml:"security"`
+	Audit            ChannelConfig  `mapstructure:"audit" yaml:"audit"`
+	ForceAuditAppend bool           `mapstructure:"force_audit_append" yaml:"force_audit_append"`
+	LokiTLS          LokiTLSConfig  `mapstructure:"loki_tls" yaml:"loki_tls"`
 }
 
 // Root configuration
@@ -296,6 +297,34 @@ type Config struct {
 	Bootstrap BootstrapConfig `mapstructure:"bootstrap" yaml:"bootstrap"`
 	// LDAP server configuration
 	LDAP LDAPConfig `mapstructure:"ldap" yaml:"ldap"`
+	// PKI / cert-rotation configuration (Phase 4)
+	PKI PKIConfig `mapstructure:"pki" yaml:"pki"`
+}
+
+// PKIConfig controls the in-process PKI / cert-rotation subsystem (Phase 4)
+type PKIConfig struct {
+	// CertWatcherEnabled enables an in-process fsnotify watcher that calls
+	// the reloader when cert/key files change on disk. Safe to disable --
+	// rotation still works via POST /tls/reload or process restart.
+	CertWatcherEnabled bool `mapstructure:"cert_watcher_enabled" yaml:"cert_watcher_enabled"`
+
+	// CertWatcherDebounce is the settle delay after the last cert/key
+	// event before reloading, to avoid reading a new cert paired with
+	// an old key while Vault Agent finishes writing both files.
+	CertWatcherDebounce time.Duration `mapstructure:"cert_watcher_debounce" yaml:"cert_watcher_debounce"`
+}
+
+// LokiTLSConfig describes how the Loki HTTP client trusts the loki-proxy.
+type LokiTLSConfig struct {
+	// Enabled signals that the Loki URL is expected to be https and we
+	// must verify against CACertPath. Mirrors AKASHIC_LOKI_PROXY_TLS.
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// CACertPath is the path to the trust bundle that signs the loki-proxy cert.
+	CACertPath string `mapstructure:"ca_cert" yaml:"ca_cert"`
+	// ServerName overrides the SNI/verify hostname (default: loki.akashic.local).
+	ServerName string `mapstructure:"server_name" yaml:"server_name"`
+	// SkipVerify bypasses cert verification (dev only, INSECURE).
+	SkipVerify bool `mapstructure:"skip_verify" yaml:"skip_verify"`
 }
 
 // ServerConfig contains basic server settings
@@ -312,6 +341,17 @@ type AuthServerConfig struct {
 	Host string `mapstructure:"host" yaml:"host"`
 	// Port number for the auth server (typically 8080)
 	Port int `mapstructure:"port" yaml:"port"`
+	// TLS serves OAuth/OIDC endpoints over HTTPS when Enabled. Unlike the
+	// control server, the auth server never requires client certs.
+	TLS AuthTLSConfig `mapstructure:"tls" yaml:"tls"`
+}
+
+// AuthTLSConfig is the auth-server-specific TLS block. Simpler than
+// ControlServerConfig.TLS because there is no mTLS on this listener.
+type AuthTLSConfig struct {
+	Enabled  bool   `mapstructure:"enabled" yaml:"enabled"`
+	CertFile string `mapstructure:"cert_file" yaml:"cert_file"`
+	KeyFile  string `mapstructure:"key_file" yaml:"key_file"`
 }
 
 // ControlServerConfig defines control plane management server settings
@@ -358,7 +398,8 @@ type PostgresConfig struct {
 	Username string `mapstructure:"username" yaml:"username"`
 	// Password for authentication (use environment variables)
 	Password string `mapstructure:"password" yaml:"password"`
-	// SSLMode for connection security (disable, require, verify-ca, verify-full)
+	// SSLMode for connection security (disable, require, verify-ca, verify-full).
+	// Used when TLS.Enabled is true; ignored otherwise (sslmode=disable is forced).
 	SSLMode string `mapstructure:"ssl_mode" yaml:"ssl_mode"`
 	// MaxConnections for connection pool
 	MaxConnections int `mapstructure:"max_connections" yaml:"max_connections"`
@@ -366,6 +407,20 @@ type PostgresConfig struct {
 	MaxIdleConnections int `mapstructure:"max_idle_connections" yaml:"max_idle_connections"`
 	// ConnectionLifetime for connection reuse
 	ConnectionLifetime time.Duration `mapstructure:"connection_lifetime" yaml:"connection_lifetime"`
+	// TLS holds the master toggle + CA bundle path (AKASHIC_DATABASE_POSTGRES_TLS_ENABLED)
+	TLS PostgresTLSConfig `mapstructure:"tls" yaml:"tls"`
+}
+
+// PostgresTLSConfig is the Phase 4 master toggle for Postgres TLS, mirroring
+// AKASHIC_POSTGRES_TLS=on|off from the docker-compose side.
+type PostgresTLSConfig struct {
+	// Enabled toggles whether the DSN uses TLS at all. When false we force
+	// sslmode=disable regardless of the SSLMode field above.
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// CACertPath is the trust bundle used to verify the postgres server cert.
+	CACertPath string `mapstructure:"ca_cert" yaml:"ca_cert"`
+	// ServerName overrides the hostname verified against the server cert CN/SAN.
+	ServerName string `mapstructure:"server_name" yaml:"server_name"`
 }
 
 // RedisConfig defines Redis connection settings
@@ -384,6 +439,21 @@ type RedisConfig struct {
 	SessionTTL time.Duration `mapstructure:"session_ttl" yaml:"session_ttl"`
 	// CacheTTL for general caching
 	CacheTTL time.Duration `mapstructure:"cache_ttl" yaml:"cache_ttl"`
+	// TLS holds the master toggle + CA bundle path (AKASHIC_DATABASE_REDIS_TLS_ENABLED)
+	TLS RedisTLSConfig `mapstructure:"tls" yaml:"tls"`
+}
+
+// RedisTLSConfig mirrors AKASHIC_REDIS_TLS=on|off. When enabled, go-redis
+// dials TLS and verifies against CACertPath.
+type RedisTLSConfig struct {
+	// Enabled toggles whether the redis client dials TLS.
+	Enabled bool `mapstructure:"enabled" yaml:"enabled"`
+	// CACertPath is the trust bundle used to verify the redis server cert.
+	CACertPath string `mapstructure:"ca_cert" yaml:"ca_cert"`
+	// ServerName overrides the SNI / verify hostname.
+	ServerName string `mapstructure:"server_name" yaml:"server_name"`
+	// SkipVerify bypasses cert verification (dev only, INSECURE).
+	SkipVerify bool `mapstructure:"skip_verify" yaml:"skip_verify"`
 }
 
 // SessionConfig contains basic session management settings
@@ -447,11 +517,31 @@ type LDAPConfig struct {
 	// BindPassword is the password for the bind DN
 	BindPassword string `mapstructure:"bind_password" yaml:"bind_password"`
 
-	// UseTLS enables TLS/LDAPS connection
+	// UseTLS enables TLS/LDAPS connection (AKASHIC_LDAP_TLS=on|off)
 	UseTLS bool `mapstructure:"use_tls" yaml:"use_tls"`
 
 	// TLSSkipVerify skips TLS certificate verification (insecure - dev only)
 	TLSSkipVerify bool `mapstructure:"tls_skip_verify" yaml:"tls_skip_verify"`
+
+	// TLSCACertPath is the trust bundle used when UseTLS is true and TLSSkipVerify
+	// is false. Empty = use system root CAs.
+	TLSCACertPath string `mapstructure:"tls_ca_cert" yaml:"tls_ca_cert"`
+
+	// TLSMode selects how TLS is negotiated: "ldaps" (dial ldaps:// on the LDAPS port),
+	// "starttls" (dial ldap:// then upgrade), or "plain" (no TLS). Empty lets the
+	// client infer from Port by comparing against StartTLSPort / LDAPSPort below.
+	TLSMode string `mapstructure:"tls_mode" yaml:"tls_mode"`
+
+	// StartTLSPort names the port on which the server offers StartTLS (i.e. plain
+	// LDAP that can be upgraded to TLS via the StartTLS operation). When Port
+	// matches this value and TLSMode is empty, the client infers "starttls".
+	// Default: 389 (IANA-assigned standard LDAP port).
+	StartTLSPort int `mapstructure:"starttls_port" yaml:"starttls_port"`
+
+	// LDAPSPort names the port on which the server offers LDAPS (implicit TLS from
+	// byte 0). When Port matches this value and TLSMode is empty, the client
+	// infers "ldaps". Default: 636 (IANA-assigned standard LDAPS port).
+	LDAPSPort int `mapstructure:"ldaps_port" yaml:"ldaps_port"`
 
 	// UserSearchBase is the base DN for user searches
 	// Example: "ou=users,dc=akashic,dc=local"

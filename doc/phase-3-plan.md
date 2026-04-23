@@ -209,12 +209,15 @@ ENTRYPOINT ["/custom-entrypoint.sh"]
   - `LDAP_TLS_CA_CRT_FILENAME: ca.crt`
   - `LDAP_TLS_VERIFY_CLIENT: try`
 - Add `depends_on: vault-init`
-- Keep `profiles: ["ldap"]`
+
+> **Note (updated):** LDAP no longer lives behind a `ldap` compose profile.
+> All dependency services run by default; only the Akashic server itself is
+> gated behind the `app` profile (see Phase 4).
 
 ### 3.4 Verify
 
 ```bash
-docker compose --profile ldap up vault-bootstrap vault vault-init ldap -d
+docker compose up vault-bootstrap vault vault-init ldap -d
 LDAPTLS_CACERT=./certs/ca/trust/trust-bundle.pem \
   ldapsearch -H ldaps://localhost:636 \
   -D "cn=admin,dc=akashic,dc=local" -w <password> \
@@ -285,12 +288,15 @@ server:
 - Add `build: ./services/loki`
 - Add volume: `certs:/certs-source:ro`
 - Add `depends_on: vault-init`
-- Keep `profiles: ["obs"]`
+
+> **Note (updated):** Loki/Grafana no longer live behind an `obs` compose
+> profile. All dependency services run by default; only the Akashic server
+> itself is gated behind the `app` profile (see Phase 4).
 
 ### 4.5 Verify
 
 ```bash
-docker compose --profile obs up vault-bootstrap vault vault-init loki -d
+docker compose up vault-bootstrap vault vault-init loki -d
 curl --cacert ./certs/ca/trust/trust-bundle.pem \
      --cert ./certs/akashic/loki-client.crt \
      --key ./certs/akashic/loki-client.key \

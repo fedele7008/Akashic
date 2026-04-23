@@ -50,6 +50,7 @@ const (
 	ErrConfigReloadFailed   = "CONFIG_RELOAD_FAILED"
 	ErrMethodNotAllowed     = "METHOD_NOT_ALLOWED"
 	ErrEncodingError        = "ENCODING_ERROR"
+	ErrTLSReloadFailed      = "TLS_RELOAD_FAILED"
 )
 
 // Success creates a successful response with data

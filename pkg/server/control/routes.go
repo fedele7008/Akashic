@@ -22,6 +22,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Server control
 	mux.HandleFunc("/server/quit", s.handleServerQuit)
 
+	// TLS cert reload (Phase 4). Manual trigger for cert rotation when the
+	// optional in-process watcher (AKASHIC_PKI_CERT_WATCHER_ENABLED=false)
+	// is disabled, or as an override when it is.
+	mux.HandleFunc("/tls/reload", s.handleTLSReload)
+
 	// Bootstrap routes (only active when bootstrap needed)
 	mux.HandleFunc("/bootstrap/status", s.handleBootstrapStatus)
 	mux.HandleFunc("/bootstrap/token", requireCLI(s.requireBootstrapMode(s.handleGetBootstrapToken)))

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"time"
 
 	"github.com/spf13/viper"
@@ -14,14 +15,18 @@ const (
 	// Server defaults
 	DefaultAuthHost = "0.0.0.0"
 	DefaultAuthPort = 8080
+	// Auth server TLS defaults (Phase 4 — cert issued by vault-agent/akashic-auth.tpl)
+	DefaultAuthTLSEnabled  = true
+	DefaultAuthTLSCertFile = "./certs/akashic/auth.crt"
+	DefaultAuthTLSKeyFile  = "./certs/akashic/auth.key"
 
 	// Control server defaults
 	DefaultControlHost        = "127.0.0.1"
 	DefaultControlPort        = 8081
 	DefaultTLSEnabled         = true
-	DefaultCertFile           = "./certs/server.crt"
-	DefaultKeyFile            = "./certs/server.key"
-	DefaultCAFile             = "./certs/ca.crt"
+	DefaultCertFile           = "./certs/akashic/mtls-ctrl.crt"
+	DefaultKeyFile            = "./certs/akashic/mtls-ctrl.key"
+	DefaultCAFile             = "./certs/akashic/mtls-ca.crt"
 	DefaultClientAuthRequired = true
 
 	// Database defaults - PostgreSQL
@@ -30,10 +35,15 @@ const (
 	DefaultPostgresDatabase           = "akashic"
 	DefaultPostgresUsername           = "" // Empty - must be set via env var or config
 	DefaultPostgresPassword           = "" // Empty - must be set via env var or config
-	DefaultPostgresSSLMode            = "disable" // disable for dev, require for production
+	DefaultPostgresSSLMode            = "verify-full" // when TLS.Enabled is true
 	DefaultPostgresMaxConnections     = 100
 	DefaultPostgresMaxIdleConnections = 10
 	DefaultPostgresConnectionLifetime = 1 * time.Hour
+
+	// Postgres TLS defaults (Phase 4 — AKASHIC_POSTGRES_TLS=on|off)
+	DefaultPostgresTLSEnabled    = false
+	DefaultPostgresTLSCACertPath = "./certs/ca/trust/trust-bundle.pem"
+	DefaultPostgresTLSServerName = "postgres.akashic.local"
 
 	// Database defaults - Redis
 	DefaultRedisHost       = "localhost"
@@ -43,6 +53,22 @@ const (
 	DefaultRedisPoolSize   = 10
 	DefaultRedisSessionTTL = 24 * time.Hour
 	DefaultRedisCacheTTL   = 1 * time.Hour
+
+	// Redis TLS defaults (Phase 4 — AKASHIC_REDIS_TLS=on|off)
+	DefaultRedisTLSEnabled    = false
+	DefaultRedisTLSCACertPath = "./certs/ca/trust/trust-bundle.pem"
+	DefaultRedisTLSServerName = "redis.akashic.local"
+	DefaultRedisTLSSkipVerify = false
+
+	// Loki TLS defaults (Phase 4 — AKASHIC_LOKI_PROXY_TLS=on|off)
+	DefaultLokiTLSEnabled    = false
+	DefaultLokiTLSCACertPath = "./certs/ca/trust/trust-bundle.pem"
+	DefaultLokiTLSServerName = "loki.akashic.local"
+	DefaultLokiTLSSkipVerify = false
+
+	// PKI / cert-rotation defaults (Phase 4)
+	DefaultPKICertWatcherEnabled  = true
+	DefaultPKICertWatcherDebounce = 500 * time.Millisecond
 
 	// Session defaults
 	DefaultSessionTimeout = 30 * time.Minute
@@ -103,6 +129,10 @@ const (
 	// LDAP server defaults
 	DefaultLDAPHost              = "ldap" // Docker service name
 	DefaultLDAPPort              = 389
+	// IANA-assigned standard ports; used by the client's TLS-mode inference
+	// when neither AKASHIC_LDAP_TLS_MODE nor a matching override is set.
+	DefaultLDAPStartTLSPort      = 389
+	DefaultLDAPLDAPSPort         = 636
 	DefaultLDAPBaseDN            = "dc=akashic,dc=local"
 	DefaultLDAPBindDN            = "cn=admin,dc=akashic,dc=local"
 	DefaultLDAPBindPassword      = "" // Must be set via env var
@@ -152,6 +182,9 @@ func setDefaults(v *viper.Viper) {
 	// Server defaults
 	v.SetDefault("server.auth.host", DefaultAuthHost)
 	v.SetDefault("server.auth.port", DefaultAuthPort)
+	v.SetDefault("server.auth.tls.enabled", DefaultAuthTLSEnabled)
+	v.SetDefault("server.auth.tls.cert_file", DefaultAuthTLSCertFile)
+	v.SetDefault("server.auth.tls.key_file", DefaultAuthTLSKeyFile)
 
 	// Control server defaults
 	v.SetDefault("server.control.host", DefaultControlHost)
@@ -172,6 +205,9 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.postgres.max_connections", DefaultPostgresMaxConnections)
 	v.SetDefault("database.postgres.max_idle_connections", DefaultPostgresMaxIdleConnections)
 	v.SetDefault("database.postgres.connection_lifetime", DefaultPostgresConnectionLifetime)
+	v.SetDefault("database.postgres.tls.enabled", DefaultPostgresTLSEnabled)
+	v.SetDefault("database.postgres.tls.ca_cert", DefaultPostgresTLSCACertPath)
+	v.SetDefault("database.postgres.tls.server_name", DefaultPostgresTLSServerName)
 
 	v.SetDefault("database.redis.host", DefaultRedisHost)
 	v.SetDefault("database.redis.port", DefaultRedisPort)
@@ -180,6 +216,20 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("database.redis.pool_size", DefaultRedisPoolSize)
 	v.SetDefault("database.redis.session_ttl", DefaultRedisSessionTTL)
 	v.SetDefault("database.redis.cache_ttl", DefaultRedisCacheTTL)
+	v.SetDefault("database.redis.tls.enabled", DefaultRedisTLSEnabled)
+	v.SetDefault("database.redis.tls.ca_cert", DefaultRedisTLSCACertPath)
+	v.SetDefault("database.redis.tls.server_name", DefaultRedisTLSServerName)
+	v.SetDefault("database.redis.tls.skip_verify", DefaultRedisTLSSkipVerify)
+
+	// Loki sink TLS (applies when sink URL is https, i.e. AKASHIC_LOKI_PROXY_TLS=on)
+	v.SetDefault("logging.loki_tls.enabled", DefaultLokiTLSEnabled)
+	v.SetDefault("logging.loki_tls.ca_cert", DefaultLokiTLSCACertPath)
+	v.SetDefault("logging.loki_tls.server_name", DefaultLokiTLSServerName)
+	v.SetDefault("logging.loki_tls.skip_verify", DefaultLokiTLSSkipVerify)
+
+	// PKI / cert-rotation
+	v.SetDefault("pki.cert_watcher_enabled", DefaultPKICertWatcherEnabled)
+	v.SetDefault("pki.cert_watcher_debounce", DefaultPKICertWatcherDebounce)
 
 	// Session defaults
 	v.SetDefault("session.timeout", DefaultSessionTimeout)
@@ -236,6 +286,10 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ldap.bind_password", DefaultLDAPBindPassword)
 	v.SetDefault("ldap.use_tls", DefaultLDAPUseTLS)
 	v.SetDefault("ldap.tls_skip_verify", DefaultLDAPTLSSkipVerify)
+	v.SetDefault("ldap.tls_ca_cert", "./certs/ca/trust/trust-bundle.pem")
+	v.SetDefault("ldap.tls_mode", "") // empty => infer from port
+	v.SetDefault("ldap.starttls_port", DefaultLDAPStartTLSPort)
+	v.SetDefault("ldap.ldaps_port", DefaultLDAPLDAPSPort)
 	v.SetDefault("ldap.user_search_base", DefaultLDAPUserSearchBase)
 	v.SetDefault("ldap.user_search_filter", DefaultLDAPUserSearchFilter)
 	v.SetDefault("ldap.user_object_class", DefaultLDAPUserObjectClass)
@@ -314,4 +368,35 @@ func setDefaults(v *viper.Viper) {
 	// Request limits
 	v.SetDefault("middleware.control.max_request_size_bytes", DefaultControlMaxRequestSizeBytes)
 	v.SetDefault("middleware.control.request_timeout", DefaultControlRequestTimeout)
+}
+
+// applyContainerPathDefaults rewrites the cert-path defaults we just set so
+// that "./certs/..." becomes "/certs/..." -- matching where docker-compose
+// bind-mounts the certs volume inside the akashic container. This is a pure
+// override on top of setDefaults; any explicit value (env var, YAML) still
+// wins because Viper's SetDefault has the lowest precedence.
+func applyContainerPathDefaults(v *viper.Viper) {
+	rewrite := func(key string) {
+		curr, ok := v.Get(key).(string)
+		if !ok || curr == "" {
+			return
+		}
+		if strings.HasPrefix(curr, "./certs/") {
+			v.SetDefault(key, "/certs/"+strings.TrimPrefix(curr, "./certs/"))
+		}
+	}
+	keys := []string{
+		"server.control.tls.cert_file",
+		"server.control.tls.key_file",
+		"server.control.tls.ca_file",
+		"server.auth.tls.cert_file",
+		"server.auth.tls.key_file",
+		"database.postgres.tls.ca_cert",
+		"database.redis.tls.ca_cert",
+		"logging.loki_tls.ca_cert",
+		"ldap.tls_ca_cert",
+	}
+	for _, k := range keys {
+		rewrite(k)
+	}
 }

@@ -182,7 +182,7 @@ func buildChannelCore(cfg *config.LoggingConfig, ch config.Channel, consoleEnc, 
 				"channel":      ch.String(),
 			}
 			maps.Copy(labels, sinkCfg.LokiLabels)
-			lokiWriter, err := NewLokiWriter(sinkCfg, labels)
+			lokiWriter, err := NewLokiWriter(sinkCfg, labels, &cfg.LokiTLS)
 			if err != nil {
 				return nil, nil, fmt.Errorf("%s: %v", ch.String(), err)
 			}

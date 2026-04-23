@@ -697,7 +697,9 @@ The gate for Phase 4 is a full lifecycle test with zero manual intervention.
 ```bash
 ./scripts/reset-vault.sh
 # .env has all *_TLS=on
-docker compose --profile ldap --profile obs --profile app up -d
+# All dependency services (postgres, redis, ldap, loki, grafana, ...) run by
+# default. The `app` profile opts the Akashic server itself into the stack.
+docker compose --profile app up -d
 sleep 30  # let vault-agent issue + akashic boot
 
 # Check every hop is TLS

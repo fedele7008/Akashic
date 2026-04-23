@@ -433,13 +433,8 @@ main() {
     }
 
     # --- Internal server certificates (pki-internal/server) ---
-    issue_cert "pki-internal" "server" "akashic-ctrl" \
-        "${CERTS_OUTPUT_DIR}/akashic/ctrl.crt" \
-        "${CERTS_OUTPUT_DIR}/akashic/ctrl.key" || return 1
-
-    issue_cert "pki-internal" "server" "akashic-auth" \
-        "${CERTS_OUTPUT_DIR}/akashic/auth.crt" \
-        "${CERTS_OUTPUT_DIR}/akashic/auth.key" || return 1
+    # akashic-ctrl cert is now issued by vault-agent (see services/vault-agent/templates/akashic-ctrl.tpl)
+    # akashic-auth cert is now issued by vault-agent (see services/vault-agent/templates/akashic-auth.tpl)
 
     # postgres cert is now issued by vault-agent (see services/vault-agent/templates/postgres.tpl)
 
@@ -450,19 +445,11 @@ main() {
     # loki cert is now issued by vault-agent (see services/vault-agent/templates/loki.tpl)
 
     # --- mTLS: Control Plane (pki-mtls-akashic-ctrl) ---
-    issue_cert "pki-mtls-akashic-ctrl" "server" "mtls-ctrl-server" \
-        "${CERTS_OUTPUT_DIR}/akashic/mtls-ctrl.crt" \
-        "${CERTS_OUTPUT_DIR}/akashic/mtls-ctrl.key" || return 1
+    # mtls-ctrl-server cert is now issued by vault-agent (see services/vault-agent/templates/akashic-mtls-ctrl.tpl)
+    # mtls-ctrl-client-cli cert is now issued by vault-agent (see services/vault-agent/templates/akashic-cli-client.tpl)
+    # mtls-ctrl-client-bff cert is now issued by vault-agent (see services/vault-agent/templates/bff-client.tpl)
 
-    issue_cert "pki-mtls-akashic-ctrl" "client" "mtls-ctrl-client-cli" \
-        "${CERTS_OUTPUT_DIR}/akashic-cli/akashic-ctrl-client.crt" \
-        "${CERTS_OUTPUT_DIR}/akashic-cli/akashic-ctrl-client.key" || return 1
-
-    issue_cert "pki-mtls-akashic-ctrl" "client" "mtls-ctrl-client-bff" \
-        "${CERTS_OUTPUT_DIR}/bff/akashic-ctrl-client.crt" \
-        "${CERTS_OUTPUT_DIR}/bff/akashic-ctrl-client.key" || return 1
-
-    log_success "All leaf certificates issued"
+    log_success "Step 12 skipped — leaf certs now issued by vault-agent"
 
     # =========================================================================
     # Step 13: Create Trust Bundles
@@ -641,4 +628,14 @@ main() {
 }
 
 main
+main_rc=$?
+if [[ ${main_rc} -ne 0 ]]; then
+    # Propagate failure so downstream services (compose depends_on:
+    # service_completed_successfully) refuse to start on a half-configured
+    # Vault. Common cause: split state -- vault_file volume still holds an
+    # initialized Vault but .secrets/vault/ was wiped, so unseal has no
+    # valid keys. Fix: ./scripts/reset-vault.sh
+    log_error "Akashic Infrastructure PKI setup FAILED (exit ${main_rc})"
+    exit ${main_rc}
+fi
 log_success "Akashic Infrastructure PKI setup complete"

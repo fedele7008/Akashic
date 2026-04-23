@@ -2,14 +2,25 @@ server:
   auth:
     host: "0.0.0.0"
     port: 8080
+    tls:
+      enabled: true
+      # Server cert for the public OAuth/OIDC listener. Issued from
+      # pki-internal via services/vault-agent/templates/akashic-auth.tpl.
+      cert_file: "./certs/akashic/auth.crt"
+      key_file: "./certs/akashic/auth.key"
   control:
     host: "127.0.0.1"
     port: 8081
     tls:
       enabled: true
-      cert_file: "./certs/server.crt"
-      key_file: "./certs/server.key"
-      ca_file: "./certs/ca.crt"
+      # Server cert presented by the control plane. Issued from the private
+      # pki-mtls-akashic-ctrl CA via services/vault-agent/templates/akashic-mtls-ctrl.tpl.
+      cert_file: "./certs/akashic/mtls-ctrl.crt"
+      key_file: "./certs/akashic/mtls-ctrl.key"
+      # CA used to verify INCOMING client certs (akashic-cli, bff). Same
+      # pki-mtls-akashic-ctrl CA; this file is the CA chain written by the
+      # same template above.
+      ca_file: "./certs/akashic/mtls-ca.crt"
       client_auth_required: true
 database:
   postgres:
@@ -18,7 +29,10 @@ database:
     database: ${AKASHIC_DATABASE_POSTGRES_DB}
     username: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
     password: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
-    ssl_mode: "disable"  # Use "disable" for development, "require" for production
+    # Only consulted when tls.enabled is true (controlled by AKASHIC_POSTGRES_TLS).
+    # Valid values: verify-full, verify-ca, require. When tls.enabled is false
+    # the client forces sslmode=disable internally regardless of this setting.
+    ssl_mode: "verify-full"
     max_connections: 100
     max_idle_connections: 10
     connection_lifetime: "1h"
@@ -218,9 +232,13 @@ ldap:
   bind_dn: "cn=admin,dc=akashic,dc=local"
   bind_password: "${AKASHIC_LDAP_ADMIN_PASSWORD}"
 
-  # TLS settings
-  use_tls: false           # Set to true for LDAPS (port 636)
+  # TLS settings. AKASHIC_LDAP_TLS=on|off in .env flips use_tls at runtime;
+  # tls_mode infers from port: 389 → starttls, 636 → ldaps (override via
+  # AKASHIC_LDAP_TLS_MODE=starttls|ldaps|plain or the tls_mode key here).
+  use_tls: true
   tls_skip_verify: false   # Set to true for dev/self-signed certs (INSECURE)
+  tls_ca_cert: "./certs/ca/trust/trust-bundle.pem"
+  # tls_mode: ""           # leave empty to infer from port; set explicitly for non-standard ports
 
   # User search configuration
   user_search_base: "ou=users,dc=akashic,dc=local"
