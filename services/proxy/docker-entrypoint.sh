@@ -33,4 +33,20 @@ EOF
     echo "[proxy] No redisinsight credentials set -- basic auth disabled"
 fi
 
+# Generate phpldapadmin auth config (included by nginx.conf)
+if [ -n "$PHPLDAPADMIN_AUTH_USER" ] && [ -n "$PHPLDAPADMIN_AUTH_PASSWORD" ]; then
+    HASH=$(openssl passwd -apr1 "$PHPLDAPADMIN_AUTH_PASSWORD")
+    echo "$PHPLDAPADMIN_AUTH_USER:$HASH" > /etc/nginx/phpldapadmin.htpasswd
+    cat > /etc/nginx/phpldapadmin-auth.conf <<'EOF'
+auth_basic           "phpLDAPadmin";
+auth_basic_user_file /etc/nginx/phpldapadmin.htpasswd;
+EOF
+    echo "[proxy] Basic auth configured for phpldapadmin (user: $PHPLDAPADMIN_AUTH_USER)"
+else
+    cat > /etc/nginx/phpldapadmin-auth.conf <<'EOF'
+auth_basic off;
+EOF
+    echo "[proxy] No phpldapadmin credentials set -- basic auth disabled"
+fi
+
 exec nginx -g "daemon off;"

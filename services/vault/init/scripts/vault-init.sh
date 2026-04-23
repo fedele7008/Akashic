@@ -445,9 +445,7 @@ main() {
 
     # redis cert is now issued by vault-agent (see services/vault-agent/templates/redis.tpl)
 
-    issue_cert "pki-internal" "server" "ldap-server" \
-        "${CERTS_OUTPUT_DIR}/ldap/ldap.crt" \
-        "${CERTS_OUTPUT_DIR}/ldap/ldap.key" || return 1
+    # ldap cert is now issued by vault-agent (see services/vault-agent/templates/ldap.tpl)
 
     issue_cert "pki-internal" "server" "loki-server" \
         "${CERTS_OUTPUT_DIR}/loki/loki.crt" \

@@ -1,6 +1,0 @@
-{
-  "common_name": "ldap.akashic.local",
-  "alt_names": "ldap.akashic.local,localhost",
-  "ip_sans": "127.0.0.1",
-  "ttl": "8760h"
-}

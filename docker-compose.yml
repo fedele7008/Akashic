@@ -180,6 +180,8 @@ services:
       ADMINER_AUTH_PASSWORD: ${AKASHIC_ADMINER_AUTH_PASSWORD:-}
       REDISINSIGHT_AUTH_USER: ${AKASHIC_REDISINSIGHT_AUTH_USER:-}
       REDISINSIGHT_AUTH_PASSWORD: ${AKASHIC_REDISINSIGHT_AUTH_PASSWORD:-}
+      PHPLDAPADMIN_AUTH_USER: ${AKASHIC_PHPLDAPADMIN_AUTH_USER:-}
+      PHPLDAPADMIN_AUTH_PASSWORD: ${AKASHIC_PHPLDAPADMIN_AUTH_PASSWORD:-}
     ports:
       - "${AKASHIC_NGINX_PORT:-8280}:8280"
     volumes:
@@ -331,49 +333,77 @@ services:
       - redisinsight_data:/data
       - certs:/certs:ro
 
-#   ldap:
-#     image: osixia/openldap:1.5.0
-#     container_name: akashic-ldap
-#     restart: unless-stopped
-#     environment:
-#       LDAP_ORGANISATION: ${AKASHIC_LDAP_ORGANISATION:-Akashic}
-#       LDAP_DOMAIN: ${AKASHIC_LDAP_DOMAIN:-akashic.local}
-#       LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
-#       LDAP_CONFIG_PASSWORD: ${AKASHIC_LDAP_CONFIG_PASSWORD}
-#       LDAP_RFC2307BIS_SCHEMA: "true"
-#       LDAP_REMOVE_CONFIG_AFTER_SETUP: "true"
-#       LDAP_TLS: "false"
-#     ports:
-#       - "${AKASHIC_LDAP_HOST_PORT:-389}:389"
-#       - "${AKASHIC_LDAP_LDAPS_HOST_PORT:-636}:636"
-#     volumes:
-#       - ldap_data:/var/lib/ldap
-#       - ldap_config:/etc/ldap/slapd.d
-#     networks:
-#       default:
-#         aliases:
-#           - ldap.akashic.local
-#     healthcheck:
-#       test: ["CMD-SHELL", "ldapsearch -x -H ldap://localhost -b dc=akashic,dc=local -D cn=admin,dc=akashic,dc=local -w $${AKASHIC_LDAP_ADMIN_PASSWORD} || exit 1"]
-#       interval: 10s
-#       timeout: 5s
-#       retries: 5
-#     profiles:
-#       - ldap
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # ldap: OpenLDAP Directory Server (TLS enabled)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Custom entrypoint copies certs from Vault Agent to the writable path
+  # osixia/openldap expects (/container/service/slapd/assets/certs/). Works
+  # around osixia's aggressive chown behavior on cert files.
+  #
+  # Certificates: issued by vault-agent via pki-internal/server
+  # TLS hot-reload: cert-watcher triggers slapd re-read via ldapmodify
+  # Troubleshooting: docker compose logs ldap
+  ldap:
+    build: ./services/ldap
+    container_name: akashic-ldap
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+    environment:
+      LDAP_TLS_MODE: "${AKASHIC_LDAP_TLS:-on}"
+      LDAP_ORGANISATION: ${AKASHIC_LDAP_ORGANISATION:-Akashic}
+      LDAP_DOMAIN: ${AKASHIC_LDAP_DOMAIN:-akashic.local}
+      LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
+      LDAP_CONFIG_PASSWORD: ${AKASHIC_LDAP_CONFIG_PASSWORD}
+      LDAP_RFC2307BIS_SCHEMA: "true"
+      LDAP_REMOVE_CONFIG_AFTER_SETUP: "true"
+      TZ: ${AKASHIC_TZ:-UTC}
+    ports:
+      - "${AKASHIC_LDAP_HOST_PORT:-389}:389"
+      - "${AKASHIC_LDAP_LDAPS_HOST_PORT:-636}:636"
+    volumes:
+      - ldap_data:/var/lib/ldap
+      - ldap_config:/etc/ldap/slapd.d
+      - certs:/certs-source:ro
+    networks:
+      default:
+        aliases:
+          - ldap.akashic.local
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
-#   phpldapadmin:
-#     image: osixia/phpldapadmin:0.9.0
-#     container_name: akashic-phpldapadmin
-#     restart: unless-stopped
-#     environment:
-#       PHPLDAPADMIN_LDAP_HOSTS: ldap
-#       PHPLDAPADMIN_HTTPS: "false"
-#     ports:
-#       - "${AKASHIC_PHPLDAPADMIN_HOST_PORT:-8090}:80"
-#     depends_on:
-#       - ldap
-#     profiles:
-#       - ldap
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # phpldapadmin: Web UI for OpenLDAP
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Connects to LDAP via LDAPS when TLS is on. The CA cert is mounted so
+  # phpldapadmin can verify the LDAP server certificate.
+  #
+  # Accessible via proxy at phpldapadmin.<domain> (basic auth + rate limit).
+  phpldapadmin:
+    build: ./services/phpldapadmin
+    container_name: akashic-phpldapadmin
+    restart: unless-stopped
+    depends_on:
+      ldap:
+        condition: service_healthy
+    environment:
+      LDAP_TLS_MODE: "${AKASHIC_LDAP_TLS:-on}"
+      PHPLDAPADMIN_HTTPS: "false"
+      PHPLDAPADMIN_TRUST_PROXY_SSL: "true"
+      # Configure LDAP host with StartTLS on port 389 when TLS mode is on.
+      # osixia processes #PYTHON2BASH: only for direct Docker env vars (not yaml files).
+      # When LDAP_TLS_MODE=off, the entrypoint overwrites this with a plain hostname.
+      PHPLDAPADMIN_LDAP_HOSTS: "#PYTHON2BASH:[{'ldap.akashic.local': [{'server': [{'tls': True}, {'port': 389}]}, {'login': [{'bind_id': 'cn=admin,dc=akashic,dc=local'}]}]}]"
+      TZ: ${AKASHIC_TZ:-UTC}
+    ports:
+      - 127.0.0.1:${AKASHIC_PHPLDAPADMIN_HOST_PORT:-25002}:80/tcp
+    volumes:
+      - certs:/certs-source:ro
 
 networks:
   default:

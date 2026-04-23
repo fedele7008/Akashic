@@ -46,3 +46,11 @@ template {
   source      = "/templates/redis.tpl"
   destination = "/certs/redis/.rendered"
 }
+
+# ─────────────────────────────────────────────────────────────
+# LDAP server certificate (pki-internal/server)
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/ldap.tpl"
+  destination = "/certs/ldap/.rendered"
+}

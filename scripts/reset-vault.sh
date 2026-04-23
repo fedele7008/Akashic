@@ -19,3 +19,6 @@ if [ $? -eq 0 ]; then
 fi
 docker volume rm $(docker volume ls --format 'table {{.Name}}' | grep "vault")
 docker volume rm akashic_redisinsight_data 2>/dev/null || true
+# LDAP's cn=config stores TLS cert trust state tied to the old CA chain.
+# A vault reset issues a new CA chain, so LDAP state must be wiped too.
+docker volume rm akashic_ldap_data akashic_ldap_config 2>/dev/null || true
