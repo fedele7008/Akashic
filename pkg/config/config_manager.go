@@ -111,13 +111,12 @@ func NewConfigManager(cmd *cobra.Command, app common.AkashicApp) (*ConfigManager
 	// Set defaults before loading config
 	setDefaults(v)
 
-	// When running inside a container the Vault Agent cert volume is mounted
-	// at /certs, not ./certs. Override the file-path defaults before Viper
-	// unmarshalling so the code paths below see the right location without
-	// every operator having to set them explicitly.
+	// Container-mode path rewriting happens post-unmarshal, inside LoadConfig.
+	// Doing it there (on the final Config struct) means operator overrides
+	// from YAML, env vars, or flags all get normalized uniformly -- not
+	// just the defaults. See NormalizeContainerPaths in defaults.go.
 	if IsRunningInContainer() {
-		applyContainerPathDefaults(v)
-		m.verbosePrintlnf("Detected container runtime; using /certs path defaults")
+		m.verbosePrintlnf("Detected container runtime; ./certs/ paths will be rewritten to /certs/ after load")
 	}
 
 	// Setup environment variables
@@ -325,6 +324,14 @@ func (m *ConfigManager) LoadConfig() error {
 
 	if err := decoder.Decode(m.viper.AllSettings()); err != nil {
 		return fmt.Errorf("failed to unmarshal configuration: %v", err)
+	}
+
+	// In container mode, rewrite "./certs/..." paths to "/certs/..." so
+	// the same config.yaml works from host-run and containerized run.
+	// Must happen before postProcessConfig and validateConfig so downstream
+	// code sees the normalized paths.
+	if IsRunningInContainer() {
+		NormalizeContainerPaths(config)
 	}
 
 	// Apply any post-unmarshaling fixes (e.g., logging config setup)

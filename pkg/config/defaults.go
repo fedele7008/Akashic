@@ -370,33 +370,35 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("middleware.control.request_timeout", DefaultControlRequestTimeout)
 }
 
-// applyContainerPathDefaults rewrites the cert-path defaults we just set so
-// that "./certs/..." becomes "/certs/..." -- matching where docker-compose
-// bind-mounts the certs volume inside the akashic container. This is a pure
-// override on top of setDefaults; any explicit value (env var, YAML) still
-// wins because Viper's SetDefault has the lowest precedence.
-func applyContainerPathDefaults(v *viper.Viper) {
-	rewrite := func(key string) {
-		curr, ok := v.Get(key).(string)
-		if !ok || curr == "" {
+// NormalizeContainerPaths rewrites host-relative "./certs/..." paths on the
+// loaded Config to their container-absolute "/certs/..." equivalents. It
+// runs *after* Viper's unmarshal so that values sourced from YAML, env
+// vars, or flags all get normalized uniformly -- not just defaults.
+//
+// This is the fix to the "my config.yaml has ./certs/foo but the container
+// mounts /certs/foo" class of problem: operators can keep host-friendly
+// paths in config.yaml and the container transparently translates them.
+//
+// Only strings that start with "./certs/" are rewritten; anything else
+// (absolute paths, relative paths that don't point into ./certs/, empty
+// strings) is left alone. That preserves the operator's ability to pin
+// a cert to an unusual location inside the container via an absolute path.
+func NormalizeContainerPaths(cfg *Config) {
+	rewrite := func(s *string) {
+		if s == nil || *s == "" {
 			return
 		}
-		if strings.HasPrefix(curr, "./certs/") {
-			v.SetDefault(key, "/certs/"+strings.TrimPrefix(curr, "./certs/"))
+		if strings.HasPrefix(*s, "./certs/") {
+			*s = "/certs/" + strings.TrimPrefix(*s, "./certs/")
 		}
 	}
-	keys := []string{
-		"server.control.tls.cert_file",
-		"server.control.tls.key_file",
-		"server.control.tls.ca_file",
-		"server.auth.tls.cert_file",
-		"server.auth.tls.key_file",
-		"database.postgres.tls.ca_cert",
-		"database.redis.tls.ca_cert",
-		"logging.loki_tls.ca_cert",
-		"ldap.tls_ca_cert",
-	}
-	for _, k := range keys {
-		rewrite(k)
-	}
+	rewrite(&cfg.Server.Control.TLS.CertFile)
+	rewrite(&cfg.Server.Control.TLS.KeyFile)
+	rewrite(&cfg.Server.Control.TLS.CAFile)
+	rewrite(&cfg.Server.Auth.TLS.CertFile)
+	rewrite(&cfg.Server.Auth.TLS.KeyFile)
+	rewrite(&cfg.Database.Postgres.TLS.CACertPath)
+	rewrite(&cfg.Database.Redis.TLS.CACertPath)
+	rewrite(&cfg.Logging.LokiTLS.CACertPath)
+	rewrite(&cfg.LDAP.TLSCACertPath)
 }

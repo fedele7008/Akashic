@@ -510,6 +510,18 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      # LDAP is a hard dependency: Akashic refuses to start if LDAP is
+      # unreachable (see CLAUDE.md on "LDAP as single source of truth").
+      # Without this, `docker compose --profile app up -d akashic` starts
+      # just postgres/redis/vault-agent and akashic crashes on LDAP dial.
+      ldap:
+        condition: service_healthy
+      # loki-proxy is a soft dependency: logs would just fail to ship if
+      # the proxy is missing. We still declare it so the full observability
+      # pipeline comes up alongside akashic rather than needing a second
+      # `docker compose up -d` to light up Grafana.
+      loki-proxy:
+        condition: service_started
     environment:
       # Dependency hosts resolve via docker-network aliases inside the container.
       AKASHIC_DATABASE_POSTGRES_HOST: postgres.akashic.local
@@ -522,12 +534,18 @@ services:
       AKASHIC_REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
       AKASHIC_LDAP_TLS: "${AKASHIC_LDAP_TLS:-on}"
       AKASHIC_LOKI_PROXY_TLS: "${AKASHIC_LOKI_PROXY_TLS:-on}"
-      # Credentials
+      # Credentials — note the env-var names map directly to the Go config
+      # struct via Viper's AutomaticEnv (prefix=AKASHIC, replacer '.' → '_').
+      # ldap.bind_password → AKASHIC_LDAP_BIND_PASSWORD. Host-run picks up
+      # AKASHIC_LDAP_ADMIN_PASSWORD via the YAML ${...} expansion; inside
+      # the container we additionally set the struct-aligned name so the
+      # value reaches the code even if config.yaml isn't read for any reason.
       AKASHIC_DATABASE_POSTGRES_USERNAME: ${AKASHIC_DATABASE_POSTGRES_USERNAME}
       AKASHIC_DATABASE_POSTGRES_PASSWORD: ${AKASHIC_DATABASE_POSTGRES_PASSWORD}
       AKASHIC_DATABASE_POSTGRES_DB: ${AKASHIC_DATABASE_POSTGRES_DB}
       AKASHIC_DATABASE_REDIS_PASSWORD: ${AKASHIC_DATABASE_REDIS_PASSWORD}
       AKASHIC_LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
+      AKASHIC_LDAP_BIND_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
       AKASHIC_SECRET: ${AKASHIC_SECRET}
       TZ: ${AKASHIC_TZ:-UTC}
     ports:
@@ -536,6 +554,10 @@ services:
       - "127.0.0.1:${AKASHIC_CTRL_HOST_PORT:-8081}:8081"
     volumes:
       - certs:/certs:ro
+      # Mount the same config file the host-run uses. Places it at a path
+      # covered by the default config-search list (/etc/akashic/) so the
+      # server finds it without extra --config flags.
+      - ./configs/config.yaml:/etc/akashic/config.yaml:ro
     networks:
       default:
         aliases:
