@@ -150,6 +150,13 @@ services:
     volumes:
       - certs:/certs
       - secrets:/vault-agent/auth:ro
+      # Upstream hashicorp/vault image declares VOLUME /vault/file and
+      # /vault/logs for Vault-as-server mode. Vault Agent doesn't write to
+      # them, but Docker materializes an anonymous volume per declaration
+      # unless we claim them explicitly. Name them so they show up in
+      # `docker volume ls` instead of appearing as 64-char hashes.
+      - vault_agent_file:/vault/file
+      - vault_agent_logs:/vault/logs
     networks:
       default:
         aliases:
@@ -366,6 +373,7 @@ services:
       
   adminer:
     image: adminer
+    container_name: akashic-adminer
     restart: always
     ports:
       - 127.0.0.1:25000:8080/tcp
@@ -461,6 +469,14 @@ services:
       - 127.0.0.1:${AKASHIC_PHPLDAPADMIN_HOST_PORT:-25002}:80/tcp
     volumes:
       - certs:/certs-source:ro
+      # osixia/phpldapadmin declares VOLUME /var/www/phpldapadmin for its
+      # web-app root. Name it so the generated config.php + FIRST_START_DONE
+      # marker live in a recognizable volume instead of a 64-char hash.
+      # Note: the entrypoint intentionally deletes config.php on each start
+      # to force regeneration against the current TLS mode, so the volume
+      # is not used for persistence -- it exists only because the upstream
+      # image insists on it.
+      - phpldapadmin_www:/var/www/phpldapadmin
 
   # ═══════════════════════════════════════════════════════════════════════════════
   # akashic: Akashic IDP Server (Phase 4)
@@ -553,3 +569,9 @@ volumes:
   redisinsight_data:
   vault_logs:
   vault_file:
+  # Placeholders for inherited VOLUME declarations from upstream images.
+  # These aren't used for real persistence -- they exist only to prevent
+  # Docker from auto-generating anonymous 64-char-hash volumes.
+  vault_agent_file:
+  vault_agent_logs:
+  phpldapadmin_www:
