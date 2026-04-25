@@ -23,6 +23,13 @@ func NewRootCmd() *cobra.Command {
 
 	// Add subcommands
 	cmd.AddCommand(NewPkiCmd(ctx))
+	cmd.AddCommand(NewConfigureCmd(ctx))
+	cmd.AddCommand(NewBootstrapCmd(ctx))
+
+	// SilenceUsage: don't dump full help on every RunE error.
+	// SilenceErrors: HandleExitError prints; cobra shouldn't double-print.
+	cmd.SilenceUsage = true
+	cmd.SilenceErrors = true
 
 	return cmd
 }

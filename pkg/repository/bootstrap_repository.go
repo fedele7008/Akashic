@@ -55,18 +55,32 @@ func (r *BootstrapRepository) GetStatus(ctx context.Context) (*BootstrapStatus, 
 	}, nil
 }
 
-// MarkComplete marks the bootstrap process as completed
-// This is an idempotent operation - safe to call multiple times
-func (r *BootstrapRepository) MarkComplete(ctx context.Context, rootUserID uuid.UUID) error {
+// MarkComplete marks the bootstrap process as completed.
+// This is an idempotent operation - safe to call multiple times.
+// audit may be nil for callers without forensic context (e.g. tests);
+// in that case the audit columns are left at their zero values.
+//
+// The audit type lives in pkg/models because both pkg/repository and
+// pkg/ldap need to reference it (pkg/ldap's deprovisioning service also
+// calls MarkComplete during JIT root provisioning). pkg/ldap can't
+// import pkg/repository (would be a cycle), so the shared type lives
+// in models, which neither side imports for anything other than data.
+func (r *BootstrapRepository) MarkComplete(ctx context.Context, rootUserID uuid.UUID, audit *models.BootstrapCompletionAudit) error {
 	now := time.Now()
+	updates := map[string]any{
+		"is_complete":  true,
+		"completed_at": &now,
+		"root_user_id": &rootUserID,
+	}
+	if audit != nil {
+		updates["completion_source"] = audit.Source
+		updates["completion_ip"] = audit.IP
+		updates["attempts_before_success"] = audit.AttemptsBeforeSuccess
+	}
 	result := r.db.WithContext(ctx).
 		Model(&models.BootstrapStatus{}).
 		Where("id = ? AND is_complete = ?", true, false).
-		Updates(map[string]any{
-			"is_complete":  true,
-			"completed_at": &now,
-			"root_user_id": &rootUserID,
-		})
+		Updates(updates)
 
 	if result.Error != nil {
 		return fmt.Errorf("failed to mark bootstrap complete: %v", result.Error)
@@ -89,8 +103,14 @@ func (r *BootstrapRepository) MarkComplete(ctx context.Context, rootUserID uuid.
 		return fmt.Errorf("failed to update bootstrap status")
 	}
 
-	r.logger.Info("Bootstrap marked as complete",
-		zap.String("root_user_id", rootUserID.String()))
+	logFields := []zap.Field{zap.String("root_user_id", rootUserID.String())}
+	if audit != nil {
+		logFields = append(logFields,
+			zap.String("source", audit.Source),
+			zap.String("ip", audit.IP),
+			zap.Int("attempts_before_success", audit.AttemptsBeforeSuccess))
+	}
+	r.logger.Info("Bootstrap marked as complete", logFields...)
 
 	return nil
 }

@@ -2,12 +2,12 @@ package main
 
 import (
 	"akashic/akashic/pkg/cli/cmd"
-
-	"os"
 )
 
 func main() {
-	if err := cmd.NewRootCmd().Execute(); err != nil {
-		os.Exit(1)
-	}
+	// HandleExitError translates structured *exitError values from the
+	// bootstrap subcommands into specific os.Exit(N) codes (2=token,
+	// 3=validation, 4=rate, 5=config, 6=network, 7=server). Generic
+	// errors fall back to exit 1.
+	cmd.HandleExitError(cmd.NewRootCmd().Execute())
 }

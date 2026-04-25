@@ -1,15 +1,28 @@
 package control
 
 import (
+	"akashic/akashic/pkg/bootstrap"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/server/response"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/http"
 	"strings"
 
 	"go.uber.org/zap"
 )
+
+// clientIP extracts the source IP from an http.Request. RemoteAddr is in
+// "host:port" form; we split off the port for human-readable audit logs.
+// Falls back to the raw RemoteAddr if parsing fails.
+func clientIP(r *http.Request) string {
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		return r.RemoteAddr
+	}
+	return host
+}
 
 // Middleware: Require bootstrap mode to be active
 func (s *Server) requireBootstrapMode(next http.HandlerFunc) http.HandlerFunc {
@@ -39,20 +52,44 @@ func (s *Server) requireBootstrapMode(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
-// Middleware: Require CLI user-agent (for token fetch/regenerate endpoints)
-func requireCLI(next http.HandlerFunc) http.HandlerFunc {
-	return func(w http.ResponseWriter, r *http.Request) {
-		// TODO: Current implementation only checks for User-Agent header,
-		// however, this should be checking mTLS certificate instead in future
-		ua := r.Header.Get("User-Agent")
-		if !strings.Contains(ua, "akashic-cli/") {
-			response.WriteJSON(w, http.StatusForbidden,
-				response.Fail("CLI_ONLY", "This endpoint is only accessible via akashic-cli", map[string]any{
-					"user_agent": ua,
-				}))
-			return
+// Middleware: Require client cert with one of the listed Common Names.
+// This replaces the prior requireCLI helper which trusted the User-Agent
+// header (trivially spoofable). Phase 4 made mTLS mandatory on the control
+// plane, so every request reaching this middleware already carries a
+// verified peer certificate signed by pki-mtls-akashic-ctrl. The CN is the
+// stable, RFC-grade identity we should authorize against.
+//
+// allowedCNs lists the Common Names permitted to call the wrapped handler.
+// Typical values: "cli.akashic.local" (akashic-cli), "bff.akashic.local"
+// (admin BFF, when added in Phase 6).
+//
+// Failure modes:
+//   - No TLS or no peer cert        → 403 MTLS_REQUIRED
+//   - Peer cert CN not in allowlist → 403 CLIENT_NOT_ALLOWED (CN included
+//                                       in error details for diagnostic use)
+func requireClientIdentity(allowedCNs ...string) func(http.HandlerFunc) http.HandlerFunc {
+	allowed := make(map[string]bool, len(allowedCNs))
+	for _, cn := range allowedCNs {
+		allowed[cn] = true
+	}
+	return func(next http.HandlerFunc) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) {
+			if r.TLS == nil || len(r.TLS.PeerCertificates) == 0 {
+				response.WriteJSON(w, http.StatusForbidden,
+					response.Fail("MTLS_REQUIRED", "client certificate required for this endpoint", nil))
+				return
+			}
+			cn := r.TLS.PeerCertificates[0].Subject.CommonName
+			if !allowed[cn] {
+				response.WriteJSON(w, http.StatusForbidden,
+					response.Fail("CLIENT_NOT_ALLOWED", "this endpoint is not authorized for the presented client certificate", map[string]any{
+						"presented_cn": cn,
+						"allowed_cns":  allowedCNs,
+					}))
+				return
+			}
+			next(w, r)
 		}
-		next(w, r)
 	}
 }
 
@@ -124,7 +161,8 @@ func (s *Server) handleGetBootstrapToken(w http.ResponseWriter, r *http.Request)
 }
 
 // POST /bootstrap/token/regenerate (CLI only)
-// Regenerates the bootstrap token
+// Regenerates the bootstrap token. Accepts ?force=true to overwrite an
+// existing valid token (otherwise returns 409 if one is already live).
 func (s *Server) handleRegenerateToken(w http.ResponseWriter, r *http.Request) {
 	s.logger.App.Debug("CTRL: Handling regenerate bootstrap token request (CLI)")
 
@@ -137,8 +175,23 @@ func (s *Server) handleRegenerateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := s.bootstrapMgr.RegenerateToken(r.Context())
+	// `?force=true` (or `?force=1`) opts in to overwriting a still-valid token
+	force := false
+	switch r.URL.Query().Get("force") {
+	case "true", "1", "yes":
+		force = true
+	}
+
+	token, err := s.bootstrapMgr.RegenerateToken(r.Context(), force)
 	if err != nil {
+		// "already exists" is a conflict, not a server error
+		if strings.Contains(err.Error(), "already exists") {
+			response.WriteJSON(w, http.StatusConflict,
+				response.Fail("TOKEN_ALREADY_EXISTS", err.Error(), map[string]any{
+					"hint": "pass ?force=true to overwrite the existing token",
+				}))
+			return
+		}
 		response.WriteJSON(w, response.StatusInternalServerError,
 			response.Fail(response.ErrInternalServer, "Failed to regenerate token", map[string]any{
 				"error": err.Error(),
@@ -147,10 +200,12 @@ func (s *Server) handleRegenerateToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logger.Security.Warn("Bootstrap token regenerated via CLI - old token invalidated")
+	s.logger.Security.Warn("Bootstrap token regenerated via CLI - old token invalidated",
+		zap.Bool("forced", force))
 
 	response.WriteJSON(w, response.StatusOK, response.Success(map[string]any{
 		"token":   token,
+		"forced":  force,
 		"message": "Token regenerated successfully - old token is now invalid",
 	}))
 }
@@ -206,13 +261,25 @@ func (s *Server) handleCreateRootUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Capture audit context: who is calling, from where? The mTLS layer
+	// (Phase 4) guarantees PeerCertificates is present and verified for any
+	// request reaching this handler.
+	clientCN := ""
+	if r.TLS != nil && len(r.TLS.PeerCertificates) > 0 {
+		clientCN = r.TLS.PeerCertificates[0].Subject.CommonName
+	}
+	attempt := &bootstrap.AttemptContext{
+		ClientCN: clientCN,
+		RemoteIP: clientIP(r),
+	}
+
 	// Create root user via bootstrap manager
 	user, err := s.bootstrapMgr.CreateRootUser(r.Context(), req.Token, &models.CreateUserRequest{
 		Username: req.Username,
 		Email:    req.Email,
 		Password: req.Password,
 		UserType: models.UserTypeRoot, // Will be enforced by manager
-	})
+	}, attempt)
 
 	if err != nil {
 		s.logger.Security.Warn("Failed root user creation attempt",

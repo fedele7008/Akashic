@@ -3,10 +3,12 @@ package core
 import (
 	"bytes"
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"time"
 )
 
@@ -35,6 +37,49 @@ func NewHttpClient(cliCtx *CliContext, baseURL string, tls *tls.Config) (*HttpCl
 		verbose: cliCtx.cfg.GetBool("verbose"),
 	}
 	return client, nil
+}
+
+// NewAkashicControlClient builds an HttpClient configured to talk to the
+// Akashic control plane using a named profile (or the active one if name
+// is empty). Verifies file permissions before reading -- catches loose
+// chmods that would let other users read the private key.
+//
+// Returns the client + the resolved profile name (useful for log lines).
+func NewAkashicControlClient(cliCtx *CliContext, profileName string) (*HttpClient, string, error) {
+	cfg, err := LoadProfileConfig()
+	if err != nil {
+		return nil, "", err
+	}
+	prof, name, err := ResolveProfile(cfg, profileName)
+	if err != nil {
+		return nil, "", err
+	}
+	if err := VerifyProfilePerms(prof); err != nil {
+		return nil, "", err
+	}
+
+	caPEM, err := os.ReadFile(prof.CACertPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("read CA cert: %w", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(caPEM) {
+		return nil, "", fmt.Errorf("CA bundle %s contains no valid PEM certificates", prof.CACertPath)
+	}
+	cert, err := tls.LoadX509KeyPair(prof.ClientCertPath, prof.ClientKeyPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("load client keypair: %w", err)
+	}
+	tlsCfg := &tls.Config{
+		MinVersion:   tls.VersionTLS12,
+		RootCAs:      pool,
+		Certificates: []tls.Certificate{cert},
+	}
+	hc, err := NewHttpClient(cliCtx, prof.ControlURL, tlsCfg)
+	if err != nil {
+		return nil, "", err
+	}
+	return hc, name, nil
 }
 
 func (c *HttpClient) logVerbose(format string, args ...any) {

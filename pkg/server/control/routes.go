@@ -27,9 +27,25 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// is disabled, or as an override when it is.
 	mux.HandleFunc("/tls/reload", s.handleTLSReload)
 
-	// Bootstrap routes (only active when bootstrap needed)
+	// Bootstrap routes. Identity is enforced via mTLS client-cert CN.
+	// /bootstrap/status is intentionally NOT gated by requireBootstrapMode
+	// because it's the very thing answering "are you in bootstrap mode?";
+	// token endpoints are CLI-only; /bootstrap/root is reachable by any
+	// allowed client (CLI today, BFF later).
+	//
+	// Rate-limited endpoints (/bootstrap/root and token regenerate) wrap
+	// the rate limiter OUTERMOST so denied requests don't even check the
+	// bootstrap-mode flag — keeps DB load down under attacker probing.
 	mux.HandleFunc("/bootstrap/status", s.handleBootstrapStatus)
-	mux.HandleFunc("/bootstrap/token", requireCLI(s.requireBootstrapMode(s.handleGetBootstrapToken)))
-	mux.HandleFunc("/bootstrap/token/regenerate", requireCLI(s.requireBootstrapMode(s.handleRegenerateToken)))
-	mux.HandleFunc("/bootstrap/root", s.requireBootstrapMode(s.handleCreateRootUser))
+	mux.HandleFunc("/bootstrap/token",
+		requireClientIdentity("cli.akashic.local")(
+			s.requireBootstrapMode(s.handleGetBootstrapToken)))
+	mux.HandleFunc("/bootstrap/token/regenerate",
+		requireClientIdentity("cli.akashic.local")(
+			s.rateLimitBootstrap(s.bootstrapLimiter,
+				s.requireBootstrapMode(s.handleRegenerateToken))))
+	mux.HandleFunc("/bootstrap/root",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.rateLimitBootstrap(s.bootstrapLimiter,
+				s.requireBootstrapMode(s.handleCreateRootUser))))
 }

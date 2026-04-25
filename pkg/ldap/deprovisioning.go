@@ -29,9 +29,12 @@ type DeprovisioningService struct {
 	wg     sync.WaitGroup
 }
 
-// BootstrapRepository defines the interface for bootstrap operations
+// BootstrapRepository defines the interface for bootstrap operations.
+// audit can be nil for system-initiated calls (e.g. JIT root provisioning
+// from this deprovisioning service); the implementing repository falls
+// back to zero values for the audit columns.
 type BootstrapRepository interface {
-	MarkComplete(ctx context.Context, rootUserID uuid.UUID) error
+	MarkComplete(ctx context.Context, rootUserID uuid.UUID, audit *models.BootstrapCompletionAudit) error
 	Reset(ctx context.Context) error
 }
 
@@ -402,8 +405,11 @@ func (s *DeprovisioningService) provisionRootUsersFromLDAP(
 			return fmt.Errorf("failed to provision root user: %v", err)
 		}
 
-		// Mark bootstrap as complete
-		if err := s.bootstrapRepo.MarkComplete(ctx, newUser.ID); err != nil {
+		// Mark bootstrap as complete. Tag the audit row so a future operator
+		// reviewing bootstrap_status can tell this completion was system-
+		// initiated (deprov reconciling LDAP→PG) rather than human-driven.
+		audit := &models.BootstrapCompletionAudit{Source: "deprovisioning-service"}
+		if err := s.bootstrapRepo.MarkComplete(ctx, newUser.ID, audit); err != nil {
 			s.logger.App.Error("failed to mark bootstrap complete after provisioning root user",
 				zap.String("user_id", newUser.ID.String()),
 				zap.String("ldap_dn", dn),

@@ -21,15 +21,16 @@ import (
 
 // Server represents the Control Server (management API)
 type Server struct {
-	ctx          context.Context
-	server       *http.Server
-	logger       *logging.Logger
-	stateManager *StateManager
-	bootstrapMgr *bootstrap.Manager // Bootstrap manager (set after initialization)
-	config       *config.ConfigManager
-	startedAt    time.Time
-	shutdownFn   context.CancelFunc // Function to trigger app shutdown
-	certReloader *pki.Reloader
+	ctx              context.Context
+	server           *http.Server
+	logger           *logging.Logger
+	stateManager     *StateManager
+	bootstrapMgr     *bootstrap.Manager // Bootstrap manager (set after initialization)
+	config           *config.ConfigManager
+	startedAt        time.Time
+	shutdownFn       context.CancelFunc // Function to trigger app shutdown
+	certReloader     *pki.Reloader
+	bootstrapLimiter *middleware.InMemoryRateLimiter // per-CN rate limit for /bootstrap/* (Phase 5.1.2)
 }
 
 const (
@@ -42,12 +43,13 @@ const (
 // New creates a new Control Server instance
 func New(ctx context.Context, authServer *auth.Server, bootstrapMgr *bootstrap.Manager, config *config.ConfigManager, logger *logging.Logger, shutdownFn context.CancelFunc) *Server {
 	return &Server{
-		ctx:          ctx,
-		logger:       logger,
-		stateManager: NewStateManager(authServer, logger),
-		bootstrapMgr: bootstrapMgr,
-		config:       config,
-		shutdownFn:   shutdownFn,
+		ctx:              ctx,
+		logger:           logger,
+		stateManager:     NewStateManager(authServer, logger),
+		bootstrapMgr:     bootstrapMgr,
+		config:           config,
+		shutdownFn:       shutdownFn,
+		bootstrapLimiter: newBootstrapRateLimiter(),
 		startedAt:    time.Now(),
 	}
 }

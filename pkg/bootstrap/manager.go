@@ -79,8 +79,23 @@ func (m *Manager) InitializeBootstrap(ctx context.Context) (string, error) {
 	return token, nil
 }
 
-// CreateRootUser creates the root user and completes the bootstrap process
-func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.CreateUserRequest) (*models.User, error) {
+// AttemptContext carries forensic-audit data for a CreateRootUser call.
+// The handler populates this from the HTTP request before invoking the
+// manager; the manager threads it into bootstrap_status on success.
+type AttemptContext struct {
+	// ClientCN is the Subject CN of the mTLS client cert. Empty when called
+	// from a non-mTLS path (e.g. internal callers, tests).
+	ClientCN string
+	// RemoteIP is the source IP the request came from.
+	RemoteIP string
+	// AttemptsBeforeSuccess is the number of failed POSTs that preceded this
+	// one (counted by a rate-limit middleware or similar). 0 if unknown.
+	AttemptsBeforeSuccess int
+}
+
+// CreateRootUser creates the root user and completes the bootstrap process.
+// attempt may be nil for callers without audit context (e.g. tests).
+func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.CreateUserRequest, attempt *AttemptContext) (*models.User, error) {
 	// Step 1: Validate token
 	valid, err := m.tokenMgr.Validate(ctx, token)
 	if err != nil {
@@ -162,8 +177,16 @@ func (m *Manager) CreateRootUser(ctx context.Context, token string, req *models.
 			zap.String("user_type", string(models.UserTypeRoot)))
 	}
 
-	// Step 9: Mark bootstrap as complete
-	if err := m.bootstrapRepo.MarkComplete(ctx, user.ID); err != nil {
+	// Step 9: Mark bootstrap as complete (with audit context if provided)
+	var audit *models.BootstrapCompletionAudit
+	if attempt != nil {
+		audit = &models.BootstrapCompletionAudit{
+			Source:                attempt.ClientCN,
+			IP:                    attempt.RemoteIP,
+			AttemptsBeforeSuccess: attempt.AttemptsBeforeSuccess,
+		}
+	}
+	if err := m.bootstrapRepo.MarkComplete(ctx, user.ID, audit); err != nil {
 		m.logger.Error("Failed to mark bootstrap complete - root user created but bootstrap status not updated",
 			zap.String("user_id", user.ID.String()),
 			zap.Error(err))
@@ -229,8 +252,18 @@ func (m *Manager) GetBootstrapStatus(ctx context.Context) (map[string]any, error
 	return result, nil
 }
 
-// RegenerateToken generates a new bootstrap token (replaces the old one)
-func (m *Manager) RegenerateToken(ctx context.Context) (string, error) {
+// RegenerateToken generates a new bootstrap token, replacing any existing
+// one. The force parameter guards against accidental rotation: when force
+// is false and a valid token already exists, the call returns an error
+// instead of clobbering the live token. Pass force=true to override (the
+// CLI exposes this via `--force`).
+//
+// Why this guard exists: an attacker who briefly compromises the control
+// plane could rotate the token out from under a legitimate operator,
+// effectively locking them out for the TTL window. Requiring an explicit
+// force flag turns "regenerate" from a silent overwrite into an audit-
+// loggable operator action.
+func (m *Manager) RegenerateToken(ctx context.Context, force bool) (string, error) {
 	needs, err := m.NeedsBootstrap(ctx)
 	if err != nil {
 		return "", err
@@ -240,12 +273,23 @@ func (m *Manager) RegenerateToken(ctx context.Context) (string, error) {
 		return "", fmt.Errorf("bootstrap already completed, cannot regenerate token")
 	}
 
+	if !force {
+		exists, err := m.tokenMgr.Exists(ctx)
+		if err != nil {
+			return "", fmt.Errorf("failed to check existing token: %v", err)
+		}
+		if exists {
+			return "", fmt.Errorf("bootstrap token already exists; pass force=true to overwrite")
+		}
+	}
+
 	token, err := m.tokenMgr.Generate(ctx)
 	if err != nil {
 		return "", err
 	}
 
-	m.logger.Warn("Bootstrap token regenerated - old token invalidated")
+	m.logger.Warn("Bootstrap token regenerated - old token invalidated",
+		zap.Bool("forced", force))
 
 	return token, nil
 }
