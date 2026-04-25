@@ -34,3 +34,7 @@ tmp/
 # === docker specific ignores ===
 .secrets/
 certs/
+
+# Phase 6: web/admin source IS needed in the build context (for the
+# vite stage of the multi-stage Dockerfile). The global node_modules/
+# and dist/ rules above already exclude the build outputs.

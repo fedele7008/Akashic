@@ -30,3 +30,8 @@ logs/*
 # === temp/test files ===
 tmp/
 **/*.ignore
+
+# Phase 6: React FE build artifacts
+# (note: global node_modules/ and dist/ rules above already cover the
+# build outputs at web/admin/node_modules/ and cmd/admin-bff/dist/)
+web/admin/*.local

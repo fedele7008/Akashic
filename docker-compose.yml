@@ -570,6 +570,62 @@ services:
       default:
         aliases:
           - akashic.akashic.local
+          # ctrl.akashic.local matches the SANs on the mTLS control-server
+          # cert (issued by akashic-mtls-ctrl.tpl). The admin-bff connects
+          # to this name so cert verification succeeds.
+          - ctrl.akashic.local
+          # auth.akashic.local matches the auth-server cert's SANs,
+          # ready for Phase 7 when the BFF needs OAuth flows.
+          - auth.akashic.local
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # admin-bff: Akashic Admin BFF + FE (Phase 6)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Browser-facing BFF that serves the React admin FE and proxies
+  # /api/bootstrap/* requests to the control plane over mTLS.
+  #
+  # Identity to control plane: bff.akashic.local mTLS client cert
+  # (rotated in place by Vault Agent — see
+  # services/vault-agent/templates/bff-client.tpl).
+  #
+  # Browsers reach it through the nginx-proxy server block for
+  # admin.akashic.local; never exposed directly on a host port.
+  # In production, an additional host-level nginx terminates public-CA
+  # HTTPS in front of nginx-proxy. See doc/phase-6-plan.md §7.
+  admin-bff:
+    profiles: ["app"]
+    build:
+      context: .
+      dockerfile: ./services/admin-bff/Dockerfile
+    container_name: akashic-admin-bff
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+      akashic:
+        condition: service_started
+    environment:
+      AKASHIC_BFF_LISTEN_ADDR: ":8082"
+      # The control-server cert's SAN list is ctrl.akashic.local +
+      # localhost + 127.0.0.1 (see akashic-mtls-ctrl.tpl). Pointing
+      # at "ctrl.*" rather than "akashic.*" makes Go's hostname
+      # verification succeed without needing -k or InsecureSkipVerify.
+      AKASHIC_BFF_CONTROL_URL: https://ctrl.akashic.local:8081
+      AKASHIC_BFF_BFF_CERT_FILE: /certs/bff/akashic-ctrl-client.crt
+      AKASHIC_BFF_BFF_KEY_FILE: /certs/bff/akashic-ctrl-client.key
+      AKASHIC_BFF_BFF_CA_FILE: /certs/bff/mtls-ca.crt
+      # Trust X-Forwarded-For from the docker-network range. The
+      # nginx-proxy is the only thing that legitimately forwards into
+      # us; broadening this would let any container spoof the source IP.
+      AKASHIC_BFF_TRUSTED_PROXIES: 172.0.0.0/8
+      AKASHIC_BFF_BOOTSTRAP_RATE_LIMIT: "5"
+      TZ: ${AKASHIC_TZ:-UTC}
+    volumes:
+      - certs:/certs:ro
+    networks:
+      default:
+        aliases:
+          - admin-bff.akashic.local
 
 networks:
   default:
