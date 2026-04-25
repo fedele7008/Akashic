@@ -401,17 +401,21 @@ func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 		app.Logger.App.Info("cert watcher disabled via config")
 	}
 
+	cfg := app.Config.GetConfig()
+	ctrlURL := accessURL(app.ControlServer.GetAddress(), cfg.Server.Control.TLS.Enabled)
+	authURL := accessURL(app.AuthServer.GetAddress(), cfg.Server.Auth.TLS.Enabled)
+
 	app.Logger.App.Info("Akashic server started successfully",
-		zap.String("control_api", fmt.Sprintf("http://%s", app.ControlServer.GetAddress())),
-		zap.String("auth_api", fmt.Sprintf("http://%s", app.AuthServer.GetAddress())),
+		zap.String("control_api", ctrlURL),
+		zap.String("auth_api", authURL),
 		zap.Bool("auth_running", app.AuthServer.IsRunning()))
 
 	fmt.Printf("\n")
 	fmt.Printf("=======================================================================\n")
 	fmt.Printf("  Akashic Server Running (PID:%v)\n", app.ControlServer.GetPID())
 	fmt.Printf("=======================================================================\n")
-	fmt.Printf("  Control API: http://%s\n", app.ControlServer.GetAddress())
-	fmt.Printf("  Auth API:    http://%s\n", app.AuthServer.GetAddress())
+	fmt.Printf("  Control API: %s\n", ctrlURL)
+	fmt.Printf("  Auth API:    %s\n", authURL)
 	fmt.Printf("  Auth Status: %s\n", map[bool]string{true: "Running", false: "Stopped"}[app.AuthServer.IsRunning()])
 	fmt.Printf("=======================================================================\n")
 

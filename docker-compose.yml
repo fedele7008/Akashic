@@ -528,6 +528,14 @@ services:
       AKASHIC_DATABASE_REDIS_HOST: redis.akashic.local
       AKASHIC_LDAP_HOST: ldap.akashic.local
       AKASHIC_LOKI_PROXY_HOST: loki.akashic.local
+      # In host-run mode the control server binds to 127.0.0.1 (only reachable
+      # via host loopback). In container-run, Docker's port-forwarding maps
+      # host loopback (127.0.0.1:8081) to the container's eth0 interface, so
+      # the server inside the container must listen on 0.0.0.0 to receive
+      # those forwarded packets. The host-side loopback-only security boundary
+      # is preserved by the compose `ports:` binding (127.0.0.1:8081:8081)
+      # rather than by the application's listener interface.
+      AKASHIC_SERVER_CONTROL_HOST: 0.0.0.0
       # TLS toggles come from .env; re-declared here so `docker compose config`
       # resolves them at the expected point.
       AKASHIC_POSTGRES_TLS: "${AKASHIC_POSTGRES_TLS:-on}"
