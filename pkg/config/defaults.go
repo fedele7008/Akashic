@@ -165,6 +165,11 @@ const (
 	DefaultLDAPTLSSkipVerify     = false
 	DefaultLDAPUserSearchBase    = "ou=users,dc=akashic,dc=local"
 	DefaultLDAPUserSearchFilter  = "(uid={username})"
+	// Login filter ORs uid + mail so users can sign in with either.
+	// Both placeholders are escaped via ldap.EscapeFilter before
+	// substitution, so an "@" in the value (or any other special
+	// LDAP-filter char) is safe.
+	DefaultLDAPUserLoginFilter = "(|(uid={login})(mail={login}))"
 	DefaultLDAPUserObjectClass   = "inetOrgPerson"
 	DefaultLDAPUsernameAttr      = "uid"
 	DefaultLDAPEmailAttr         = "mail"
@@ -327,6 +332,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("ldap.ldaps_port", DefaultLDAPLDAPSPort)
 	v.SetDefault("ldap.user_search_base", DefaultLDAPUserSearchBase)
 	v.SetDefault("ldap.user_search_filter", DefaultLDAPUserSearchFilter)
+	v.SetDefault("ldap.user_login_filter", DefaultLDAPUserLoginFilter)
 	v.SetDefault("ldap.user_object_class", DefaultLDAPUserObjectClass)
 	v.SetDefault("ldap.username_attr", DefaultLDAPUsernameAttr)
 	v.SetDefault("ldap.email_attr", DefaultLDAPEmailAttr)

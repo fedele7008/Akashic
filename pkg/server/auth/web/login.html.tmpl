@@ -21,9 +21,10 @@
       <input type="hidden" name="return_to" value="{{.ReturnTo}}">
 
       <label>
-        <span>Username</span>
+        <span>Username or email</span>
         <input type="text" name="username" required autofocus
                spellcheck="false" autocapitalize="off"
+               autocomplete="username"
                value="{{.Username}}">
       </label>
 

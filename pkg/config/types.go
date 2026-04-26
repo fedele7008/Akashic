@@ -590,9 +590,24 @@ type LDAPConfig struct {
 	// Example: "ou=users,dc=akashic,dc=local"
 	UserSearchBase string `mapstructure:"user_search_base" yaml:"user_search_base"`
 
-	// UserSearchFilter is the LDAP filter for finding users
+	// UserSearchFilter is the LDAP filter for finding users by their
+	// canonical username (uid). Used for existence checks and lookups
+	// where the caller is specifying a username explicitly — bootstrap
+	// "is this uid taken?", JIT provisioning by DN, etc. Stays uid-only
+	// to avoid false positives where someone's email happens to match
+	// another user's uid.
+	//
 	// Use {username} as placeholder. Example: "(uid={username})"
 	UserSearchFilter string `mapstructure:"user_search_filter" yaml:"user_search_filter"`
+
+	// UserLoginFilter is the LDAP filter applied when a user types
+	// their identifier into the login form. Distinct from
+	// UserSearchFilter so login can be more permissive (accept either
+	// uid or mail) without affecting username-existence semantics.
+	//
+	// Use {login} as placeholder. Default ORs uid + mail so users can
+	// sign in with whichever they remember.
+	UserLoginFilter string `mapstructure:"user_login_filter" yaml:"user_login_filter"`
 
 	// UserObjectClass is the object class for user entries
 	// Example: "inetOrgPerson"

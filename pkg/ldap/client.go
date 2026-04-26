@@ -419,13 +419,18 @@ func (c *Client) Authenticate(username, password string) (string, error) {
 		}
 	}()
 
-	// Search for the user. searchUserDN uses the current bind, which
-	// is admin (the rebind from a prior call's defer, or the initial
-	// bind from Connect()).
-	userDN, err := c.searchUserDN(username)
+	// Search for the user via the LOGIN filter (uid OR mail by default).
+	// Permissive matching here lets users sign in with whichever
+	// identifier they remember; non-login lookups elsewhere stay
+	// strictly uid-based via searchUserDN.
+	//
+	// `username` is the form parameter name kept from earlier code;
+	// the value is treated as a login identifier here, not necessarily
+	// a uid.
+	userDN, err := c.searchLoginDN(username)
 	if err != nil {
 		c.logger.Security.Warn("failed to find user for authentication",
-			zap.String("username", username),
+			zap.String("login_id", username),
 			zap.Error(err),
 		)
 		return "", fmt.Errorf("user not found: %v", err)
@@ -568,10 +573,38 @@ func (c *Client) UserExists(username string) (bool, error) {
 	return true, nil
 }
 
-// searchUserDN searches for a user and returns their DN
+// searchUserDN searches for a user by canonical username (uid) and
+// returns their DN. Used for username-specific lookups — bootstrap
+// existence checks, JIT-provisioning verifications, anywhere a caller
+// already has a definitive username.
+//
+// For login (where the user might have typed either their uid or
+// their email), use searchLoginDN instead — it ORs uid+mail so the
+// human-typed identifier resolves whichever way the user remembered.
 func (c *Client) searchUserDN(username string) (string, error) {
 	filter := strings.ReplaceAll(c.config.UserSearchFilter, "{username}", ldap.EscapeFilter(username))
+	return c.searchSingleDN(filter)
+}
 
+// searchLoginDN searches for a user by login identifier (uid OR mail
+// by default) and returns their DN. Distinct from searchUserDN so
+// login UX can be permissive without making username-existence checks
+// elsewhere accept email matches (which would risk false positives:
+// "create user 'alice'" failing because some other user's email is
+// alice@example.com).
+//
+// The filter (config.UserLoginFilter, default `(|(uid={login})(mail={login}))`)
+// uses {login} as the placeholder. EscapeFilter handles "@" and any
+// other LDAP-filter special characters in the input safely.
+func (c *Client) searchLoginDN(loginID string) (string, error) {
+	filter := strings.ReplaceAll(c.config.UserLoginFilter, "{login}", ldap.EscapeFilter(loginID))
+	return c.searchSingleDN(filter)
+}
+
+// searchSingleDN runs a one-result LDAP search with the supplied
+// filter and returns the matched DN. Shared by searchUserDN and
+// searchLoginDN — the only difference between them is filter shape.
+func (c *Client) searchSingleDN(filter string) (string, error) {
 	searchRequest := ldap.NewSearchRequest(
 		c.config.UserSearchBase,
 		ldap.ScopeWholeSubtree,
