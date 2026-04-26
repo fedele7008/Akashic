@@ -183,6 +183,11 @@ services:
     depends_on:
       vault:
         condition: service_healthy
+      # The auth.* server block uses static `proxy_pass` which loads
+      # `proxy_ssl_trusted_certificate /certs/akashic/auth-ca.crt`
+      # at config-load. Without vault-agent that file doesn't exist.
+      vault-agent:
+        condition: service_started
     environment:
       ADMINER_AUTH_USER: ${AKASHIC_ADMINER_AUTH_USER:-}
       ADMINER_AUTH_PASSWORD: ${AKASHIC_ADMINER_AUTH_PASSWORD:-}
@@ -194,6 +199,19 @@ services:
       - "${AKASHIC_NGINX_PORT:-8280}:8280"
     volumes:
       - certs:/certs:ro
+    # Unconditional host-gateway aliases for akashic. Whether akashic
+    # runs in docker (`--profile app`) or on the host (`go run`), the
+    # name `akashic` (and its FQDN aliases) resolves to the host
+    # gateway here. Container mode: docker port-forwarding bridges
+    # host:8080 → akashic-container:8080 transparently. Host mode:
+    # the host akashic process listens on 0.0.0.0:8080 directly.
+    # The same nginx config works in both cases.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"  # explicit for Linux compat
+      - "akashic:host-gateway"
+      - "akashic.akashic.local:host-gateway"
+      - "auth.akashic.local:host-gateway"
+      - "ctrl.akashic.local:host-gateway"
     networks:
       default:
         aliases:
@@ -608,7 +626,13 @@ services:
   # In production, an additional host-level nginx terminates public-CA
   # HTTPS in front of nginx-proxy. See doc/phase-6-plan.md §7.
   admin-bff:
-    profiles: ["app"]
+    # No `profiles:` — admin-bff comes up with the default `docker
+    # compose up -d`. Only the akashic server itself is gated by the
+    # `app` profile, so operators can run akashic on the host (`go
+    # run`) while the BFF + proxy + deps stay in docker. The BFF
+    # lazy-inits its OAuth client (see ensureOAuth in pkg/admin_bff/
+    # server.go), so it tolerates akashic being absent at boot —
+    # login works as soon as akashic comes up, no BFF restart needed.
     build:
       context: .
       dockerfile: ./services/admin-bff/Dockerfile
@@ -702,6 +726,28 @@ services:
       # mounts auto-create missing dirs as root, which would race
       # with akashic-server's 0700 dir creation. ro is enough.
       - keys:/keys:ro
+    # Unconditional host-gateway aliases. Lets the BFF reach the
+    # auth-server (and control plane) the same way regardless of
+    # whether akashic runs in a container (`--profile app`) or on
+    # the host (`go run`). Container mode: docker port-forwards
+    # `host:8080 → akashic:8080` so the host gateway IP transparently
+    # bridges to the container. Host mode: the host akashic binds on
+    # 0.0.0.0:8080 directly. Same dial target, same TLS verification
+    # against the auth.akashic.local SAN — the BFF doesn't have to
+    # know which mode it's running in.
+    #
+    # Linux note: container mode also requires the akashic container's
+    # CONTROL plane port to be reachable from the docker bridge gateway,
+    # which means binding it to 0.0.0.0:8081 (instead of the default
+    # 127.0.0.1:8081 loopback). Mac/Win Docker Desktop has loopback
+    # magic that bridges this transparently, so dev on Mac/Win works
+    # as-is. mTLS gates control-plane access either way.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "akashic:host-gateway"
+      - "akashic.akashic.local:host-gateway"
+      - "auth.akashic.local:host-gateway"
+      - "ctrl.akashic.local:host-gateway"
     networks:
       default:
         aliases:
