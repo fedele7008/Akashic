@@ -4,6 +4,7 @@ import (
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
+	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"context"
 	"crypto/tls"
@@ -24,6 +25,12 @@ type Server struct {
 	mu           sync.RWMutex
 	state        ServerState
 	certReloader *pki.Reloader
+
+	// Phase 7 OAuth/OIDC dependencies. Wired in by SetOAuth*; nil
+	// until akashic-server's Init wires them up. The discovery and
+	// JWKS handlers tolerate nil keystore by returning 503 -- helps
+	// during partial deploy / restart races.
+	oauthKeyStore *oauth.KeyStore
 }
 
 // ServerState represents the current state of the server
@@ -49,6 +56,23 @@ func New(configManager *config.ConfigManager, logger *logging.Logger) *Server {
 		logger: logger,
 		state:  StateStopped,
 	}
+}
+
+// SetOAuthKeyStore wires the JWT signing-key store into the server.
+// Called from akashic's Init() once the keystore is loaded. Goroutine-
+// safe but typically only invoked once at startup.
+func (s *Server) SetOAuthKeyStore(ks *oauth.KeyStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.oauthKeyStore = ks
+}
+
+// OAuthKeyStore returns the wired keystore (may be nil during init
+// races). Handlers should treat nil as "OAuth not yet ready" → 503.
+func (s *Server) OAuthKeyStore() *oauth.KeyStore {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.oauthKeyStore
 }
 
 // Start starts the auth server

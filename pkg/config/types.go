@@ -299,6 +299,49 @@ type Config struct {
 	LDAP LDAPConfig `mapstructure:"ldap" yaml:"ldap"`
 	// PKI / cert-rotation configuration (Phase 4)
 	PKI PKIConfig `mapstructure:"pki" yaml:"pki"`
+	// OAuth/OIDC server configuration (Phase 7)
+	OAuth OAuthConfig `mapstructure:"oauth" yaml:"oauth"`
+}
+
+// OAuthConfig configures the OAuth 2.1 / OIDC authorization server.
+type OAuthConfig struct {
+	// Issuer is the base URL of the auth server, used as the JWT
+	// `iss` claim and in the discovery doc. MUST match the URL
+	// clients are configured to redirect through.
+	Issuer string `mapstructure:"issuer" yaml:"issuer"`
+
+	// SigningKeyDir is the filesystem path holding RSA signing keys
+	// (one <kid>.json file per key). Phase 7 stores keys here; a
+	// future phase may move them to Vault KV.
+	SigningKeyDir string `mapstructure:"signing_key_dir" yaml:"signing_key_dir"`
+
+	// AccessTokenTTL is how long an access token is valid. 15 min
+	// default — short enough that revocation isn't critical, long
+	// enough to avoid re-auth on every API call.
+	AccessTokenTTL time.Duration `mapstructure:"access_token_ttl" yaml:"access_token_ttl"`
+
+	// IDTokenTTL is how long an OIDC ID token is valid. Typically
+	// matches AccessTokenTTL.
+	IDTokenTTL time.Duration `mapstructure:"id_token_ttl" yaml:"id_token_ttl"`
+
+	// AuthCodeTTL is how long an authorization code is valid. RFC
+	// 6749 §4.1.2 recommends ≤10 minutes; we go shorter (60s) to
+	// limit the interception window.
+	AuthCodeTTL time.Duration `mapstructure:"auth_code_ttl" yaml:"auth_code_ttl"`
+
+	// AdminRedirectURI is the redirect_uri the akashic-admin built-in
+	// client is registered with. Must match exactly what admin-bff
+	// sends on /authorize.
+	AdminRedirectURI string `mapstructure:"admin_redirect_uri" yaml:"admin_redirect_uri"`
+
+	// AuthSessionIdleTTL is how long an auth-server session can be
+	// idle before requiring re-login. Refreshed on every visit to
+	// /authorize within the absolute TTL.
+	AuthSessionIdleTTL time.Duration `mapstructure:"auth_session_idle_ttl" yaml:"auth_session_idle_ttl"`
+
+	// AuthSessionMaxTTL is the absolute lifetime of an auth-server
+	// session. Cannot be extended past this even with active use.
+	AuthSessionMaxTTL time.Duration `mapstructure:"auth_session_max_ttl" yaml:"auth_session_max_ttl"`
 }
 
 // PKIConfig controls the in-process PKI / cert-rotation subsystem (Phase 4)

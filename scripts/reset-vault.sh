@@ -4,7 +4,7 @@
 #
 # A Vault reset regenerates the root CA chain, which invalidates every leaf
 # cert and every secret-id/role-id previously issued. This script wipes:
-#   - Host-side cert + secret state (./certs/*, ./.secrets/vault*)
+#   - Host-side cert + secret state (./certs/*, ./.secrets/vault*, ./keys/*)
 #   - The whole Akashic docker-compose stack (so old certs aren't still in
 #     use by running containers, which would block volume removal)
 #   - Docker volumes that persist CA-chain-bound state:
@@ -43,6 +43,11 @@ docker compose --profile app down --remove-orphans
 # committable; every actual cert file gets deleted.
 echo "Wiping ./certs/ (preserving .gitignore and README.md)..."
 find ./certs -mindepth 1 ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {} + 2>/dev/null || true
+# Phase 7: server-managed key material (OAuth signing keys etc.)
+# Wiping this on a vault-reset is correct: a reset regenerates the
+# entire trust chain, and tokens signed by the old OAuth key shouldn't
+# be valid against the new identity infrastructure.
+find ./keys -mindepth 1 ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {} + 2>/dev/null || true
 
 echo "Wiping ./.secrets/vault and ./.secrets/vault-agent..."
 rm -rf ./.secrets/vault ./.secrets/vault-agent

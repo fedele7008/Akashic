@@ -14,6 +14,7 @@ import (
 	"akashic/akashic/pkg/database/akashic_redis"
 	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/auth"
@@ -43,6 +44,7 @@ type AkashicApp struct {
 	BootstrapMgr          *bootstrap.Manager
 	AuthServer            *auth.Server
 	ControlServer         *control.Server
+	OAuthKeyStore         *oauth.KeyStore // Phase 7: JWT signing keys
 	closerFns             []func()
 	verbose               bool
 	bootstrapToken        string // Stored for console display
@@ -153,6 +155,47 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	bootstrapRepo := repository.NewBootstrapRepository(app.DB, app.Logger.App)
 	userRepo := repository.NewUserRepository(app.DB, app.LDAPClient, app.Logger.App)
 
+	// Initialize OAuth signing-key store (Phase 7).
+	// On first-ever startup the directory is empty and we generate a
+	// bootstrap RSA key. On subsequent starts we just load existing
+	// keys. Auto-aging and rotation orchestration are deferred to a
+	// later phase; for now keys live indefinitely until manually rotated.
+	app.Logger.App.Info("Initializing OAuth signing-key store",
+		zap.String("dir", cfg.OAuth.SigningKeyDir))
+	if err := os.MkdirAll(cfg.OAuth.SigningKeyDir, 0o700); err != nil {
+		return fmt.Errorf("create OAuth signing-key dir: %v", err)
+	}
+	app.OAuthKeyStore, err = oauth.NewKeyStore(cfg.OAuth.SigningKeyDir)
+	if err != nil {
+		// Empty-dir error is expected on first run -- bootstrap a key
+		if !app.OAuthKeyStore.HasAnyKeys() {
+			app.Logger.App.Info("No OAuth signing keys yet; generating initial RSA-2048 keypair")
+			// Need a working keystore to call GenerateInitial; if NewKeyStore
+			// returned nil we have to construct one fresh.
+			if app.OAuthKeyStore == nil {
+				app.OAuthKeyStore, _ = oauth.NewKeyStore(cfg.OAuth.SigningKeyDir)
+			}
+			if app.OAuthKeyStore == nil {
+				return fmt.Errorf("OAuth keystore init failed and bootstrap path unrecoverable")
+			}
+		} else {
+			return fmt.Errorf("load OAuth signing keys: %v", err)
+		}
+	}
+	if !app.OAuthKeyStore.HasAnyKeys() {
+		if err := app.OAuthKeyStore.GenerateInitial(); err != nil {
+			return fmt.Errorf("generate initial OAuth signing key: %v", err)
+		}
+		app.Logger.App.Info("OAuth signing key generated successfully")
+	} else {
+		active, _ := app.OAuthKeyStore.Active()
+		if active != nil {
+			app.Logger.App.Info("OAuth signing key loaded",
+				zap.String("active_kid", active.KID),
+				zap.Int("total_keys", len(app.OAuthKeyStore.All())))
+		}
+	}
+
 	// Initialize bootstrap system
 	tokenMgr := bootstrap.NewTokenManager(app.Redis, cfg.Bootstrap.TokenTTL, app.Logger.Security)
 	passwordPolicy := &authpkg.PasswordPolicy{
@@ -220,6 +263,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		app.Config,
 		app.Logger,
 	)
+	// Wire the OAuth signing-key store. The auth server's discovery
+	// and JWKS handlers tolerate a nil keystore (return 503), but we
+	// always set it here at startup time.
+	app.AuthServer.SetOAuthKeyStore(app.OAuthKeyStore)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(

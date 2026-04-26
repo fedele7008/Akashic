@@ -46,7 +46,7 @@ worth stating explicitly because it has implications:
   server (for issuing/validating). Rotation is independent of the
   TLS PKI's rotation cycle.
 - **The admin-bff cannot bootstrap itself.** Until the akashic-admin
-  client row exists in `oauth_clients`, the login flow doesn't work.
+  client row exists in `client_services`, the login flow doesn't work.
   We ensure the row exists during akashic-server startup, before
   admin-bff's first connection attempt.
 
@@ -167,7 +167,7 @@ Internet can reach. We mitigate by:
 ## Execution Order
 
 ```
-Step 1: Data models + DB schema    ← oauth_clients, JWT key infra
+Step 1: Data models + DB schema    ← client_services, JWT key infra
 Step 2: JWT signing keys           ← Vault KV + reloader, JWKS endpoint
 Step 3: Discovery doc              ← /.well-known/openid-configuration
 Step 4: Login UI                   ← templates, /login, /login/submit, sessions
@@ -188,11 +188,18 @@ Step 8-9 wire the admin surface to use it. Step 10 is the gate.
 
 ## Step 1: Data Models + DB Schema
 
-### 1.1 `oauth_clients` table
+### 1.1 `client_services` table
+
+In Akashic terminology, an OAuth client is a "client service" — a
+service registered with the IdP that wants to authenticate users via
+Akashic. Naming the table `client_services` (and the Go struct
+`ClientService`) matches the operator's mental model better than the
+OAuth-spec term "client", which is overloaded with HTTP-client and
+many other meanings in the codebase.
 
 ```go
-// pkg/models/oauth_client.go
-type OAuthClient struct {
+// pkg/models/client_service.go
+type ClientService struct {
     // ClientID is the public identifier (URL-safe, immutable, e.g. "akashic-admin")
     ClientID string `gorm:"primaryKey;size:255" json:"client_id"`
 
@@ -206,12 +213,19 @@ type OAuthClient struct {
 
     // RedirectURIs is the allowlist of redirect URIs accepted by /authorize.
     // Stored as comma-separated string for simplicity; switch to a join
-    // table if we ever need >5 URIs per client.
+    // table if we ever need >5 URIs per client service.
     RedirectURIs string `gorm:"type:text;not null"`
 
-    // AllowedScopes is the space-separated set of scopes this client may request.
+    // AllowedScopes is the space-separated set of scopes this client service may request.
     // Default for built-in clients: "openid profile email".
     AllowedScopes string `gorm:"type:text;not null;default:'openid profile email'"`
+
+    // AuthTypes is the space-separated list of OAuth grant_type values
+    // this client service is authorized to use. Phase 7 enables only
+    // "authorization_code"; the schema and constants accommodate
+    // "client_credentials", "password" (ROPC), "implicit" so future
+    // phases enable them without migration.
+    AuthTypes string `gorm:"type:text;not null;default:'authorization_code'"`
 
     // BuiltIn=true marks the client as managed by the akashic-server itself
     // (akashic-admin, akashic-tenant-portal). Built-ins cannot be deleted via
@@ -219,17 +233,26 @@ type OAuthClient struct {
     BuiltIn bool `gorm:"not null;default:false"`
 
     // RoleAllowlist constrains which user_types may complete an auth flow
-    // for this client. Empty = any user. "root,admin" = only those types.
+    // for this client service. Empty = any user. "root,admin" = only those types.
     // Enforced by the BFF, but stored here so it's auditable.
     RoleAllowlist string `gorm:"size:255"`
 
-    // RequirePKCE forces PKCE on all auth flows for this client.
+    // RequirePKCE forces PKCE on all auth flows for this client service.
     // Default true; we never set false for built-ins.
     RequirePKCE bool `gorm:"not null;default:true"`
 
     CreatedAt time.Time `gorm:"autoCreateTime"`
     UpdatedAt time.Time `gorm:"autoUpdateTime"`
 }
+
+// AuthType constants are the canonical OAuth grant_type strings.
+// Stored in the AuthTypes column; checked at /token request time.
+const (
+    AuthTypeAuthorizationCode AuthType = "authorization_code" // Phase 7: ENABLED
+    AuthTypeClientCredentials AuthType = "client_credentials" // Phase 8+
+    AuthTypePassword          AuthType = "password"           // ROPC; deferred (under review)
+    AuthTypeImplicit          AuthType = "implicit"           // deprecated in OAuth 2.1; deferred
+)
 ```
 
 Migrated via GORM `AutoMigrate`. No manual SQL.
@@ -465,9 +488,10 @@ GET /authorize?
 
 Steps:
 1. Parse & validate query params (RFC 6749 + RFC 7636 + OIDC core).
-2. Look up `client_id` in `oauth_clients`. Reject if not found, or
+2. Look up `client_id` in `client_services`. Reject if not found, or
    `redirect_uri` not in the client's allowlist, or `scope` outside
-   `AllowedScopes`. Errors here render `/error` (don't redirect to
+   `AllowedScopes`, or the requested grant type isn't in the client's
+   `AuthTypes` list. Errors here render `/error` (don't redirect to
    an attacker-controlled URL).
 3. Check session cookie. If absent → 302 to `/login?return_to=<this URL>`.
 4. (Future, deferred) Render consent UI. For Phase 7's only client
@@ -594,7 +618,7 @@ is still valid (catches the "user disabled while logged in" case).
 ## Step 8: Built-In `akashic-admin` Client
 
 On akashic-server startup, after DB connection + before serving,
-upsert the `akashic-admin` row in `oauth_clients`:
+upsert the `akashic-admin` row in `client_services`:
 
 ```go
 // pkg/oauth/builtin.go
@@ -608,12 +632,13 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, cfg *config.Config, 
     })
     if err != nil { return err }
 
-    return upsertClient(db, &models.OAuthClient{
+    return upsertClient(db, &models.ClientService{
         ClientID:         "akashic-admin",
         ClientSecretHash: bcryptHash(secret),
         Name:             "Akashic Admin Console",
         RedirectURIs:     cfg.OAuth.AdminRedirectURI,  // e.g. "https://admin.akashic.local/oauth/callback"
         AllowedScopes:    "openid profile email",
+        AuthTypes:        string(models.AuthTypeAuthorizationCode),
         BuiltIn:          true,
         RoleAllowlist:    "root,admin",
         RequirePKCE:      true,
@@ -770,7 +795,7 @@ Failure-mode checks:
 
 | Path | Purpose |
 |---|---|
-| `pkg/models/oauth_client.go` | OAuthClient model + GORM hooks |
+| `pkg/models/client_service.go` | ClientService model + AuthType constants + GORM hooks |
 | `pkg/oauth/keystore.go` | JWT signing key store + reloader (mirrors `pkg/pki`) |
 | `pkg/oauth/jwt.go` | JWT mint + verify helpers |
 | `pkg/oauth/codes.go` | Authorization-code Redis storage |
@@ -797,7 +822,7 @@ Failure-mode checks:
 | `pkg/akashic/core/context.go` | Initialize keystore + EnsureBuiltInClients during Init() |
 | `pkg/config/types.go` | New `OAuthConfig` struct (issuer URL, redirect URIs, key rotation policy) |
 | `pkg/config/defaults.go` | Defaults for the above |
-| `pkg/database/akashic_postgres/postgres.go` | Add OAuthClient to AutoMigrate list |
+| `pkg/database/akashic_postgres/postgres.go` | Add ClientService to AutoMigrate list |
 | `pkg/admin_bff/server.go` | Register `/login`, `/oauth/callback`, `/logout` |
 | `pkg/admin_bff/handlers.go` | Add session-required check on `/api/*` paths (after Phase 7 lands) |
 | `web/admin/src/App.tsx` | Three-state shell (form / login-required / logged-in) |

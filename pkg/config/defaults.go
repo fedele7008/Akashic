@@ -70,6 +70,22 @@ const (
 	DefaultPKICertWatcherEnabled  = true
 	DefaultPKICertWatcherDebounce = 500 * time.Millisecond
 
+	// OAuth defaults (Phase 7)
+	DefaultOAuthIssuer              = "https://auth.akashic.local:8080"
+	// OAuth signing keys live under ./keys/, NOT under ./certs/. Reason:
+	// the certs volume is read-only inside the akashic container (Vault
+	// Agent writes, akashic reads), but signing keys are managed BY the
+	// akashic server itself and need a writable home. Keeping them in a
+	// separate volume cleanly separates "Vault-managed" from "server-
+	// managed" trust material.
+	DefaultOAuthSigningKeyDir       = "./keys/oauth"
+	DefaultOAuthAccessTokenTTL      = 15 * time.Minute
+	DefaultOAuthIDTokenTTL          = 15 * time.Minute
+	DefaultOAuthAuthCodeTTL         = 60 * time.Second
+	DefaultOAuthAdminRedirectURI    = "https://admin.akashic.local/oauth/callback"
+	DefaultOAuthAuthSessionIdleTTL  = 30 * time.Minute
+	DefaultOAuthAuthSessionMaxTTL   = 8 * time.Hour
+
 	// Session defaults
 	DefaultSessionTimeout = 30 * time.Minute
 	DefaultSecureCookies  = true
@@ -231,6 +247,16 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("pki.cert_watcher_enabled", DefaultPKICertWatcherEnabled)
 	v.SetDefault("pki.cert_watcher_debounce", DefaultPKICertWatcherDebounce)
 
+	// OAuth/OIDC server (Phase 7)
+	v.SetDefault("oauth.issuer", DefaultOAuthIssuer)
+	v.SetDefault("oauth.signing_key_dir", DefaultOAuthSigningKeyDir)
+	v.SetDefault("oauth.access_token_ttl", DefaultOAuthAccessTokenTTL)
+	v.SetDefault("oauth.id_token_ttl", DefaultOAuthIDTokenTTL)
+	v.SetDefault("oauth.auth_code_ttl", DefaultOAuthAuthCodeTTL)
+	v.SetDefault("oauth.admin_redirect_uri", DefaultOAuthAdminRedirectURI)
+	v.SetDefault("oauth.auth_session_idle_ttl", DefaultOAuthAuthSessionIdleTTL)
+	v.SetDefault("oauth.auth_session_max_ttl", DefaultOAuthAuthSessionMaxTTL)
+
 	// Session defaults
 	v.SetDefault("session.timeout", DefaultSessionTimeout)
 	v.SetDefault("session.secure_cookies", DefaultSecureCookies)
@@ -370,26 +396,29 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("middleware.control.request_timeout", DefaultControlRequestTimeout)
 }
 
-// NormalizeContainerPaths rewrites host-relative "./certs/..." paths on the
-// loaded Config to their container-absolute "/certs/..." equivalents. It
-// runs *after* Viper's unmarshal so that values sourced from YAML, env
-// vars, or flags all get normalized uniformly -- not just defaults.
+// NormalizeContainerPaths rewrites host-relative paths on the loaded
+// Config to their container-absolute equivalents. Runs *after* Viper's
+// unmarshal so values sourced from YAML, env vars, or flags all get
+// normalized uniformly -- not just defaults.
 //
-// This is the fix to the "my config.yaml has ./certs/foo but the container
-// mounts /certs/foo" class of problem: operators can keep host-friendly
-// paths in config.yaml and the container transparently translates them.
+// Two prefixes are recognized:
+//   - "./certs/" → "/certs/" (Vault-Agent-rendered TLS material; ro mount)
+//   - "./keys/"  → "/keys/"  (server-managed material like OAuth signing
+//     keys; rw mount)
 //
-// Only strings that start with "./certs/" are rewritten; anything else
-// (absolute paths, relative paths that don't point into ./certs/, empty
-// strings) is left alone. That preserves the operator's ability to pin
-// a cert to an unusual location inside the container via an absolute path.
+// Anything else is left alone, preserving the operator's ability to
+// pin a path to an unusual location inside the container via absolute
+// paths.
 func NormalizeContainerPaths(cfg *Config) {
 	rewrite := func(s *string) {
 		if s == nil || *s == "" {
 			return
 		}
-		if strings.HasPrefix(*s, "./certs/") {
+		switch {
+		case strings.HasPrefix(*s, "./certs/"):
 			*s = "/certs/" + strings.TrimPrefix(*s, "./certs/")
+		case strings.HasPrefix(*s, "./keys/"):
+			*s = "/keys/" + strings.TrimPrefix(*s, "./keys/")
 		}
 	}
 	rewrite(&cfg.Server.Control.TLS.CertFile)
@@ -401,4 +430,5 @@ func NormalizeContainerPaths(cfg *Config) {
 	rewrite(&cfg.Database.Redis.TLS.CACertPath)
 	rewrite(&cfg.Logging.LokiTLS.CACertPath)
 	rewrite(&cfg.LDAP.TLSCACertPath)
+	rewrite(&cfg.OAuth.SigningKeyDir)
 }

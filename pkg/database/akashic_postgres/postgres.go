@@ -124,6 +124,10 @@ func (db *DB) AutoMigrate() error {
 	modelList := []any{
 		&models.User{},
 		&models.BootstrapStatus{},
+		// Phase 7: registered client services (built-in akashic-admin +
+		// future tenant-registered services). Table: client_services.
+		// Schema lives in pkg/models/client_service.go.
+		&models.ClientService{},
 	}
 
 	if err := db.DB.AutoMigrate(modelList...); err != nil {

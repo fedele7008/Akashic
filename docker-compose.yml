@@ -562,6 +562,10 @@ services:
       - "127.0.0.1:${AKASHIC_CTRL_HOST_PORT:-8081}:8081"
     volumes:
       - certs:/certs:ro
+      # Phase 7: writable home for server-managed key material (OAuth
+      # signing keys). Distinct from /certs which is Vault-Agent-managed
+      # and read-only. See docker-compose.yml's volumes: keys section.
+      - keys:/keys
       # Mount the same config file the host-run uses. Places it at a path
       # covered by the default config-search list (/etc/akashic/) so the
       # server finds it without extra --config flags.
@@ -646,6 +650,17 @@ volumes:
       o: bind
       # Replace this path with your desired path (default is ./.secrets and it is ignored by git and docker)
       device: ./.secrets
+  # Phase 7: server-managed key material that is NOT Vault-Agent-rendered.
+  # Currently holds the OAuth/OIDC JWT signing keys (./keys/oauth/<kid>.json).
+  # Mounted writable inside the akashic container, unlike the certs volume
+  # which is read-only. This separation keeps Vault-managed and server-
+  # managed material in distinct trust domains.
+  keys:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./keys
   pg_data:
   redis_data:
   loki_data:
