@@ -164,12 +164,11 @@ This pattern is reused for the OAuth signing-key store too (chapter
 │   ├── auth.crt         ← akashic auth listener (port 8080)
 │   ├── auth.key
 │   ├── auth-ca.crt      ← chain to verify auth.crt
-│   ├── ctrl.crt         ← akashic control listener (port 8081, server side)
-│   ├── ctrl.key
-│   ├── ctrl-ca.crt
-│   ├── mtls-ctrl.crt    ← mTLS server cert for control plane
+│   ├── mtls-ctrl.crt    ← mTLS server cert for control plane (port 8081)
 │   ├── mtls-ctrl.key
 │   └── mtls-ca.crt      ← CA bundle accepted for mTLS client certs
+│   (the control plane is mTLS-only — there is no separate
+│    `pki-internal` server cert here, by design)
 ├── bff/
 │   ├── akashic-ctrl-client.crt  ← admin-bff's CLIENT cert for mTLS
 │   ├── akashic-ctrl-client.key

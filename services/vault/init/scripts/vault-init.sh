@@ -433,8 +433,9 @@ main() {
     }
 
     # --- Internal server certificates (pki-internal/server) ---
-    # akashic-ctrl cert is now issued by vault-agent (see services/vault-agent/templates/akashic-ctrl.tpl)
     # akashic-auth cert is now issued by vault-agent (see services/vault-agent/templates/akashic-auth.tpl)
+    # (no akashic-ctrl cert here — the control plane is mTLS-only,
+    #  its server cert comes from akashic-mtls-ctrl.tpl instead)
 
     # postgres cert is now issued by vault-agent (see services/vault-agent/templates/postgres.tpl)
 

@@ -66,18 +66,17 @@ template {
 }
 
 # ─────────────────────────────────────────────────────────────
-# Akashic control server certificate (pki-internal/server)
-#   Used for the public TLS listener on the control plane. CN =
-#   ctrl.akashic.local. Separate from the mTLS-trust cert below.
-# ─────────────────────────────────────────────────────────────
-template {
-  source      = "/templates/akashic-ctrl.tpl"
-  destination = "/certs/akashic/.ctrl-rendered"
-}
-
-# ─────────────────────────────────────────────────────────────
 # Akashic auth server certificate (pki-internal/server)
 #   Used for the OAuth/OIDC TLS listener. CN = auth.akashic.local.
+#
+# Note: there is intentionally NO `pki-internal`-issued cert for
+# the CONTROL plane. The control plane is mTLS-only — its server
+# cert is issued from `pki-mtls-akashic-ctrl` (see akashic-mtls-ctrl.tpl
+# below). An earlier design considered a public TLS listener on the
+# control plane in addition to mTLS, but that path was never taken;
+# the mTLS-only design ships unchanged. If the control plane ever
+# adds a non-mTLS listener in the future, re-introduce a template
+# here using `pki-internal/issue/server`.
 # ─────────────────────────────────────────────────────────────
 template {
   source      = "/templates/akashic-auth.tpl"
