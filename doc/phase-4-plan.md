@@ -360,7 +360,7 @@ Agent is now the only producer.
 ### 3.6 Verify
 
 ```bash
-./scripts/reset-vault.sh   # nuke everything
+./scripts/reset-akashic.sh   # nuke everything
 docker compose up -d vault-bootstrap vault vault-init vault-agent
 
 # Wait for agent to render
@@ -695,7 +695,7 @@ The gate for Phase 4 is a full lifecycle test with zero manual intervention.
 ### 7.1 Full-stack TLS on
 
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 # .env has all *_TLS=on
 # All dependency services (postgres, redis, ldap, loki, grafana, ...) run by
 # default. The `app` profile opts the Akashic server itself into the stack.

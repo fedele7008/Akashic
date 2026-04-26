@@ -44,7 +44,7 @@ warning but continues to operate; the next rotation will tighten them.
 
 ## Reset and recovery
 
-`./scripts/reset-vault.sh` wipes this directory along with `./certs/`.
+`./scripts/reset-akashic.sh` wipes this directory along with `./certs/`.
 On the next server start, a fresh OAuth signing key is generated
 automatically. Any previously-issued JWTs become un-verifiable
 (missing kid in the new JWKS) — which is the correct behavior, since

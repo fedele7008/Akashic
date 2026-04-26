@@ -58,7 +58,7 @@ Pick the deployment mode (host or container) and run the rest unchanged.
 **Container mode** (recommended):
 
 ```bash
-./scripts/reset-vault.sh           # clean slate
+./scripts/reset-akashic.sh           # clean slate
 docker compose --profile app up -d
 sleep 30                           # let vault-agent issue all certs
 ```
@@ -66,7 +66,7 @@ sleep 30                           # let vault-agent issue all certs
 **Host mode** (Akashic on host, dependencies in containers):
 
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose up -d               # everything except akashic itself
 sleep 25
 go run ./cmd/akashic run --verbose &
@@ -431,7 +431,7 @@ from on the client side.
 
 ### What a vault-reset breaks
 
-`./scripts/reset-vault.sh` regenerates the entire CA chain. This
+`./scripts/reset-akashic.sh` regenerates the entire CA chain. This
 invalidates every cert, including the ones in your `~/.akashic/certs/
 <profile>/` directory. After a reset:
 
@@ -504,7 +504,7 @@ For copy-paste convenience.
 
 **Fresh deployment, container mode:**
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose --profile app up -d && sleep 30
 akashic-cli configure add --name default \
     --control-url https://127.0.0.1:8081 \
@@ -516,7 +516,7 @@ akashic-cli bootstrap create-root --username admin --email admin@example.com
 
 **After a vault reset (existing profile):**
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose --profile app up -d && sleep 30
 # Re-add to refresh cert files (overwrites existing profile)
 akashic-cli configure add --name default \

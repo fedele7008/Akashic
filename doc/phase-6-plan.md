@@ -818,7 +818,7 @@ host nginx, hitting docker proxy directly) and **production-shape**
 #### 8.1a Direct-dev path
 
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose --profile app up -d
 sleep 30   # vault-agent issues all certs; admin-bff builds + starts
 

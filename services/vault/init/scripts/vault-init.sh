@@ -634,7 +634,7 @@ if [[ ${main_rc} -ne 0 ]]; then
     # service_completed_successfully) refuse to start on a half-configured
     # Vault. Common cause: split state -- vault_file volume still holds an
     # initialized Vault but .secrets/vault/ was wiped, so unseal has no
-    # valid keys. Fix: ./scripts/reset-vault.sh
+    # valid keys. Fix: ./scripts/reset-akashic.sh
     log_error "Akashic Infrastructure PKI setup FAILED (exit ${main_rc})"
     exit ${main_rc}
 fi

@@ -64,7 +64,7 @@ on the operator's behalf).
 ### Step 0 — Bring up the stack
 
 ```bash
-./scripts/reset-vault.sh           # clean slate (regenerates CA + certs)
+./scripts/reset-akashic.sh           # clean slate (regenerates CA + certs)
 docker compose --profile app up -d
 sleep 30                           # vault-agent issues bff-client cert; admin-bff builds + starts
 ```
@@ -368,7 +368,7 @@ fine.
 
 ### What happens after vault-reset
 
-A `./scripts/reset-vault.sh` regenerates the entire CA chain. This
+A `./scripts/reset-akashic.sh` regenerates the entire CA chain. This
 invalidates:
 
 - The CLI profile's cert files in `~/.akashic/certs/<profile>/`
@@ -437,7 +437,7 @@ For copy-paste convenience.
 ### Fresh deployment, web-bootstrap end-to-end:
 
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose --profile app up -d
 sleep 30
 

@@ -2,9 +2,10 @@
 #
 # Full-stack reset for an Akashic dev/test deployment.
 #
-# Originally just a Vault PKI reset; now wipes every piece of project
-# state so `docker compose up -d` afterwards starts from a truly empty
-# slate. Use this when you want to:
+# Wipes every piece of project state — Vault PKI, TLS certs, OAuth
+# signing keys, every named docker volume, host-side secret material —
+# so `docker compose up -d` afterwards starts from a truly empty slate.
+# Use this when you want to:
 #   - re-bootstrap from scratch (forget the root user, regenerate JWT
 #     signing keys, re-issue all TLS certs)
 #   - test a brand-new install path on the same machine

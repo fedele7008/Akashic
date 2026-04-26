@@ -318,7 +318,7 @@ No migration steps required. No env-var changes required (all the
 new `oauth.*` defaults are sensible). No schema migrations to apply
 manually (GORM `AutoMigrate` handles it).
 
-### What happens after `./scripts/reset-vault.sh`
+### What happens after `./scripts/reset-akashic.sh`
 
 The reset script wipes Vault state + project `./certs/` (per Phase 5
 script). The OAuth signing keys at `./keys/oauth/` are wiped along

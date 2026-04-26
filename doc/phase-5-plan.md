@@ -270,7 +270,7 @@ These columns become forensic breadcrumbs if a bootstrap goes wrong.
 ### 1.5 Verify
 
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose --profile app up -d akashic
 
 # Status endpoint: reachable with any valid mTLS cert
@@ -547,7 +547,7 @@ message.
 
 ```bash
 # Clean slate
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose --profile app up -d
 # (server prints bootstrap token; we'll let the CLI fetch it)
 
@@ -583,7 +583,7 @@ Drives the entire flow from zero state. This is the gate for Phase 5.
 ### 4.1 Fresh-deployment smoke test
 
 ```bash
-./scripts/reset-vault.sh
+./scripts/reset-akashic.sh
 docker compose --profile app up -d
 sleep 30
 
