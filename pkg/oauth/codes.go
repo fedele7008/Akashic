@@ -67,6 +67,16 @@ type AuthorizationCode struct {
 	// LDAP (saves a round-trip on the hot path).
 	UserType string `json:"user_type"`
 
+	// Username and Email are snapshotted from the LDAP-resolved auth
+	// session at /authorize time, so /token can mint ID-token claims
+	// without a fresh LDAP fetch on the hot path. Captured-at-login
+	// semantics mirror UserType: if these change in LDAP between
+	// /authorize and /token, the issued token reflects the values as
+	// of authentication, which is the correct OIDC behavior (the
+	// auth_time claim is the moment they were captured).
+	Username string `json:"username,omitempty"`
+	Email    string `json:"email,omitempty"`
+
 	// Issued is the wall-clock time of code generation. Used for
 	// audit logging only; expiry is enforced by Redis TTL, not by
 	// reading this field.

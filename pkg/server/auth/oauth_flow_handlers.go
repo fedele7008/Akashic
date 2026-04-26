@@ -200,6 +200,8 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		Nonce:               nonce,
 		SessionID:           sid,
 		UserType:            sess.UserType,
+		Username:            sess.Username,
+		Email:               sess.Email,
 	})
 	if err != nil {
 		s.logger.App.Error("generate auth code", zap.Error(err))
@@ -480,13 +482,24 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 			Nonce:    authCode.Nonce,
 			UserType: authCode.UserType,
 		}
-		// profile/email scopes add the corresponding claims. We
-		// look up the LDAP info now since the auth code didn't
-		// carry it.
-		if scopeIncludes(authCode.Scope, "profile") || scopeIncludes(authCode.Scope, "email") {
-			s.populateProfileClaims(r.Context(), &user, authCode.LDAPDN, &idIn,
-				scopeIncludes(authCode.Scope, "profile"),
-				scopeIncludes(authCode.Scope, "email"))
+		// profile/email scopes add the corresponding claims. The auth
+		// code carries snapshot values from /authorize time; we use
+		// those rather than re-fetching LDAP on the token-mint hot
+		// path. See AuthorizationCode.Username/Email for the
+		// captured-at-login rationale.
+		if scopeIncludes(authCode.Scope, "profile") {
+			username := authCode.Username
+			if username == "" {
+				// Defensive: a code minted before this field was
+				// added (e.g. an in-flight code spanning a deploy)
+				// won't have it. Derive from DN as a fallback.
+				username = deriveUsernameFromDN(authCode.LDAPDN)
+			}
+			idIn.PreferredUsername = username
+			idIn.Name = username
+		}
+		if scopeIncludes(authCode.Scope, "email") {
+			idIn.Email = authCode.Email
 		}
 		idToken, err := oauth.MintIDToken(keyStore, idIn)
 		if err != nil {
@@ -507,23 +520,6 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Pragma", "no-cache")
 	_ = json.NewEncoder(w).Encode(resp)
-}
-
-// populateProfileClaims fills in name/email/preferred_username on
-// the ID token when those scopes were granted. Looks up LDAP info
-// via the auth service if needed.
-func (s *Server) populateProfileClaims(_ /*ctx*/ interface{}, user *models.User, ldapDN string, in *oauth.IDTokenInput, profile, email bool) {
-	// For Phase 7, we read whatever the LDAP user info would be
-	// directly from LDAP. Simpler: derive from DN + user model.
-	if profile {
-		in.PreferredUsername = deriveUsernameFromDN(ldapDN)
-		in.Name = in.PreferredUsername
-	}
-	if email {
-		// Placeholder — Phase 8 fetches actual email from LDAP.
-		// For now we leave it empty rather than pretending.
-		_ = user
-	}
 }
 
 // scopeIncludes returns true if a space-separated scope string
