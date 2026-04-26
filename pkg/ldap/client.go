@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-ldap/ldap/v3"
@@ -15,11 +16,27 @@ import (
 	"akashic/akashic/pkg/logging"
 )
 
-// Client represents an LDAP client for user authentication and management
+// Client represents an LDAP client for user authentication and management.
+//
+// `conn` is a single long-lived connection shared across goroutines.
+// LDAP's bind state is connection-level (not request-level), so any
+// operation that changes the bound identity (Authenticate, anything
+// that calls Bind/Search-bind/etc.) MUST run under `authMu` to prevent
+// interleaving from concurrent requests. Without serialization,
+// request A's "bind as user A" can race request B's "search using
+// admin bind" and B silently runs as user A — or worse, anonymous.
 type Client struct {
 	conn   *ldap.Conn
 	config *config.LDAPConfig
 	logger *logging.Logger
+
+	// authMu serializes the search-bind-rebind dance in Authenticate.
+	// Pulling it out as a named field (rather than embedding sync.Mutex
+	// in Client) makes it explicit that the lock scope is bind-state
+	// operations, not the whole connection — Search() during JIT
+	// provisioning, GetUserByDN, etc. don't change bind state and
+	// don't need to acquire it.
+	authMu sync.Mutex
 }
 
 // UserInfo represents user information retrieved from LDAP
@@ -375,7 +392,36 @@ func (c *Client) Authenticate(username, password string) (string, error) {
 		return "", fmt.Errorf("LDAP connection not established")
 	}
 
-	// Search for the user
+	// Serialize the entire search-bind-rebind sequence. The shared
+	// `c.conn` is a single LDAP connection whose bind state is
+	// connection-level, so concurrent Authenticate calls (or one
+	// Authenticate concurrent with a Search elsewhere) can't safely
+	// interleave. With one mutex around the whole dance, each request
+	// sees a consistent admin-bound state at entry and leaves it
+	// admin-bound at exit.
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+
+	// `defer rebindAsAdmin` runs on every exit path, including the
+	// failed user-bind path. Without this, a wrong password leaves the
+	// connection unbound (anonymous) — most LDAP servers transition to
+	// anonymous on a failed bind — and the NEXT request's searchUserDN
+	// fails because anonymous can't search the user OU. The visible
+	// symptom is "correct password rejected as 'invalid username or
+	// password'" because service.go collapses ALL LDAP errors into
+	// ErrInvalidCredentials. The deferred rebind keeps the connection
+	// in a known-good state regardless of how this function exits.
+	defer func() {
+		if rebindErr := c.conn.Bind(c.config.BindDN, c.config.BindPassword); rebindErr != nil {
+			c.logger.App.Error("LDAP rebind-as-admin failed; subsequent requests may fail until reconnect",
+				zap.Error(rebindErr),
+			)
+		}
+	}()
+
+	// Search for the user. searchUserDN uses the current bind, which
+	// is admin (the rebind from a prior call's defer, or the initial
+	// bind from Connect()).
 	userDN, err := c.searchUserDN(username)
 	if err != nil {
 		c.logger.Security.Warn("failed to find user for authentication",
@@ -385,12 +431,14 @@ func (c *Client) Authenticate(username, password string) (string, error) {
 		return "", fmt.Errorf("user not found: %v", err)
 	}
 
-	// Try to bind as the user (this performs authentication)
+	// Try to bind as the user (this performs authentication).
 	if err := c.conn.Bind(userDN, password); err != nil {
 		c.logger.Security.Warn("authentication failed for user",
 			zap.String("username", username),
 			zap.String("dn", userDN),
 		)
+		// The deferred rebind above will restore admin state before
+		// this function returns.
 		return "", fmt.Errorf("invalid credentials")
 	}
 
@@ -399,11 +447,8 @@ func (c *Client) Authenticate(username, password string) (string, error) {
 		zap.String("dn", userDN),
 	)
 
-	// Rebind as admin for subsequent operations
-	if err := c.conn.Bind(c.config.BindDN, c.config.BindPassword); err != nil {
-		return "", fmt.Errorf("failed to rebind as admin: %v", err)
-	}
-
+	// Success path: the deferred rebind restores admin. We no longer
+	// need an explicit rebind here.
 	return userDN, nil
 }
 

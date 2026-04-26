@@ -71,7 +71,16 @@ const (
 	DefaultPKICertWatcherDebounce = 500 * time.Millisecond
 
 	// OAuth defaults (Phase 7)
-	DefaultOAuthIssuer              = "https://auth.akashic.local:8080"
+	//
+	// Issuer URL omits the port: browser traffic flows through the
+	// nginx-proxy auth.* server block (services/proxy/nginx.conf) on
+	// the browser-facing TLS port (typically 443 fronted by a host
+	// nginx, or :8280 in raw direct-dev). The auth-server's actual
+	// HTTPS listener is on :8080 inside the docker network; nginx-proxy
+	// is the TLS-to-TLS bridge. To bypass nginx-proxy and hit :8080
+	// directly during debugging, override AKASHIC_OAUTH_ISSUER (and
+	// remember to set the BFF's matching env var).
+	DefaultOAuthIssuer              = "https://auth.akashic.local"
 	// OAuth signing keys live under ./keys/, NOT under ./certs/. Reason:
 	// the certs volume is read-only inside the akashic container (Vault
 	// Agent writes, akashic reads), but signing keys are managed BY the

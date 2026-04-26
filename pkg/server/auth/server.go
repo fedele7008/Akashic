@@ -1,7 +1,9 @@
 package auth
 
 import (
+	authpkg "akashic/akashic/pkg/auth"
 	"akashic/akashic/pkg/config"
+	"akashic/akashic/pkg/database/akashic_redis"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/oauth"
@@ -15,6 +17,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // Server represents the Auth Server (OAuth/OIDC endpoints)
@@ -27,10 +30,15 @@ type Server struct {
 	certReloader *pki.Reloader
 
 	// Phase 7 OAuth/OIDC dependencies. Wired in by SetOAuth*; nil
-	// until akashic-server's Init wires them up. The discovery and
-	// JWKS handlers tolerate nil keystore by returning 503 -- helps
-	// during partial deploy / restart races.
+	// until akashic-server's Init wires them up. Handlers that need
+	// these tolerate nil by returning 503 -- helps during partial
+	// deploy / restart races.
 	oauthKeyStore *oauth.KeyStore
+	codeStore     *oauth.CodeStore
+	sessionStore  *oauth.SessionStore
+	authService   *authpkg.Service
+	db            *gorm.DB
+	redis         *akashic_redis.Client // for the rate-limit middleware
 }
 
 // ServerState represents the current state of the server
@@ -49,8 +57,15 @@ const (
 	AuthServerGracefulShutdownTimeout = 10 * time.Second
 )
 
-// New creates a new Auth Server instance
+// New creates a new Auth Server instance.
+//
+// Templates are parsed at construction. Panics on template parse
+// failure because a missing/broken template indicates a corrupt
+// binary, not a runtime issue worth handling gracefully.
 func New(configManager *config.ConfigManager, logger *logging.Logger) *Server {
+	if err := initTemplates(); err != nil {
+		panic("auth-server: " + err.Error())
+	}
 	return &Server{
 		config: configManager,
 		logger: logger,
@@ -73,6 +88,26 @@ func (s *Server) OAuthKeyStore() *oauth.KeyStore {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.oauthKeyStore
+}
+
+// SetOAuthDeps wires the rest of the OAuth dependency graph: code
+// store, session store, auth service, DB. Done in one call rather
+// than per-field setters because these are all-or-nothing — without
+// any one of them, none of /authorize, /token, /login work.
+func (s *Server) SetOAuthDeps(
+	codes *oauth.CodeStore,
+	sessions *oauth.SessionStore,
+	authSvc *authpkg.Service,
+	db *gorm.DB,
+	redis *akashic_redis.Client,
+) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.codeStore = codes
+	s.sessionStore = sessions
+	s.authService = authSvc
+	s.db = db
+	s.redis = redis
 }
 
 // Start starts the auth server

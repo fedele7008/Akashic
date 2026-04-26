@@ -14,6 +14,7 @@ import (
 	"akashic/akashic/pkg/database/akashic_redis"
 	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/repository"
@@ -162,7 +163,12 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// later phase; for now keys live indefinitely until manually rotated.
 	app.Logger.App.Info("Initializing OAuth signing-key store",
 		zap.String("dir", cfg.OAuth.SigningKeyDir))
-	if err := os.MkdirAll(cfg.OAuth.SigningKeyDir, 0o700); err != nil {
+	// 0755 (not 0700) for traversal: the admin-bff (uid 10100,
+	// non-root) needs to reach /keys/oauth/client-secrets/ to read
+	// its own client secret. The signing-key files inside this dir
+	// are still 0600 root:root, so non-root processes can list the
+	// directory but cannot read the keys themselves.
+	if err := os.MkdirAll(cfg.OAuth.SigningKeyDir, 0o755); err != nil {
 		return fmt.Errorf("create OAuth signing-key dir: %v", err)
 	}
 	app.OAuthKeyStore, err = oauth.NewKeyStore(cfg.OAuth.SigningKeyDir)
@@ -267,6 +273,37 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// and JWKS handlers tolerate a nil keystore (return 503), but we
 	// always set it here at startup time.
 	app.AuthServer.SetOAuthKeyStore(app.OAuthKeyStore)
+
+	// Construct OAuth-server-side primitives (Phase 7 Steps 4-7):
+	//   - Code store (Redis-backed, 60s TTL)
+	//   - Auth-server session store (Redis-backed, 30m idle / 8h abs)
+	//   - Auth service (LDAP-bind + JIT provisioning, already in pkg/auth)
+	codeStore := oauth.NewCodeStore(app.Redis.Client, cfg.OAuth.AuthCodeTTL)
+	sessionStore := oauth.NewSessionStore(app.Redis.Client,
+		cfg.OAuth.AuthSessionIdleTTL, cfg.OAuth.AuthSessionMaxTTL)
+	authService := authpkg.NewService(app.LDAPClient, rbacService, userRepo, app.Logger)
+	app.AuthServer.SetOAuthDeps(codeStore, sessionStore, authService, app.DB.DB, app.Redis)
+
+	// Phase 7 Step 8: register built-in OAuth client services on
+	// startup. The akashic-admin client is what admin-bff uses to
+	// log operators in. Its plaintext secret lives at
+	// <signing_key_dir>/client-secrets/<client_id>.txt; admin-bff
+	// reads the same path on its own startup.
+	app.Logger.App.Info("Ensuring built-in OAuth client services")
+	if err := oauth.EnsureBuiltInClients(app.ctx, app.DB.DB, cfg.OAuth.SigningKeyDir,
+		[]oauth.BuiltInClientSpec{
+			{
+				ClientID:      "akashic-admin",
+				Name:          "Akashic Admin Console",
+				RedirectURIs:  cfg.OAuth.AdminRedirectURI,
+				AllowedScopes: "openid profile email",
+				AuthTypes:     string(models.AuthTypeAuthorizationCode),
+				RoleAllowlist: "root,admin",
+			},
+		}); err != nil {
+		return fmt.Errorf("ensure built-in OAuth clients: %v", err)
+	}
+	app.Logger.App.Info("Built-in OAuth client services ready")
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(

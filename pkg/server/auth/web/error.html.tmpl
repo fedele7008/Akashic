@@ -1,0 +1,21 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Error — Akashic</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="card">
+    <h1>{{.Title}}</h1>
+    <p class="subtitle">Akashic Identity Provider</p>
+
+    <div class="error" role="alert">{{.Message}}</div>
+
+    {{if .Detail}}
+    <pre class="detail">{{.Detail}}</pre>
+    {{end}}
+  </main>
+</body>
+</html>

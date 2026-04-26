@@ -16,6 +16,69 @@ function readCookie(name) {
     }
     return '';
 }
+export class SessionApi {
+    /**
+     * GET /api/session — returns the logged-in user's info.
+     *
+     * On 401 (no session OR expired) returns null rather than throwing,
+     * because "not logged in" is a normal expected state at this
+     * endpoint. The App shell switches its rendered view based on the
+     * null/non-null outcome.
+     *
+     * Other failure modes (network down, BFF crashed) DO throw, since
+     * those represent infrastructure problems the user should see.
+     */
+    static async info() {
+        const r = await fetch('/api/session', {
+            method: 'GET',
+            credentials: 'same-origin',
+        });
+        if (r.status === 401) {
+            return null; // not logged in -- normal
+        }
+        const body = await r.json();
+        if (!r.ok || !body.success) {
+            throw new Error(body.error?.message ?? `Session check failed (HTTP ${r.status})`);
+        }
+        return body.data;
+    }
+    /**
+     * POST /logout — invalidates the BFF session and returns the auth
+     * server's RP-Initiated Logout URL.
+     *
+     * The full logout chain is:
+     *
+     *   1. POST /logout (BFF)        → kills the BFF session + cookie
+     *   2. GET <auth_logout_url>     → kills the auth-server session,
+     *                                  redirects browser back to admin
+     *
+     * Without the second hop, the auth-server's session cookie survives,
+     * and the next "Sign in" click silently re-uses it (single-sign-on
+     * is great until you explicitly want OUT). The caller navigates the
+     * browser to the returned URL to complete the chain.
+     *
+     * Returns the URL the FE should navigate to next; empty string means
+     * the BFF couldn't compute one (rare; happens only if OAuth init
+     * failed at BFF startup).
+     */
+    static async logout() {
+        const csrf = readCookie(CSRF_COOKIE);
+        const r = await fetch('/logout', {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: {
+                [CSRF_HEADER]: csrf,
+            },
+        });
+        try {
+            const body = await r.json();
+            return body.data?.auth_logout_url ?? '';
+        }
+        catch {
+            return '';
+        }
+    }
+}
 export class BootstrapApi {
     /**
      * GET /api/bootstrap/status — fetch the current bootstrap state.

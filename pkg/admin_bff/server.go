@@ -12,6 +12,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"github.com/redis/go-redis/v9"
 )
 
 // Server owns the BFF's HTTP listener, the mTLS client to the control
@@ -25,8 +27,16 @@ type Server struct {
 	bootstrapLimiter *rateLimiter // narrower bucket for /api/bootstrap/create-root
 	audit            *AuditWriter
 	feAssets         fs.FS // embedded FE; nil = no FE served (API-only mode)
-	mu               sync.Mutex
-	closed           bool
+
+	// Phase 7 additions: OAuth client + Redis-backed sessions. nil
+	// when the corresponding init wasn't reachable (e.g., Redis is
+	// down). Handlers that depend on these check + return 503.
+	oauth    *oauthClient
+	sessions *sessionStore
+	rdb      *redis.Client
+
+	mu     sync.Mutex
+	closed bool
 }
 
 // NewServer constructs a Server with config loaded from env, the mTLS
@@ -50,6 +60,35 @@ func NewServer(feAssets fs.FS) (*Server, error) {
 	if err != nil {
 		return nil, fmt.Errorf("init control client: %w", err)
 	}
+
+	// Phase 7 wiring: OAuth client (talks to auth-server) + Redis +
+	// session store. These run AFTER the control client because if
+	// any of them is broken we want to surface that diagnostically
+	// without losing the bootstrap ability -- the bootstrap surface
+	// works without OAuth, useful for "log in" pre-conditions.
+	//
+	// Failure-mode policy: if Redis is unreachable, we abort startup.
+	// Login is genuinely broken without it, and the operator should
+	// notice now rather than after the first user clicks /login.
+	rdb, err := newRedisClient(cfg)
+	if err != nil {
+		return nil, fmt.Errorf("init redis: %w", err)
+	}
+	sess := newSessionStore(rdb, cfg.OAuthSessionIdle, cfg.OAuthSessionAbsolute)
+
+	// OAuth client init. Failure here is non-fatal: the bootstrap
+	// flow still works with the control client; we just won't be
+	// able to log anyone in. This separation is deliberate -- e.g.,
+	// during bootstrap-only deployments the operator may not have
+	// rotated the akashic-admin secret yet, and forcing OAuth init
+	// at that point would block bootstrap.
+	oauthC, oauthErr := newOAuthClient(cfg)
+	if oauthErr != nil {
+		fmt.Fprintf(os.Stderr,
+			"admin-bff: OAuth client init failed (login disabled): %v\n", oauthErr)
+		oauthC = nil
+	}
+
 	// Two rate-limit buckets:
 	//   - bootstrapLimiter: tight cap on /api/bootstrap/create-root,
 	//     mirrors the control-plane per-CN limit (5/min)
@@ -62,6 +101,9 @@ func NewServer(feAssets fs.FS) (*Server, error) {
 		rateLimiter:      newRateLimiter(30, time.Minute, cfg.TrustedProxies),
 		audit:            newAuditWriter(),
 		feAssets:         feAssets,
+		oauth:            oauthC,
+		sessions:         sess,
+		rdb:              rdb,
 	}, nil
 }
 
@@ -128,6 +170,39 @@ func (s *Server) buildMux() http.Handler {
 	mux.HandleFunc("POST /api/bootstrap/create-root",
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.bootstrapLimiter, s.handleBootstrapCreateRoot)))
+
+	// ─── Phase 7: OAuth flow ───────────────────────────────────────
+	//
+	// /login and /oauth/callback are GET endpoints reached via top-
+	// level browser navigation (302 redirects), so they MUST NOT
+	// require the X-Akashic-CSRF header (which only the FE's fetch
+	// code knows how to set). The double-submit-cookie pattern still
+	// runs underneath: csrfMiddleware sets the cookie on idempotent
+	// methods and only enforces matching on POST/PUT/DELETE/PATCH.
+	//
+	// Rate limit: the looser bucket. Per-IP throttling on /login
+	// matters less here than at the auth server's /login/submit;
+	// the auth server is doing the heavy authentication work.
+	mux.HandleFunc("GET /login",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleLogin)))
+	mux.HandleFunc("GET /oauth/callback",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleOAuthCallback)))
+
+	// /logout is POST: it changes server-side state (deletes the
+	// Redis session), so CSRF enforcement applies — same protection
+	// as bootstrap-create-root.
+	mux.HandleFunc("POST /logout",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleLogout)))
+
+	// /api/session: GET, idempotent, reads the BFF session and
+	// returns user info. The FE polls this on first load to decide
+	// which shell view to render.
+	mux.HandleFunc("GET /api/session",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleSessionInfo)))
 
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie

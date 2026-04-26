@@ -555,6 +555,17 @@ services:
       AKASHIC_LDAP_ADMIN_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
       AKASHIC_LDAP_BIND_PASSWORD: ${AKASHIC_LDAP_ADMIN_PASSWORD}
       AKASHIC_SECRET: ${AKASHIC_SECRET}
+      # Phase 7: OAuth issuer + redirect URI for the akashic-admin
+      # built-in client. Defaults match the docker-internal alias
+      # (auth.akashic.local), which works only when the operator's
+      # browser resolves that name (e.g. /etc/hosts → 127.0.0.1).
+      # Operators with a real public hostname override these in .env
+      # to e.g. https://auth.akashic.example.com — keeping issuer in
+      # the akashic-server and admin-bff in lockstep is critical, so
+      # both AKASHIC_OAUTH_ISSUER (this var) and AKASHIC_BFF_OAUTH_ISSUER
+      # below take the same value.
+      AKASHIC_OAUTH_ISSUER: "${AKASHIC_OAUTH_ISSUER:-https://auth.akashic.local}"
+      AKASHIC_OAUTH_ADMIN_REDIRECT_URI: "${AKASHIC_OAUTH_ADMIN_REDIRECT_URI:-https://admin.akashic.local/oauth/callback}"
       TZ: ${AKASHIC_TZ:-UTC}
     ports:
       # Auth server: public; Control server: loopback-only.
@@ -608,6 +619,11 @@ services:
         condition: service_started
       akashic:
         condition: service_started
+      # Phase 7: BFF holds OAuth sessions in Redis. We Ping at startup
+      # so a misconfigured Redis fails BFF init loudly. Hard dep is
+      # appropriate -- without Redis, login is broken.
+      redis:
+        condition: service_healthy
     environment:
       AKASHIC_BFF_LISTEN_ADDR: ":8082"
       # The control-server cert's SAN list is ctrl.akashic.local +
@@ -623,9 +639,62 @@ services:
       # us; broadening this would let any container spoof the source IP.
       AKASHIC_BFF_TRUSTED_PROXIES: 172.0.0.0/8
       AKASHIC_BFF_BOOTSTRAP_RATE_LIMIT: "5"
+      # ─── Phase 7: OAuth client + Redis-backed sessions ─────────────
+      # Issuer URL: this is what the auth-server bakes into the JWT
+      # `iss` claim and advertises in /.well-known/openid-configuration.
+      # Must match auth-server's AKASHIC_OAUTH_ISSUER exactly so iss
+      # validation succeeds during ID-token verification — both pull
+      # from the SAME .env variable to stay in lockstep.
+      #
+      # No port: auth.* goes through nginx-proxy (see
+      # services/proxy/nginx.conf's auth.akashic.* server block).
+      # The proxy listens on :8280 inside the cluster and a host TLS
+      # terminator (or compose's port-mapping) bridges 443 → 8280.
+      AKASHIC_BFF_OAUTH_ISSUER: "${AKASHIC_OAUTH_ISSUER:-https://auth.akashic.local}"
+      # Internal back-channel URL for /token + /jwks calls. The BFF
+      # is server-side and lives in the docker network, so it dials
+      # the auth-server through its docker-network alias on its real
+      # TLS port — bypasses the host reverse proxy entirely. The
+      # auth-server's cert has `auth.akashic.local` in its SAN list,
+      # so TLS verification succeeds against this hostname. The
+      # token's iss claim is still validated against the PUBLIC issuer
+      # above, because that's the cryptographic identity of the IdP.
+      AKASHIC_BFF_OAUTH_INTERNAL_URL: "https://auth.akashic.local:8080"
+      AKASHIC_BFF_OAUTH_CLIENT_ID: akashic-admin
+      # Built-in client secret is written by the akashic-server on
+      # first run (pkg/oauth/builtin.go). The /keys volume is mounted
+      # ro below.
+      AKASHIC_BFF_OAUTH_CLIENT_SECRET_FILE: /keys/oauth/client-secrets/akashic-admin.txt
+      # Must equal the redirect_uri registered on the akashic-admin
+      # client_services row exactly. Both env vars (the akashic-server's
+      # AKASHIC_OAUTH_ADMIN_REDIRECT_URI and this one) read from the
+      # same .env entry so they can't drift apart.
+      AKASHIC_BFF_OAUTH_REDIRECT_URI: "${AKASHIC_OAUTH_ADMIN_REDIRECT_URI:-https://admin.akashic.local/oauth/callback}"
+      AKASHIC_BFF_OAUTH_SCOPES: "openid profile email"
+      # CA bundle the BFF trusts when calling the auth-server's TLS.
+      # /certs/akashic/auth-ca.crt is the chain that signed the
+      # auth-server's leaf cert (see akashic-auth.tpl).
+      AKASHIC_BFF_OAUTH_CA_FILE: /certs/akashic/auth-ca.crt
+      AKASHIC_BFF_OAUTH_ALLOWED_ROLES: "root,admin"
+      AKASHIC_BFF_OAUTH_SESSION_IDLE: "30m"
+      AKASHIC_BFF_OAUTH_SESSION_ABSOLUTE: "8h"
+      # Redis: the BFF uses logical DB 1 to keep its keyspace
+      # separated from the akashic-server (which uses DB 0).
+      AKASHIC_BFF_REDIS_ADDR: redis.akashic.local:6379
+      AKASHIC_BFF_REDIS_PASSWORD: ${AKASHIC_DATABASE_REDIS_PASSWORD}
+      AKASHIC_BFF_REDIS_DB: "1"
+      AKASHIC_BFF_REDIS_TLS_CA_FILE: /certs/redis/ca.crt
+      AKASHIC_BFF_REDIS_TLS_SERVER_NAME: redis.akashic.local
       TZ: ${AKASHIC_TZ:-UTC}
     volumes:
       - certs:/certs:ro
+      # /keys volume gives the BFF read-only access to the akashic-
+      # admin client secret that pkg/oauth/builtin.go wrote at akashic
+      # server startup. We mount the *whole* /keys dir ro rather than
+      # just the client-secrets subdir because docker-compose bind
+      # mounts auto-create missing dirs as root, which would race
+      # with akashic-server's 0700 dir creation. ro is enough.
+      - keys:/keys:ro
     networks:
       default:
         aliases:

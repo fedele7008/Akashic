@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Sign in to Akashic</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="card">
+    <h1>Sign in</h1>
+    <p class="subtitle">Akashic Identity Provider</p>
+
+    {{if .Error}}
+    <div class="error" role="alert">{{.Error}}</div>
+    {{end}}
+
+    <form method="POST" action="/login/submit" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="return_to" value="{{.ReturnTo}}">
+
+      <label>
+        <span>Username</span>
+        <input type="text" name="username" required autofocus
+               spellcheck="false" autocapitalize="off"
+               value="{{.Username}}">
+      </label>
+
+      <label>
+        <span>Password</span>
+        <input type="password" name="password" required>
+      </label>
+
+      <button type="submit">Sign in</button>
+    </form>
+  </main>
+</body>
+</html>
