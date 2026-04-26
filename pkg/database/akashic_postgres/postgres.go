@@ -69,13 +69,17 @@ func New(configMgr *config.ConfigManager, akashicLogger *logging.Logger) (*DB, e
 		zap.Bool("tls", cfg.TLSEnabled),
 		zap.String("sslmode", effectiveSSLMode(&cfg)))
 
-	// Configure GORM logger (silent in production, warn in development)
-	var gormLogger logger.Interface
-	if mConfig.Deployment.Environment == config.EnvDevelopment {
-		gormLogger = logger.Default.LogMode(logger.Warn)
-	} else {
-		gormLogger = logger.Default.LogMode(logger.Silent)
+	// Configure GORM logger to delegate to the project's zap logger,
+	// so GORM's output uses the same structured format as the rest
+	// of the app (consistent timestamps, levels, fields, sinks).
+	// Without this, GORM falls back to its stdlib-log default and
+	// emits lines like `2026/04/26 03:00:50 /path/file.go:86 record
+	// not found`, which look completely different from zap output.
+	gormLevel := logger.Warn
+	if mConfig.Deployment.Environment != config.EnvDevelopment {
+		gormLevel = logger.Silent
 	}
+	gormLogger := newZapGormLogger(akashicLogger, gormLevel)
 
 	gormDB, err := gorm.Open(postgres.Open(dsn), &gorm.Config{
 		Logger:                 gormLogger,

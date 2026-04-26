@@ -81,17 +81,24 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, s
 			RequirePKCE:      true,
 		}
 
-		// Upsert by ClientID. GORM's clause syntax does ON CONFLICT.
+		// Upsert by ClientID.
+		//
+		// We use Find() rather than First() because "row doesn't exist"
+		// is the expected first-run path here, not a bug. First() logs
+		// a "record not found" warning via GORM's default logger on
+		// every zero-result query — noisy and misleading. Find() with
+		// Limit(1) returns RowsAffected==0 cleanly, no warning.
 		var existing models.ClientService
-		err = db.WithContext(ctx).Where("client_id = ?", spec.ClientID).First(&existing).Error
-		if err == gorm.ErrRecordNotFound {
+		result := db.WithContext(ctx).Where("client_id = ?", spec.ClientID).
+			Limit(1).Find(&existing)
+		if err := result.Error; err != nil {
+			return fmt.Errorf("query client service %s: %w", spec.ClientID, err)
+		}
+		if result.RowsAffected == 0 {
 			if err := db.WithContext(ctx).Create(&row).Error; err != nil {
 				return fmt.Errorf("create client service %s: %w", spec.ClientID, err)
 			}
 			continue
-		}
-		if err != nil {
-			return fmt.Errorf("query client service %s: %w", spec.ClientID, err)
 		}
 		// Update everything except CreatedAt
 		if err := db.WithContext(ctx).Model(&existing).
