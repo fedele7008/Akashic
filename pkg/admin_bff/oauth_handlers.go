@@ -67,9 +67,10 @@ type preSession struct {
 // /authorize. Our job is just to set the PKCE/state binding and
 // redirect.
 func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if s.oauth == nil {
-		writeError(w, http.StatusServiceUnavailable, "OAUTH_NOT_CONFIGURED",
-			"Login is not yet configured on this BFF.")
+	oauthC := s.ensureOAuth()
+	if oauthC == nil {
+		writeError(w, http.StatusServiceUnavailable, "AUTH_SERVER_UNREACHABLE",
+			"Authentication server is not yet ready. Please retry in a moment.")
 		return
 	}
 
@@ -119,7 +120,7 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		"outcome": "redirect",
 	})
 
-	http.Redirect(w, r, s.oauth.authorizeURL(state, challenge), http.StatusFound)
+	http.Redirect(w, r, oauthC.authorizeURL(state, challenge), http.StatusFound)
 }
 
 // ─── /oauth/callback ────────────────────────────────────────────────
@@ -138,9 +139,10 @@ func (s *Server) handleLogin(w http.ResponseWriter, r *http.Request) {
 //   6. Role check (user_type ∈ {root, admin})
 //   7. Create BFF session, set cookie, redirect to /.
 func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
-	if s.oauth == nil {
-		writeError(w, http.StatusServiceUnavailable, "OAUTH_NOT_CONFIGURED",
-			"Login is not yet configured on this BFF.")
+	oauthC := s.ensureOAuth()
+	if oauthC == nil {
+		writeError(w, http.StatusServiceUnavailable, "AUTH_SERVER_UNREACHABLE",
+			"Authentication server is not yet ready. Please retry in a moment.")
 		return
 	}
 
@@ -193,7 +195,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	clearCookie(w, preSessionCookieName, r)
 
 	// (4) Code exchange.
-	tokens, err := s.oauth.exchangeCode(r.Context(), code, pre.Verifier)
+	tokens, err := oauthC.exchangeCode(r.Context(), code, pre.Verifier)
 	if err != nil {
 		s.auditLog(r, "oauth_callback_error", map[string]any{
 			"outcome":            "fail",
@@ -212,7 +214,7 @@ func (s *Server) handleOAuthCallback(w http.ResponseWriter, r *http.Request) {
 	// (5) Verify ID token (sig + iss + aud + exp). nonce check is
 	// disabled here because we don't currently send a nonce on
 	// /authorize -- adding nonce is a small future hardening item.
-	claims, err := s.oauth.verifyIDToken(r.Context(), tokens.IDToken, "")
+	claims, err := oauthC.verifyIDToken(r.Context(), tokens.IDToken, "")
 	if err != nil {
 		// Print the underlying error to stderr so an operator can
 		// distinguish "JWKS unreachable" from "iss mismatch" from
@@ -322,11 +324,14 @@ func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
 	// the /oauth/callback path off the end keeps it in lockstep with
 	// however the operator configured the BFF).
 	authLogoutURL := ""
-	if s.oauth != nil {
+	if oauthC := s.ensureOAuth(); oauthC != nil {
 		postLogoutTarget := postLogoutTargetFromRedirectURI(s.cfg.OAuthRedirectURI)
-		authLogoutURL = s.oauth.issuer + "/logout?post_logout_redirect_uri=" +
+		authLogoutURL = oauthC.issuer + "/logout?post_logout_redirect_uri=" +
 			urlQueryEscape(postLogoutTarget)
 	}
+	// If oauthC is still nil (auth-server unreachable at logout time),
+	// the FE will navigate to "/" — local session is already cleared.
+	// The auth-server session will eventually idle out on its own.
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,

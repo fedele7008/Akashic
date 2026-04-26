@@ -10,6 +10,7 @@ import (
 	"os/signal"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -28,10 +29,21 @@ type Server struct {
 	audit            *AuditWriter
 	feAssets         fs.FS // embedded FE; nil = no FE served (API-only mode)
 
-	// Phase 7 additions: OAuth client + Redis-backed sessions. nil
-	// when the corresponding init wasn't reachable (e.g., Redis is
-	// down). Handlers that depend on these check + return 503.
-	oauth    *oauthClient
+	// Phase 7: OAuth client is LAZILY initialized — see ensureOAuth().
+	// We don't require it at server startup so that admin-bff and
+	// akashic-server can start in any order, restart independently,
+	// and recover gracefully if one is briefly unavailable. The first
+	// /login request retries init if startup-time init failed.
+	//
+	// oauthMu serializes init retries so concurrent /login requests
+	// don't race the file-read + parse work. Once oauth is non-nil,
+	// reads happen via atomic.Pointer (no mutex on the hot path).
+	oauth   atomic.Pointer[oauthClient]
+	oauthMu sync.Mutex // serializes ensureOAuth() init attempts
+
+	// sessions + rdb are still required at startup — Redis being
+	// unreachable means session storage is genuinely broken, which
+	// is different from "auth-server isn't up yet."
 	sessions *sessionStore
 	rdb      *redis.Client
 
@@ -76,35 +88,73 @@ func NewServer(feAssets fs.FS) (*Server, error) {
 	}
 	sess := newSessionStore(rdb, cfg.OAuthSessionIdle, cfg.OAuthSessionAbsolute)
 
-	// OAuth client init. Failure here is non-fatal: the bootstrap
-	// flow still works with the control client; we just won't be
-	// able to log anyone in. This separation is deliberate -- e.g.,
-	// during bootstrap-only deployments the operator may not have
-	// rotated the akashic-admin secret yet, and forcing OAuth init
-	// at that point would block bootstrap.
-	oauthC, oauthErr := newOAuthClient(cfg)
-	if oauthErr != nil {
-		fmt.Fprintf(os.Stderr,
-			"admin-bff: OAuth client init failed (login disabled): %v\n", oauthErr)
-		oauthC = nil
-	}
-
 	// Two rate-limit buckets:
 	//   - bootstrapLimiter: tight cap on /api/bootstrap/create-root,
 	//     mirrors the control-plane per-CN limit (5/min)
 	//   - rateLimiter: looser cap on idempotent reads (status, health)
 	//     to keep abusive scanning out of the logs
-	return &Server{
+	s := &Server{
 		cfg:              cfg,
 		controlClient:    cc,
 		bootstrapLimiter: newRateLimiter(cfg.BootstrapRateLimit, time.Minute, cfg.TrustedProxies),
 		rateLimiter:      newRateLimiter(30, time.Minute, cfg.TrustedProxies),
 		audit:            newAuditWriter(),
 		feAssets:         feAssets,
-		oauth:            oauthC,
 		sessions:         sess,
 		rdb:              rdb,
-	}, nil
+	}
+
+	// Try to initialize the OAuth client opportunistically. Failure
+	// is fine — ensureOAuth() will retry on the first /login that
+	// arrives. This keeps admin-bff startup independent of akashic
+	// startup ordering: each can boot in any order, restart
+	// independently, and the BFF recovers automatically.
+	if oauthC, err := newOAuthClient(cfg); err == nil {
+		s.oauth.Store(oauthC)
+	} else {
+		fmt.Fprintf(os.Stderr,
+			"admin-bff: OAuth client not yet ready (will retry on first login): %v\n", err)
+	}
+
+	return s, nil
+}
+
+// ensureOAuth returns the OAuth client, initializing it lazily on
+// first call if startup-time init failed. Subsequent calls return
+// the cached client without re-doing init work.
+//
+// Returns nil iff init still fails (e.g., the akashic-admin client
+// secret file genuinely doesn't exist anywhere on the filesystem,
+// or the akashic CA bundle is missing). Callers should distinguish
+// "not yet ready" from "permanently broken" by retrying — a transient
+// nil here typically resolves itself within seconds of akashic's
+// first startup.
+func (s *Server) ensureOAuth() *oauthClient {
+	if c := s.oauth.Load(); c != nil {
+		return c
+	}
+
+	// Slow path: serialize concurrent /login requests so we don't
+	// re-do file I/O from every goroutine simultaneously.
+	s.oauthMu.Lock()
+	defer s.oauthMu.Unlock()
+
+	// Re-check inside the lock — another goroutine may have just
+	// initialized.
+	if c := s.oauth.Load(); c != nil {
+		return c
+	}
+
+	c, err := newOAuthClient(s.cfg)
+	if err != nil {
+		// Stay nil; next /login will retry. Logging here would spam
+		// stderr on every login attempt while akashic is down — the
+		// audit log already records failed-login outcomes for that.
+		return nil
+	}
+	s.oauth.Store(c)
+	fmt.Fprintln(os.Stderr, "admin-bff: OAuth client now ready (lazy init succeeded)")
+	return c
 }
 
 // Run starts the HTTP listener and blocks until SIGINT/SIGTERM. Returns

@@ -617,8 +617,15 @@ services:
     depends_on:
       vault-agent:
         condition: service_started
-      akashic:
-        condition: service_started
+      # Note: akashic is intentionally NOT a depends_on here. The BFF
+      # is designed to start independently — it lazy-initializes its
+      # OAuth client on the first /login request, retrying if the
+      # akashic-admin client secret isn't yet on disk. This decouples
+      # the BFF and akashic startup orderings: each can boot in any
+      # order, restart independently, and recover automatically. Same
+      # design works in container mode and host-akashic mode without
+      # any startup-ordering hacks.
+      #
       # Phase 7: BFF holds OAuth sessions in Redis. We Ping at startup
       # so a misconfigured Redis fails BFF init loudly. Hard dep is
       # appropriate -- without Redis, login is broken.
