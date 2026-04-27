@@ -60,10 +60,12 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 
 	csrf := s.ensureLoginCSRF(w, r)
 	returnTo := safeReturnTo(r.URL.Query().Get("return_to"))
+	cancelTo := cancelTargetFromReturnTo(returnTo)
 
 	renderTemplate(w, "login.html.tmpl", http.StatusOK, map[string]any{
 		"CSRFToken": csrf,
 		"ReturnTo":  returnTo,
+		"CancelURL": cancelTo,
 		"Username":  "",
 		"Error":     "",
 	})
@@ -299,6 +301,7 @@ func (s *Server) renderLoginError(w http.ResponseWriter, r *http.Request, msg, u
 	renderTemplate(w, "login.html.tmpl", http.StatusOK, map[string]any{
 		"CSRFToken": csrf,
 		"ReturnTo":  returnTo,
+		"CancelURL": cancelTargetFromReturnTo(returnTo),
 		"Username":  username,
 		"Error":     msg,
 	})
@@ -380,6 +383,48 @@ func clientIP(r *http.Request) string {
 		return r.RemoteAddr[:i]
 	}
 	return r.RemoteAddr
+}
+
+// cancelTargetFromReturnTo derives a "go back to where you came
+// from" URL for the login page's Cancel link.
+//
+// The auth server doesn't know which OAuth client started the flow,
+// but the `return_to` param is typically a /authorize URL whose
+// `redirect_uri` query value points at the client. The origin of that
+// redirect_uri is, by definition, a public URL the user's browser
+// can reach — and is the right "home" for that client.
+//
+// Returns "" when no safe target can be derived (no return_to, not
+// an /authorize URL, missing/malformed redirect_uri). The template
+// hides the Cancel link when the value is empty.
+//
+// Security: only http(s) schemes are accepted. The redirect_uri
+// itself is implicitly trusted in this codepath because the OAuth
+// client registration enforces an allowlist before we ever render
+// /login — but we still scheme-check defensively.
+func cancelTargetFromReturnTo(returnTo string) string {
+	if returnTo == "" {
+		return ""
+	}
+	// return_to is a relative URL like "/authorize?client_id=...&redirect_uri=...".
+	parsed, err := url.Parse(returnTo)
+	if err != nil {
+		return ""
+	}
+	redirectURI := parsed.Query().Get("redirect_uri")
+	if redirectURI == "" {
+		return ""
+	}
+	ru, err := url.Parse(redirectURI)
+	if err != nil || ru.Host == "" {
+		return ""
+	}
+	if ru.Scheme != "http" && ru.Scheme != "https" {
+		return ""
+	}
+	// Origin only — the callback path itself is not a useful
+	// destination for a "Cancel and go home" affordance.
+	return ru.Scheme + "://" + ru.Host + "/"
 }
 
 // safeReturnTo validates a return_to URL is same-origin (relative

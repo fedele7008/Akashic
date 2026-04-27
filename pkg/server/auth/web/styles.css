@@ -116,3 +116,19 @@ button:hover { background: var(--accent-hover); }
   color: var(--text-muted);
   margin-top: 12px;
 }
+
+.cancel {
+  margin-top: 18px;
+  text-align: center;
+  font-size: 13px;
+}
+
+.cancel a {
+  color: var(--text-muted);
+  text-decoration: none;
+}
+
+.cancel a:hover {
+  color: var(--text);
+  text-decoration: underline;
+}

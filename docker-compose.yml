@@ -585,6 +585,11 @@ services:
       # below take the same value.
       AKASHIC_OAUTH_ISSUER: "${AKASHIC_OAUTH_ISSUER:-https://auth.akashic.local}"
       AKASHIC_OAUTH_ADMIN_REDIRECT_URI: "${AKASHIC_OAUTH_ADMIN_REDIRECT_URI:-https://admin.akashic.local/oauth/callback}"
+      # Portal callback. Same value the portal container reads — they
+      # MUST agree exactly (the akashic-server registers this in
+      # client_services; the portal sends it on /authorize). If the
+      # two diverge, the auth server returns redirect_uri_mismatch.
+      AKASHIC_OAUTH_PORTAL_REDIRECT_URI: "${AKASHIC_OAUTH_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
       TZ: ${AKASHIC_TZ:-UTC}
     ports:
       # Auth server (8080): public — OAuth/OIDC.
@@ -796,9 +801,14 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Branding / metadata read by app/layout.tsx + app/page.tsx.
+      # Branding / metadata read by app/layout.tsx + app/(public)/page.tsx.
       AKASHIC_PORTAL_BRAND_NAME: "${AKASHIC_PORTAL_BRAND_NAME:-Akashic}"
       AKASHIC_PORTAL_TAGLINE: "${AKASHIC_PORTAL_TAGLINE:-Identity provider built on Akashic.}"
+      AKASHIC_PORTAL_DESCRIPTION: "${AKASHIC_PORTAL_DESCRIPTION:-Sign in or create an account to manage your identity and OAuth integrations.}"
+      # Optional: shown on the /forgot informational page so users
+      # know who to contact for password reset (Phase 9 will add the
+      # real flow). Empty string disables the contact line.
+      AKASHIC_PORTAL_SUPPORT_EMAIL: "${AKASHIC_PORTAL_SUPPORT_EMAIL:-}"
 
       # --- Chapter 3: session ---
       # 32+ byte secret used by iron-session for AEAD encryption of the
@@ -808,7 +818,10 @@ services:
       # AKASHIC_PORTAL_SESSION_SECRET in their env.
       AKASHIC_PORTAL_SESSION_SECRET: "${AKASHIC_PORTAL_SESSION_SECRET:-dev-only-please-replace-this-with-32-or-more-random-bytes}"
       # Redis (DB 2 — separate from auth-server's DB 0 and admin-bff's DB 1).
-      AKASHIC_PORTAL_REDIS_HOST: redis
+      # Use the network alias (matching the Redis TLS cert's SAN);
+      # the bare `redis` service name is NOT in the cert and TLS
+      # validation rejects it.
+      AKASHIC_PORTAL_REDIS_HOST: redis.akashic.local
       AKASHIC_PORTAL_REDIS_PORT: "6379"
       AKASHIC_PORTAL_REDIS_PASSWORD: "${AKASHIC_DATABASE_REDIS_PASSWORD:-}"
       AKASHIC_PORTAL_REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
@@ -823,7 +836,7 @@ services:
       # at /keys/oauth/client-secrets/akashic-portal.txt. The portal
       # reads it at first OAuth call via the entrypoint that exports
       # AKASHIC_PORTAL_CLIENT_SECRET — see the Dockerfile entrypoint.
-      AKASHIC_PORTAL_REDIRECT_URI: "${AKASHIC_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
+      AKASHIC_OAUTH_PORTAL_REDIRECT_URI: "${AKASHIC_OAUTH_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
       AKASHIC_PORTAL_OAUTH_SCOPES: "openid profile email"
 
       # --- Chapter 3: API server (bearer target) ---

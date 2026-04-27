@@ -16,6 +16,7 @@ import { exchangeCode, fetchUserInfo, getIdTokenClaims, resetOAuthCache } from "
 import { clearPreSession, readPreSession } from "../../../../server/pre-session";
 import { rotateAndCreateSession } from "../../../../server/session";
 import { auditLog, resolveAuditIp } from "../../../../server/audit";
+import { portalUrl } from "../../../../lib/env";
 
 export async function GET(req: NextRequest) {
   const params = req.nextUrl.searchParams;
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
       message: `${protocolError}: ${params.get("error_description") ?? ""}`.trim(),
     });
     await clearPreSession();
-    return NextResponse.redirect(new URL("/sign-in?error=auth_failed", req.url), {
+    return NextResponse.redirect(portalUrl("/sign-in?error=auth_failed"), {
       status: 303,
     });
   }
@@ -43,7 +44,7 @@ export async function GET(req: NextRequest) {
       outcome: "fail",
       message: "missing code or state on callback",
     });
-    return NextResponse.redirect(new URL("/sign-in?error=bad_callback", req.url), {
+    return NextResponse.redirect(portalUrl("/sign-in?error=bad_callback"), {
       status: 303,
     });
   }
@@ -54,7 +55,7 @@ export async function GET(req: NextRequest) {
       outcome: "fail",
       message: "missing or expired pre-session cookie",
     });
-    return NextResponse.redirect(new URL("/sign-in?error=expired", req.url), {
+    return NextResponse.redirect(portalUrl("/sign-in?error=expired"), {
       status: 303,
     });
   }
@@ -78,7 +79,7 @@ export async function GET(req: NextRequest) {
       message: `token exchange threw: ${err instanceof Error ? err.message : String(err)}`,
     });
     await clearPreSession();
-    return NextResponse.redirect(new URL("/sign-in?error=token_exchange_failed", req.url), {
+    return NextResponse.redirect(portalUrl("/sign-in?error=token_exchange_failed"), {
       status: 303,
     });
   }
@@ -90,7 +91,7 @@ export async function GET(req: NextRequest) {
     });
     await clearPreSession();
     return NextResponse.redirect(
-      new URL(`/sign-in?error=${encodeURIComponent(result.code.toLowerCase())}`, req.url),
+      portalUrl(`/sign-in?error=${encodeURIComponent(result.code.toLowerCase())}`),
       { status: 303 },
     );
   }
@@ -108,7 +109,7 @@ export async function GET(req: NextRequest) {
       message: "no id_token in token response",
     });
     await clearPreSession();
-    return NextResponse.redirect(new URL("/sign-in?error=no_id_token", req.url), {
+    return NextResponse.redirect(portalUrl("/sign-in?error=no_id_token"), {
       status: 303,
     });
   }
@@ -136,7 +137,7 @@ export async function GET(req: NextRequest) {
       message: "no sub claim",
     });
     await clearPreSession();
-    return NextResponse.redirect(new URL("/sign-in?error=missing_sub", req.url), {
+    return NextResponse.redirect(portalUrl("/sign-in?error=missing_sub"), {
       status: 303,
     });
   }
@@ -162,7 +163,7 @@ export async function GET(req: NextRequest) {
 
   // Bounce to return_to or root.
   const target = pre.return_to ?? "/";
-  return NextResponse.redirect(new URL(target, req.url), { status: 303 });
+  return NextResponse.redirect(portalUrl(target), { status: 303 });
 }
 
 function stringClaim(

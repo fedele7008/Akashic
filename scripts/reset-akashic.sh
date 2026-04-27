@@ -11,6 +11,24 @@
 #   - test a brand-new install path on the same machine
 #   - recover from a corrupted state where something got out of sync
 #
+# Usage:
+#   ./scripts/reset-akashic.sh           # project-scoped reset
+#   ./scripts/reset-akashic.sh --deep    # also prune docker build cache
+#                                        # + dangling images (host-wide)
+#
+# Why --deep exists:
+#   Default mode reclaims roughly 1–2 MB of named-volume storage. The
+#   real disk hog after a long iterative build session is Docker's own
+#   build cache — it can climb to 20–40 GB on macOS Docker Desktop and
+#   eventually cause "no space left on device" errors inside any
+#   container, including a half-initialised Vault. --deep adds the
+#   build-cache + dangling-image prunes that the default doesn't touch.
+#
+#   --deep deliberately does NOT use `docker system prune --volumes`:
+#   that would also nuke other projects' named volumes on the same
+#   host. We only prune cache + images — both of which are caches that
+#   regenerate on the next build.
+#
 # What gets wiped:
 #
 #   Host-side state
@@ -59,6 +77,30 @@
 #      re-create the root user via the admin UI
 
 set -euo pipefail
+
+# ──────────────────────────────────────────────────────────────────────────
+# 0. Parse args
+# ──────────────────────────────────────────────────────────────────────────
+deep=false
+for arg in "$@"; do
+    case "$arg" in
+        --deep)
+            deep=true
+            ;;
+        -h|--help)
+            # Surface the file header (the lines starting with `# `) as
+            # the usage text. Cheaper to maintain than duplicating the
+            # docs in a help string.
+            sed -n '2,/^$/p' "$0" | sed 's/^# \{0,1\}//'
+            exit 0
+            ;;
+        *)
+            echo "Unknown option: $arg" >&2
+            echo "Usage: $0 [--deep]" >&2
+            exit 2
+            ;;
+    esac
+done
 
 current_dir_name="${PWD##*/}"
 if [[ "$current_dir_name" != "Akashic" ]]; then
@@ -126,6 +168,38 @@ else
     echo "  (no akashic_* volumes found — nothing to remove)"
 fi
 
+# ──────────────────────────────────────────────────────────────────────────
+# 4. (--deep only) Reclaim Docker build cache + dangling images
+# ──────────────────────────────────────────────────────────────────────────
+# These prunes are HOST-WIDE — they affect every project sharing this
+# Docker daemon, not just Akashic. Both targets are pure caches that
+# regenerate on the next build, so the cost is build-time slowdown,
+# not data loss.
+#
+# Why this lives behind a flag instead of running by default:
+#   - The default reset is meant to be fast and project-scoped; deep
+#     prunes can take 30s+ on a busy machine.
+#   - Other projects on the same host might be in mid-iteration; we
+#     don't want to throw away their build cache silently every time
+#     someone resets Akashic.
+#
+# What we deliberately do NOT do here:
+#   - `docker system prune --volumes` would nuke OTHER projects' named
+#     volumes too (their database state, etc.). That's an operator-
+#     decision, not a reset-akashic decision.
+#   - `docker container prune` — stopped containers from other projects
+#     might still be useful to their owners.
+if [[ "$deep" == "true" ]]; then
+    echo ""
+    echo "Deep clean: pruning Docker build cache + dangling images (host-wide)..."
+    docker builder prune --all --force 2>&1 | sed 's/^/  /'
+    docker image prune --all --force 2>&1 | sed 's/^/  /'
+fi
+
 echo ""
 echo "Reset complete."
+if [[ "$deep" != "true" ]]; then
+    echo "Tip: pass --deep to also prune Docker build cache + dangling images."
+    echo "     Useful if you hit \"no space left on device\" inside containers."
+fi
 echo "Next: docker compose [--profile app] up -d"

@@ -19,8 +19,33 @@
  */
 
 import * as oauth from "oauth4webapi";
+import { readFileSync } from "node:fs";
 
 import { env } from "../lib/env";
+
+/** Path the akashic-server writes the akashic-portal client secret to. */
+const CLIENT_SECRET_FALLBACK_FILE = "/keys/oauth/client-secrets/akashic-portal.txt";
+
+/**
+ * Resolve the OAuth client secret. Prefers the env var; falls back
+ * to reading the secret file akashic-server provisions on first
+ * boot. The file fallback decouples portal startup from akashic
+ * startup — see lib/env.ts comment on `clientSecretFromEnv` for
+ * the full reasoning.
+ *
+ * Only call this from inside Node-runtime code (route handlers).
+ * Edge-runtime callers cannot use node:fs.
+ */
+function resolveClientSecret(): string {
+  if (env.oauth.clientSecretFromEnv) return env.oauth.clientSecretFromEnv;
+  try {
+    return readFileSync(CLIENT_SECRET_FALLBACK_FILE, "utf8").trim();
+  } catch {
+    throw new Error(
+      `OAuth client secret not available: env AKASHIC_PORTAL_CLIENT_SECRET unset and ${CLIENT_SECRET_FALLBACK_FILE} unreadable`,
+    );
+  }
+}
 
 interface OAuthClientCache {
   issuer: oauth.AuthorizationServer;
@@ -48,10 +73,21 @@ export async function getOAuth(): Promise<OAuthClientCache> {
 
   const client: oauth.Client = {
     client_id: env.oauth.clientId,
-    token_endpoint_auth_method: "client_secret_basic",
+    // Use client_secret_post (credentials in form body) rather than
+    // client_secret_basic (Authorization header). Two reasons:
+    //   1. RFC 6749 §2.3.1 requires URL-encoding the client_id and
+    //      secret before base64 in the Basic header. oauth4webapi
+    //      complies; many auth-server implementations (ours included)
+    //      compare raw bytes and never URL-decode. So `akashic-portal`
+    //      sent as `akashic%2Dportal` looks like a different client_id
+    //      and we get 401 invalid_client. Form bodies don't have this
+    //      asymmetry — both sides handle URL-encoding uniformly.
+    //   2. Our auth server advertises both methods in discovery, so
+    //      this is a pure client-side switch.
+    token_endpoint_auth_method: "client_secret_post",
   };
 
-  const clientAuth = oauth.ClientSecretBasic(env.oauth.clientSecret);
+  const clientAuth = oauth.ClientSecretPost(resolveClientSecret());
 
   cache = {
     issuer,

@@ -883,6 +883,31 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 		os.Exit(1)
 	}
 
+	// Inspect the status code BEFORE unmarshaling. Vault's error
+	// responses ({"errors":["..."]}) are valid JSON and would parse
+	// silently into our success-shape struct with empty fields,
+	// turning a real Vault error into a misleading "expected N keys,
+	// got 0" assertion.
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		// Try to extract the structured Vault error message.
+		var errResp struct {
+			Errors  []string `json:"errors"`
+			Warnings []string `json:"warnings"`
+		}
+		_ = json.Unmarshal(body, &errResp)
+		details := fmt.Sprintf("HTTP %d", resp.StatusCode)
+		if len(errResp.Errors) > 0 {
+			details += ": " + strings.Join(errResp.Errors, "; ")
+		} else if len(body) > 0 {
+			details += ": " + string(body)
+		}
+		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
+			"Vault rejected the initialization request",
+			"Run with --verbose to see the full request/response.",
+		}, details, true)
+		os.Exit(1)
+	}
+
 	type InitResponse struct {
 		Keys       []string `json:"keys"`
 		KeysBase64 []string `json:"keys_base64"`
@@ -898,8 +923,15 @@ func (cmdCtx *CliContext) RunPkiVaultInitCmd(cmd *cobra.Command, args []string) 
 		os.Exit(1)
 	}
 	if len(initResponse.Keys) != numKey {
+		// Surface the actual body so the operator can see what Vault
+		// returned. Without this, "got 0" was effectively opaque.
+		bodySnippet := string(body)
+		if len(bodySnippet) > 400 {
+			bodySnippet = bodySnippet[:400] + "..."
+		}
 		cmdCtx.printResultTable("VAULT INIT FAILED", []string{
 			"Assertion failed",
+			"Response body: " + bodySnippet,
 		}, fmt.Sprintf("expected %d keys, got %d", numKey, len(initResponse.Keys)), true)
 		os.Exit(1)
 	}

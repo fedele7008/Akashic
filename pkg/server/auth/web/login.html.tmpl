@@ -35,6 +35,12 @@
 
       <button type="submit">Sign in</button>
     </form>
+
+    {{if .CancelURL}}
+    <p class="cancel">
+      <a href="{{.CancelURL}}">← Back</a>
+    </p>
+    {{end}}
   </main>
 </body>
 </html>
