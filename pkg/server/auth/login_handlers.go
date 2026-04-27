@@ -58,6 +58,11 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if s.bootstrapBlocked(r.Context()) {
+		s.renderBootstrapPending(w)
+		return
+	}
+
 	csrf := s.ensureLoginCSRF(w, r)
 	returnTo := safeReturnTo(r.URL.Query().Get("return_to"))
 	cancelTo := cancelTargetFromReturnTo(returnTo)
@@ -68,6 +73,17 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 		"CancelURL": cancelTo,
 		"Username":  "",
 		"Error":     "",
+	})
+}
+
+// renderBootstrapPending renders a friendly 503 explaining that the
+// deployment hasn't been bootstrapped yet, so end-user sign-in is
+// disabled. Used by both the login GET and POST handlers.
+func (s *Server) renderBootstrapPending(w http.ResponseWriter) {
+	renderTemplate(w, "error.html.tmpl", http.StatusServiceUnavailable, map[string]any{
+		"Title":   "Setup not yet complete",
+		"Message": "This Akashic deployment is still being set up by its operator. Sign-in becomes available once bootstrap is finished.",
+		"Detail":  "Operators: complete bootstrap via the CLI or admin BFF, then refresh.",
 	})
 }
 
@@ -82,6 +98,13 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	// Bootstrap gate. Catches stale form submissions that crossed the
+	// network just before the operator finished bootstrap (and direct
+	// hits that bypass the GET render).
+	if s.bootstrapBlocked(r.Context()) {
+		s.renderBootstrapPending(w)
 		return
 	}
 	if err := r.ParseForm(); err != nil {

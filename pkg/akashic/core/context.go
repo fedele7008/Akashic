@@ -285,6 +285,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		cfg.OAuth.AuthSessionIdleTTL, cfg.OAuth.AuthSessionMaxTTL)
 	authService := authpkg.NewService(app.LDAPClient, rbacService, userRepo, app.Logger)
 	app.AuthServer.SetOAuthDeps(codeStore, sessionStore, authService, app.DB.DB, app.Redis)
+	// Phase 8: gate /login on bootstrap completion. The auth server
+	// short-circuits to a friendly "setup not yet complete" page
+	// while NeedsBootstrap is true, so end users can't sneak in
+	// before the operator has finished mint-the-root-user.
+	app.AuthServer.SetBootstrapManager(app.BootstrapMgr)
 
 	// Phase 7 Step 8: register built-in OAuth client services on
 	// startup. The akashic-admin client is what admin-bff uses to
@@ -322,6 +327,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// bearer-authenticated resource server for /users/* and /clients/*.
 	app.APIServer = api.New(app.Config, app.Logger)
 	app.APIServer.SetDeps(app.OAuthKeyStore, userRepo, app.LDAPClient, authService, app.DB)
+	// Phase 8: gate /users/register on bootstrap completion (mirrors
+	// the auth server's /login gate). Direct API hits and portal-side
+	// signups both block until operator setup is done.
+	app.APIServer.SetBootstrapManager(app.BootstrapMgr)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(

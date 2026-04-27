@@ -70,6 +70,17 @@ func (s *Server) handleRegisterUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Bootstrap gate. Until the operator has minted a root user, the
+	// public signup surface is disabled — this enforces "operator
+	// finishes setup first" as a non-bypassable property.
+	if s.bootstrapBlocked(r.Context()) {
+		response.WriteJSON(w, http.StatusServiceUnavailable,
+			response.Fail("BOOTSTRAP_INCOMPLETE",
+				"this deployment is still being set up by its operator; sign-up will be available once bootstrap is finished",
+				nil))
+		return
+	}
+
 	var req registerUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.WriteJSON(w, http.StatusBadRequest,

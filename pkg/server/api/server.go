@@ -21,6 +21,7 @@ package api
 
 import (
 	authpkg "akashic/akashic/pkg/auth"
+	"akashic/akashic/pkg/bootstrap"
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/database/akashic_postgres"
 	"akashic/akashic/pkg/ldap"
@@ -73,6 +74,12 @@ type Server struct {
 	ldapClient *ldap.Client
 	authSvc    *authpkg.Service
 	db         *akashic_postgres.DB
+
+	// Phase 8: bootstrap-mode gate. When the deployment hasn't yet
+	// minted a root user, /users/register refuses signup so the
+	// operator's setup runs first. Wired in via SetBootstrapManager;
+	// nil is tolerated (handlers fail-open during init races).
+	bootstrapMgr *bootstrap.Manager
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -102,6 +109,34 @@ func (s *Server) SetDeps(
 	s.ldapClient = ldapClient
 	s.authSvc = authSvc
 	s.db = db
+}
+
+// SetBootstrapManager wires the bootstrap-state checker so signup
+// can short-circuit before bootstrap completes. Same fail-open
+// semantics as the auth server: nil manager or error → don't
+// block.
+func (s *Server) SetBootstrapManager(m *bootstrap.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bootstrapMgr = m
+}
+
+// bootstrapBlocked returns true iff the deployment is still in
+// bootstrap mode. Mirrors the auth server's helper of the same name.
+func (s *Server) bootstrapBlocked(ctx context.Context) bool {
+	s.mu.RLock()
+	mgr := s.bootstrapMgr
+	s.mu.RUnlock()
+	if mgr == nil {
+		return false
+	}
+	needs, err := mgr.NeedsBootstrap(ctx)
+	if err != nil {
+		s.logger.App.Warn("bootstrap-state check failed; allowing through",
+			zap.Error(err))
+		return false
+	}
+	return needs
 }
 
 // Start begins serving on the configured address. Mirrors the auth

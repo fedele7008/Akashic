@@ -2,6 +2,7 @@ package auth
 
 import (
 	authpkg "akashic/akashic/pkg/auth"
+	"akashic/akashic/pkg/bootstrap"
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/database/akashic_redis"
 	"akashic/akashic/pkg/logging"
@@ -39,6 +40,13 @@ type Server struct {
 	authService   *authpkg.Service
 	db            *gorm.DB
 	redis         *akashic_redis.Client // for the rate-limit middleware
+
+	// Phase 8: bootstrap-mode gate. When the deployment hasn't yet
+	// minted a root user (NeedsBootstrap == true), /login and the
+	// authorize endpoint refuse to serve end users — only the
+	// operator's bootstrap path on the control plane works. Wired
+	// in via SetBootstrapManager.
+	bootstrapMgr *bootstrap.Manager
 }
 
 // ServerState represents the current state of the server
@@ -80,6 +88,37 @@ func (s *Server) SetOAuthKeyStore(ks *oauth.KeyStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.oauthKeyStore = ks
+}
+
+// SetBootstrapManager wires the bootstrap manager so /login can
+// short-circuit to a "system not yet ready" page when the operator
+// hasn't completed bootstrap. Phase 8: nil is tolerated (handlers
+// fail-open in that case so an init-race doesn't lock everyone out).
+func (s *Server) SetBootstrapManager(m *bootstrap.Manager) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.bootstrapMgr = m
+}
+
+// bootstrapBlocked returns true iff the deployment is still in
+// bootstrap mode (no root user yet). When the manager isn't wired
+// or a check errors, returns false — fail-open here is the right
+// trade-off because the alternative is a hard lockout during a
+// transient DB hiccup.
+func (s *Server) bootstrapBlocked(ctx context.Context) bool {
+	s.mu.RLock()
+	mgr := s.bootstrapMgr
+	s.mu.RUnlock()
+	if mgr == nil {
+		return false
+	}
+	needs, err := mgr.NeedsBootstrap(ctx)
+	if err != nil {
+		s.logger.App.Warn("bootstrap-state check failed; allowing through",
+			zap.Error(err))
+		return false
+	}
+	return needs
 }
 
 // OAuthKeyStore returns the wired keystore (may be nil during init

@@ -87,6 +87,13 @@ export function SignUpForm() {
       // The api server's validation messages aren't field-keyed, so
       // surface as top-level — the user can re-read the field hints.
       setTopError(message);
+    } else if (code === "BOOTSTRAP_INCOMPLETE") {
+      // Operator hasn't finished mint-the-root-user yet. Stronger
+      // wording than the api server's stock message — this isn't a
+      // user-fixable problem.
+      setTopError(
+        "This deployment is still being set up by its operator. Sign-up will be available once initial setup is complete.",
+      );
     } else {
       setTopError(message);
     }
