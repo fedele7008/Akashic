@@ -18,6 +18,7 @@ import (
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/repository"
+	"akashic/akashic/pkg/server/api"
 	"akashic/akashic/pkg/server/auth"
 	"akashic/akashic/pkg/server/control"
 
@@ -44,6 +45,7 @@ type AkashicApp struct {
 	DeprovisioningService *ldap.DeprovisioningService
 	BootstrapMgr          *bootstrap.Manager
 	AuthServer            *auth.Server
+	APIServer             *api.Server // Phase 8: bearer-token resource server
 	ControlServer         *control.Server
 	OAuthKeyStore         *oauth.KeyStore // Phase 7: JWT signing keys
 	closerFns             []func()
@@ -305,6 +307,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	}
 	app.Logger.App.Info("Built-in OAuth client services ready")
 
+	// Create the API server (but don't start yet). Phase 8: dedicated
+	// bearer-authenticated resource server for /users/* and /clients/*.
+	app.APIServer = api.New(app.Config, app.Logger)
+	app.APIServer.SetDeps(app.OAuthKeyStore, userRepo, app.LDAPClient, authService, app.DB)
+
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(
 		app.ctx,
@@ -315,10 +322,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		app.cancel, // Pass cancel function for shutdown
 	)
 
-	// Phase 8: wire user-management deps into the control server.
-	// Required by the new /users/* and /clients/* endpoints; see
-	// pkg/server/control/{users,clients}_handlers.go.
-	app.ControlServer.SetUserDeps(userRepo, app.LDAPClient, app.DB)
+	// Phase 8: wire the API server into the control plane so its
+	// lifecycle endpoints (/api/start, /api/stop, /api/restart) can
+	// manage it just like /auth/* manages the auth server.
+	app.ControlServer.SetAPIServer(app.APIServer)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
@@ -443,16 +450,40 @@ func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 			app.Logger.App.Error("Failed to auto-start auth server", zap.Error(err))
 			// Don't fail - control server is still running, can start manually
 		}
+
+		// Phase 8: also auto-start the API (resource) server through its
+		// state manager (same pattern as the auth server above). Going
+		// through the manager — rather than calling app.APIServer.Start
+		// directly — keeps the two state machines (api.Server.state and
+		// APIStateManager.state) in lockstep, so a later POST /api/restart
+		// sees the manager believing the server is running and follows
+		// the Stop→Start path instead of jumping straight to Start.
+		// Failure semantics match auth: non-fatal, recoverable via
+		// POST /api/start.
+		app.Logger.App.Info("Auto-starting API server",
+			zap.String("requested-address", app.APIServer.GetAddress()))
+		if err := app.ControlServer.GetAPIStateManager().Start(app.ctx); err != nil {
+			app.Logger.App.Error("Failed to auto-start API server", zap.Error(err))
+		}
 	} else {
-		app.Logger.App.Info("Auth server auto-start disabled (--no-auto-start flag)")
+		app.Logger.App.Info("Auth + API server auto-start disabled (--no-auto-start flag)")
 		app.Logger.App.Info("Use control API to start: POST http://localhost:8081/auth/start")
+		app.Logger.App.Info("                          POST http://localhost:8081/api/start")
 	}
 
-	// Register auth server cleanup
+	// Register server cleanups (LIFO — API stops before auth, both
+	// before deps).
 	app.AddCloser(func() {
 		if app.AuthServer.IsRunning() {
 			if err := app.AuthServer.Stop(); err != nil {
 				app.Logger.App.Error("Error stopping auth server", zap.Error(err))
+			}
+		}
+	})
+	app.AddCloser(func() {
+		if app.APIServer.IsRunning() {
+			if err := app.APIServer.Stop(); err != nil {
+				app.Logger.App.Error("Error stopping API server", zap.Error(err))
 			}
 		}
 	})
@@ -493,19 +524,28 @@ func (app *AkashicApp) Run(cmd *cobra.Command, args []string) error {
 	cfg := app.Config.GetConfig()
 	ctrlURL := accessURL(app.ControlServer.GetAddress(), cfg.Server.Control.TLS.Enabled)
 	authURL := accessURL(app.AuthServer.GetAddress(), cfg.Server.Auth.TLS.Enabled)
+	apiURL := accessURL(app.APIServer.GetAddress(), cfg.Server.API.TLS.Enabled)
+	statusOf := func(running bool) string {
+		if running {
+			return "Running"
+		}
+		return "Stopped"
+	}
 
 	app.Logger.App.Info("Akashic server started successfully",
 		zap.String("control_api", ctrlURL),
 		zap.String("auth_api", authURL),
-		zap.Bool("auth_running", app.AuthServer.IsRunning()))
+		zap.String("resource_api", apiURL),
+		zap.Bool("auth_running", app.AuthServer.IsRunning()),
+		zap.Bool("api_running", app.APIServer.IsRunning()))
 
 	fmt.Printf("\n")
 	fmt.Printf("=======================================================================\n")
 	fmt.Printf("  Akashic Server Running (PID:%v)\n", app.ControlServer.GetPID())
 	fmt.Printf("=======================================================================\n")
-	fmt.Printf("  Control API: %s\n", ctrlURL)
-	fmt.Printf("  Auth API:    %s\n", authURL)
-	fmt.Printf("  Auth Status: %s\n", map[bool]string{true: "Running", false: "Stopped"}[app.AuthServer.IsRunning()])
+	fmt.Printf("  Control API:  %s   [%s]\n", ctrlURL, "mTLS")
+	fmt.Printf("  Auth API:     %s   [%s]\n", authURL, statusOf(app.AuthServer.IsRunning()))
+	fmt.Printf("  Resource API: %s   [%s, bearer]\n", apiURL, statusOf(app.APIServer.IsRunning()))
 	fmt.Printf("=======================================================================\n")
 
 	// Display bootstrap information if needed

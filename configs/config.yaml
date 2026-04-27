@@ -22,6 +22,19 @@ server:
       # same template above.
       ca_file: "./certs/akashic/mtls-ca.crt"
       client_auth_required: true
+  # Phase 8: API (resource) server. Hosts bearer-token-authenticated
+  # user/client self-service endpoints. The portal calls these with
+  # the access token from the user's OAuth login. Public endpoints
+  # like POST /users/register skip the bearer check (no token yet).
+  api:
+    host: "0.0.0.0"
+    port: 8082
+    tls:
+      enabled: true
+      # Cert issued by services/vault-agent/templates/akashic-api.tpl
+      # from pki-internal/issue/server. CN api.akashic.local.
+      cert_file: "./certs/akashic/api.crt"
+      key_file: "./certs/akashic/api.key"
 database:
   postgres:
     host: "localhost"

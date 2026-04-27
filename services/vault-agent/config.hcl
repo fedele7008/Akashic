@@ -84,6 +84,18 @@ template {
 }
 
 # ─────────────────────────────────────────────────────────────
+# Akashic API server certificate (pki-internal/server)
+#   Phase 8: TLS listener for the bearer-token-authenticated
+#   resource server. CN = api.akashic.local. Public-facing (browser
+#   reaches via api.<domain> through the proxy), so issued from
+#   the same `pki-internal` mount as auth.
+# ─────────────────────────────────────────────────────────────
+template {
+  source      = "/templates/akashic-api.tpl"
+  destination = "/certs/akashic/.api-rendered"
+}
+
+# ─────────────────────────────────────────────────────────────
 # Akashic control server mTLS cert (pki-mtls-akashic-ctrl/server)
 #   Issued from the private mTLS CA so that only CLI + BFF clients
 #   signed by the same CA can reach /auth/* control endpoints.
@@ -111,3 +123,14 @@ template {
   source      = "/templates/bff-client.tpl"
   destination = "/certs/bff/.rendered"
 }
+
+# ─────────────────────────────────────────────────────────────
+# Tenant portal: NO mTLS client cert.
+#
+# In Phase 8's three-server architecture, the tenant portal talks to
+# the API server (port 8082) using OAuth bearer tokens — not mTLS.
+# The previous `portal-client.tpl` template was removed when the
+# /users/* and /clients/* endpoints moved off the control plane onto
+# the new bearer-authenticated API surface. The portal needs zero
+# Akashic-internal trust material; it's a regular OAuth client.
+# ─────────────────────────────────────────────────────────────

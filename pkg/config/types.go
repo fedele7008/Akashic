@@ -391,6 +391,39 @@ type ServerConfig struct {
 	Auth AuthServerConfig `mapstructure:"auth" yaml:"auth"`
 	// Control server configuration for control plane management via mTLS
 	Control ControlServerConfig `mapstructure:"control" yaml:"control"`
+	// API server configuration for end-user resource APIs (Phase 8).
+	// Bearer-token authenticated (OAuth resource server). Hosts user
+	// self-service (/users/register, /users/me) and developer
+	// self-service (/clients/*) endpoints.
+	API APIServerConfig `mapstructure:"api" yaml:"api"`
+}
+
+// APIServerConfig defines settings for the API (resource) server
+// — the OAuth-resource-server surface introduced in Phase 8.
+//
+// Authentication on this server is OAuth bearer tokens, NOT mTLS.
+// The portal/BFF gets an access token during the user's OAuth login
+// and forwards it as `Authorization: Bearer <token>` on every API
+// call. The bearer middleware verifies the token's signature via the
+// shared OAuth keystore (same in-process keystore the auth server
+// uses to mint tokens), so token validation is a local crypto check
+// — no cross-server call.
+type APIServerConfig struct {
+	// Host address to bind the API server (e.g., "0.0.0.0").
+	Host string `mapstructure:"host" yaml:"host"`
+	// Port number for the API server (typically 8082).
+	Port int `mapstructure:"port" yaml:"port"`
+	// TLS settings — same shape as the auth server's. No mTLS on this
+	// listener (it's bearer-token authenticated, not cert-authenticated).
+	TLS APITLSConfig `mapstructure:"tls" yaml:"tls"`
+}
+
+// APITLSConfig is the API-server-specific TLS block. Same shape as
+// AuthTLSConfig — no mTLS on this listener.
+type APITLSConfig struct {
+	Enabled  bool   `mapstructure:"enabled" yaml:"enabled"`
+	CertFile string `mapstructure:"cert_file" yaml:"cert_file"`
+	KeyFile  string `mapstructure:"key_file" yaml:"key_file"`
 }
 
 // AuthServerConfig defines OAuth/OIDC authentication server settings

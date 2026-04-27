@@ -3,12 +3,10 @@ package control
 import (
 	"akashic/akashic/pkg/bootstrap"
 	"akashic/akashic/pkg/config"
-	"akashic/akashic/pkg/database/akashic_postgres"
-	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/pki"
-	"akashic/akashic/pkg/repository"
+	"akashic/akashic/pkg/server/api"
 	"akashic/akashic/pkg/server/auth"
 	"context"
 	"crypto/tls"
@@ -28,32 +26,21 @@ type Server struct {
 	server           *http.Server
 	logger           *logging.Logger
 	stateManager     *StateManager
+	apiStateManager  *APIStateManager // Phase 8: lifecycle of the API server
 	bootstrapMgr     *bootstrap.Manager // Bootstrap manager (set after initialization)
 	config           *config.ConfigManager
 	startedAt        time.Time
 	shutdownFn       context.CancelFunc // Function to trigger app shutdown
 	certReloader     *pki.Reloader
 	bootstrapLimiter *middleware.InMemoryRateLimiter // per-CN rate limit for /bootstrap/* (Phase 5.1.2)
-
-	// Phase 8: dependencies for the new user / client management
-	// endpoints. Set via SetUserDeps after construction so the
-	// control server's New() signature stays backward-compatible
-	// with the existing bootstrap-only path. Same pattern auth.Server
-	// uses for OAuth deps in Phase 7.
-	userRepo   *repository.UserRepository
-	ldapClient *ldap.Client
-	db         *akashic_postgres.DB
 }
 
-// SetUserDeps wires the user-repository, LDAP client, and database
-// handle into the control server. Called from pkg/akashic/core/context
-// after those deps are initialized but before Start(). When unset
-// (any caller using only bootstrap endpoints), the Phase 8 user /
-// client routes return a clear 503 instead of NPE'ing.
-func (s *Server) SetUserDeps(userRepo *repository.UserRepository, ldapClient *ldap.Client, db *akashic_postgres.DB) {
-	s.userRepo = userRepo
-	s.ldapClient = ldapClient
-	s.db = db
+// SetAPIServer wires the API server's state manager into the control
+// plane so /api/start, /api/stop, /api/restart endpoints can manage
+// its lifecycle. Called from pkg/akashic/core/context after both
+// servers are constructed.
+func (s *Server) SetAPIServer(apiServer *api.Server) {
+	s.apiStateManager = NewAPIStateManager(apiServer, s.logger)
 }
 
 const (
@@ -199,6 +186,14 @@ func (s *Server) Stop() error {
 // GetStateManager returns the state manager
 func (s *Server) GetStateManager() *StateManager {
 	return s.stateManager
+}
+
+// GetAPIStateManager returns the API server's state manager. Nil if
+// SetAPIServer hasn't been called yet (the manager is created lazily
+// in SetAPIServer rather than in New() because the api.Server itself
+// is constructed after the control server).
+func (s *Server) GetAPIStateManager() *APIStateManager {
+	return s.apiStateManager
 }
 
 // GetAddress returns the server address

@@ -29,6 +29,14 @@ const (
 	DefaultCAFile             = "./certs/akashic/mtls-ca.crt"
 	DefaultClientAuthRequired = true
 
+	// API server defaults (Phase 8 — bearer-token authenticated
+	// resource server). Cert issued by vault-agent/akashic-api.tpl.
+	DefaultAPIHost         = "0.0.0.0"
+	DefaultAPIPort         = 8082
+	DefaultAPITLSEnabled   = true
+	DefaultAPITLSCertFile  = "./certs/akashic/api.crt"
+	DefaultAPITLSKeyFile   = "./certs/akashic/api.key"
+
 	// Database defaults - PostgreSQL
 	DefaultPostgresHost               = "localhost"
 	DefaultPostgresPort               = 5432
@@ -224,6 +232,13 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("server.control.tls.key_file", DefaultKeyFile)
 	v.SetDefault("server.control.tls.ca_file", DefaultCAFile)
 	v.SetDefault("server.control.tls.client_auth_required", DefaultClientAuthRequired)
+
+	// API server defaults (Phase 8)
+	v.SetDefault("server.api.host", DefaultAPIHost)
+	v.SetDefault("server.api.port", DefaultAPIPort)
+	v.SetDefault("server.api.tls.enabled", DefaultAPITLSEnabled)
+	v.SetDefault("server.api.tls.cert_file", DefaultAPITLSCertFile)
+	v.SetDefault("server.api.tls.key_file", DefaultAPITLSKeyFile)
 
 	// Database defaults
 	v.SetDefault("database.postgres.host", DefaultPostgresHost)
@@ -441,6 +456,8 @@ func NormalizeContainerPaths(cfg *Config) {
 	rewrite(&cfg.Server.Control.TLS.CAFile)
 	rewrite(&cfg.Server.Auth.TLS.CertFile)
 	rewrite(&cfg.Server.Auth.TLS.KeyFile)
+	rewrite(&cfg.Server.API.TLS.CertFile)
+	rewrite(&cfg.Server.API.TLS.KeyFile)
 	rewrite(&cfg.Database.Postgres.TLS.CACertPath)
 	rewrite(&cfg.Database.Redis.TLS.CACertPath)
 	rewrite(&cfg.Logging.LokiTLS.CACertPath)

@@ -1,0 +1,29 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Phase 8 Chapter 2 placeholder styles. The real design system
+ * lands when chapters 4-6 build the actual surfaces.
+ *
+ * Tokens defined here as CSS custom properties so the operator-
+ * rebranding env vars (AKASHIC_PORTAL_BRAND_* — chapter 4) can be
+ * injected via inline <style> tags on the root layout without
+ * forcing Tailwind config rebuilds.
+ */
+:root {
+  --bg: #0f1115;
+  --card: #1a1d24;
+  --text: #e4e6eb;
+  --text-muted: #8b91a0;
+  --accent: #4f8cff;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  min-height: 100vh;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+    Oxygen, Ubuntu, sans-serif;
+  line-height: 1.5;
+}

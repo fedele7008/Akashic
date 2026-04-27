@@ -1,4 +1,4 @@
-package control
+package api
 
 import (
 	"crypto/rand"
@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"akashic/akashic/pkg/models"
+	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/server/response"
 
 	"github.com/google/uuid"
@@ -18,16 +19,10 @@ import (
 	"gorm.io/gorm"
 )
 
-// Phase 8 OAuth-client management endpoints. Same gating model as
-// users_handlers.go: mTLS + portal-client CN, plus an
-// X-Akashic-On-Behalf-Of header that names the user the request acts
-// for. Authorization is enforced per-row: the requester must own the
-// client, OR be an admin/root.
-//
-// Built-in clients (BuiltIn=true) are READ-ONLY through these
-// endpoints — they're managed by EnsureBuiltInClients on every
-// startup and the portal must not edit them. Attempts to PATCH /
-// DELETE / rotate-secret on a built-in return 403 BUILTIN_IMMUTABLE.
+// Phase 8 OAuth-client management endpoints. Bearer-token authenticated
+// (the requester's identity comes from the access token's `sub` claim).
+// Built-in clients are read-only via this surface; admin overrides
+// (force-edit any client) live on the control plane under /admin/clients.
 
 // ─── shared types ──────────────────────────────────────────────────
 
@@ -69,13 +64,12 @@ func toClientView(c *models.ClientService) clientView {
 	return v
 }
 
-// canManage returns true iff the requester is allowed to read AND
-// write the given client. Owner OR admin/root is allowed.
-//
-// Read-only access (e.g. for /clients/:id GET as a non-owner) is
-// not currently supported — Phase 8's portal exposes only the
-// requester's own clients. If a "browse all clients" admin view
-// lands later, this check should split into canRead / canWrite.
+type clientCtx struct {
+	requesterID uuid.UUID
+	requester   *models.User
+	client      *models.ClientService
+}
+
 func (s *Server) canManage(ctx *clientCtx) bool {
 	if ctx.requester.UserType == models.UserTypeAdmin ||
 		ctx.requester.UserType == models.UserTypeRoot {
@@ -87,18 +81,6 @@ func (s *Server) canManage(ctx *clientCtx) bool {
 	return false
 }
 
-// clientCtx bundles the resolved requester + client row for the
-// per-client handlers. Cuts down on repeated DB lookups and lets
-// canManage be a one-liner.
-type clientCtx struct {
-	requesterID uuid.UUID
-	requester   *models.User
-	client      *models.ClientService
-}
-
-// loadClientCtx fetches the requester (by uid) and the named client
-// (by client_id from the path). Returns either the loaded ctx or a
-// completed HTTP error response (caller checks `ok`).
 func (s *Server) loadClientCtx(w http.ResponseWriter, r *http.Request, uid uuid.UUID, clientID string) (*clientCtx, bool) {
 	user, err := s.userRepo.GetUserByID(r.Context(), uid)
 	if err != nil {
@@ -127,7 +109,7 @@ func (s *Server) loadClientCtx(w http.ResponseWriter, r *http.Request, uid uuid.
 
 // ─── GET /clients/mine ─────────────────────────────────────────────
 
-func (s *Server) handleListMyClients(w http.ResponseWriter, r *http.Request, uid uuid.UUID) {
+func (s *Server) handleListMyClients(w http.ResponseWriter, r *http.Request, uid uuid.UUID, _ *oauth.AccessTokenClaims) {
 	if r.Method != http.MethodGet {
 		response.WriteJSON(w, http.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed,
@@ -158,23 +140,22 @@ type createClientRequest struct {
 	Name          string `json:"name"`
 	Description   string `json:"description,omitempty"`
 	HomepageURL   string `json:"homepage_url,omitempty"`
-	RedirectURIs  string `json:"redirect_uris"`  // CSV, exact-match
-	AllowedScopes string `json:"allowed_scopes"` // space-separated
+	RedirectURIs  string `json:"redirect_uris"`
+	AllowedScopes string `json:"allowed_scopes"`
 }
 
 type createClientResponse struct {
 	Client       clientView `json:"client"`
-	ClientSecret string     `json:"client_secret"` // SHOWN ONCE
+	ClientSecret string     `json:"client_secret"`
 }
 
-func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid uuid.UUID) {
+func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid uuid.UUID, _ *oauth.AccessTokenClaims) {
 	if r.Method != http.MethodPost {
 		response.WriteJSON(w, http.StatusMethodNotAllowed,
 			response.Fail(response.ErrMethodNotAllowed,
 				"only POST is allowed", nil))
 		return
 	}
-
 	var req createClientRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		response.WriteJSON(w, http.StatusBadRequest,
@@ -195,20 +176,12 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 		req.AllowedScopes = "openid profile email"
 	}
 
-	// Phase 8: client_id is auto-generated. We use a short random
-	// slug — readable, unique, easy to type. Format: "tc-<10 hex>"
-	// for "tenant client." Built-ins use human-meaningful IDs
-	// (akashic-admin, akashic-portal); user-registered clients get
-	// random IDs to avoid name collisions and squatting.
 	clientID, err := generateClientID()
 	if err != nil {
 		response.WriteJSON(w, http.StatusInternalServerError,
 			response.Fail("INTERNAL", "could not generate client_id", nil))
 		return
 	}
-
-	// Generate the client secret — shown ONCE in the response, never
-	// retrievable again. 32 random bytes, base64url-encoded.
 	secret, err := generateClientSecret()
 	if err != nil {
 		response.WriteJSON(w, http.StatusInternalServerError,
@@ -231,11 +204,10 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 		HomepageURL:      req.HomepageURL,
 		RedirectURIs:     req.RedirectURIs,
 		AllowedScopes:    req.AllowedScopes,
-		// Phase 8 only enables authorization_code+PKCE — match Phase 7's policy
-		AuthTypes:   string(models.AuthTypeAuthorizationCode),
-		BuiltIn:     false,
-		RequirePKCE: true,
-		OwnerUserID: &owner,
+		AuthTypes:        string(models.AuthTypeAuthorizationCode),
+		BuiltIn:          false,
+		RequirePKCE:      true,
+		OwnerUserID:      &owner,
 	}
 	if err := s.db.WithContext(r.Context()).Create(&row).Error; err != nil {
 		s.logger.App.Error("createClient: db insert", zap.Error(err))
@@ -243,29 +215,18 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 			response.Fail("INTERNAL", "could not create client", nil))
 		return
 	}
-
 	s.logger.Security.Info("oauth client created",
 		zap.String("client_id", clientID),
 		zap.String("owner_user_id", uid.String()),
 		zap.String("name", req.Name))
-
 	response.WriteJSON(w, http.StatusCreated, response.Success(createClientResponse{
 		Client:       toClientView(&row),
 		ClientSecret: secret,
 	}))
 }
 
-// ─── GET / PATCH / DELETE /clients/:id  +  POST /clients/:id/rotate-secret ─
+// ─── /clients/:id (+ /clients/:id/rotate-secret) dispatcher ────────
 
-// Path parsing: routes register a single handler on /clients/ that
-// dispatches based on the path tail. We avoid an HTTP router because
-// the rest of the control plane uses plain ServeMux; staying
-// consistent matters more than the slightly cleaner routing a real
-// router would give us.
-
-// extractClientID returns the client_id from a path like
-// "/clients/<id>" or "/clients/<id>/rotate-secret". Returns "" if
-// the path doesn't fit either pattern.
 func extractClientID(path string) (id, action string) {
 	const prefix = "/clients/"
 	if !strings.HasPrefix(path, prefix) {
@@ -283,14 +244,13 @@ func extractClientID(path string) (id, action string) {
 	return id, action
 }
 
-func (s *Server) handleClientByID(w http.ResponseWriter, r *http.Request, uid uuid.UUID) {
+func (s *Server) handleClientByID(w http.ResponseWriter, r *http.Request, uid uuid.UUID, _ *oauth.AccessTokenClaims) {
 	clientID, action := extractClientID(r.URL.Path)
 	if clientID == "" {
 		response.WriteJSON(w, http.StatusNotFound,
 			response.Fail("NOT_FOUND", "no route for this path", nil))
 		return
 	}
-
 	ctx, ok := s.loadClientCtx(w, r, uid, clientID)
 	if !ok {
 		return
@@ -314,7 +274,7 @@ func (s *Server) handleClientByID(w http.ResponseWriter, r *http.Request, uid uu
 		default:
 			response.WriteJSON(w, http.StatusMethodNotAllowed,
 				response.Fail(response.ErrMethodNotAllowed,
-					"only GET, PATCH, DELETE are allowed on this resource", nil))
+					"only GET, PATCH, DELETE are allowed", nil))
 		}
 	case "rotate-secret":
 		if r.Method != http.MethodPost {
@@ -331,8 +291,7 @@ func (s *Server) handleClientByID(w http.ResponseWriter, r *http.Request, uid uu
 }
 
 func (s *Server) handleGetClient(w http.ResponseWriter, _ *http.Request, ctx *clientCtx) {
-	response.WriteJSON(w, http.StatusOK,
-		response.Success(toClientView(ctx.client)))
+	response.WriteJSON(w, http.StatusOK, response.Success(toClientView(ctx.client)))
 }
 
 type patchClientRequest struct {
@@ -380,7 +339,6 @@ func (s *Server) handlePatchClient(w http.ResponseWriter, r *http.Request, ctx *
 				"at least one editable field must be provided", nil))
 		return
 	}
-
 	if err := s.db.WithContext(r.Context()).Model(ctx.client).
 		Updates(updates).Error; err != nil {
 		s.logger.App.Error("patchClient: db", zap.Error(err))
@@ -388,17 +346,14 @@ func (s *Server) handlePatchClient(w http.ResponseWriter, r *http.Request, ctx *
 			response.Fail("INTERNAL", "could not update client", nil))
 		return
 	}
-
 	s.logger.Security.Info("oauth client updated",
 		zap.String("client_id", ctx.client.ClientID),
 		zap.String("owner_user_id", ctx.requesterID.String()))
 
-	// Re-load to return the post-update view
 	var fresh models.ClientService
 	if err := s.db.WithContext(r.Context()).
 		Where("client_id = ?", ctx.client.ClientID).First(&fresh).Error; err == nil {
-		response.WriteJSON(w, http.StatusOK,
-			response.Success(toClientView(&fresh)))
+		response.WriteJSON(w, http.StatusOK, response.Success(toClientView(&fresh)))
 		return
 	}
 	response.WriteJSON(w, http.StatusOK,
@@ -429,7 +384,7 @@ func (s *Server) handleRotateSecret(w http.ResponseWriter, r *http.Request, ctx 
 	if ctx.client.BuiltIn {
 		response.WriteJSON(w, http.StatusForbidden,
 			response.Fail("BUILTIN_IMMUTABLE",
-				"built-in clients' secrets are managed by the server itself, not the portal", nil))
+				"built-in clients' secrets are managed by the server itself", nil))
 		return
 	}
 	secret, err := generateClientSecret()
@@ -456,16 +411,12 @@ func (s *Server) handleRotateSecret(w http.ResponseWriter, r *http.Request, ctx 
 		zap.String("owner_user_id", ctx.requesterID.String()))
 	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
 		"client_id":     ctx.client.ClientID,
-		"client_secret": secret, // SHOWN ONCE
+		"client_secret": secret,
 	}))
 }
 
 // ─── helpers ───────────────────────────────────────────────────────
 
-// generateClientID returns a new tenant-client identifier of the form
-// "tc-<10 hex chars>". Hex over base64 because the identifier shows
-// up in URLs/configs/CLI args; alphanum+dash is friendlier than
-// base64 there.
 func generateClientID() (string, error) {
 	buf := make([]byte, 5)
 	if _, err := rand.Read(buf); err != nil {
@@ -480,9 +431,6 @@ func generateClientID() (string, error) {
 	return "tc-" + string(out), nil
 }
 
-// generateClientSecret returns a 32-byte random value, base64url-
-// encoded (~43 chars). Used as a one-time password the developer
-// captures at registration / rotation time.
 func generateClientSecret() (string, error) {
 	buf := make([]byte, 32)
 	if _, err := rand.Read(buf); err != nil {

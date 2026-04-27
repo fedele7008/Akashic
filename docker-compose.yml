@@ -212,6 +212,7 @@ services:
       - "akashic.akashic.local:host-gateway"
       - "auth.akashic.local:host-gateway"
       - "ctrl.akashic.local:host-gateway"
+      - "api.akashic.local:host-gateway"
     networks:
       default:
         aliases:
@@ -586,9 +587,13 @@ services:
       AKASHIC_OAUTH_ADMIN_REDIRECT_URI: "${AKASHIC_OAUTH_ADMIN_REDIRECT_URI:-https://admin.akashic.local/oauth/callback}"
       TZ: ${AKASHIC_TZ:-UTC}
     ports:
-      # Auth server: public; Control server: loopback-only.
+      # Auth server (8080): public — OAuth/OIDC.
+      # Control server (8081): loopback-only — mTLS admin plane.
+      # API server (8082): public — bearer-authenticated resource API
+      # (Phase 8). All three speak TLS; only ctrl is mTLS-gated.
       - "${AKASHIC_AUTH_HOST_PORT:-8080}:8080"
       - "127.0.0.1:${AKASHIC_CTRL_HOST_PORT:-8081}:8081"
+      - "${AKASHIC_API_HOST_PORT:-8082}:8082"
     volumes:
       - certs:/certs:ro
       # Phase 7: writable home for server-managed key material (OAuth
@@ -610,6 +615,10 @@ services:
           # auth.akashic.local matches the auth-server cert's SANs,
           # ready for Phase 7 when the BFF needs OAuth flows.
           - auth.akashic.local
+          # api.akashic.local matches the API-server cert's SANs
+          # (Phase 8). The portal and the proxy's api.* server block
+          # both dial via this name so TLS verification succeeds.
+          - api.akashic.local
 
   # ═══════════════════════════════════════════════════════════════════════════════
   # admin-bff: Akashic Admin BFF + FE (Phase 6)
@@ -752,6 +761,68 @@ services:
       default:
         aliases:
           - admin-bff.akashic.local
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # tenant-portal: Public-facing Next.js portal (Phase 8)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Self-service surface for end users (signup, profile, password
+  # change) and developers (OAuth client registration, secret
+  # rotation). Hosts the bare deployment domain — e.g.,
+  # https://akashic.<your-domain>/.
+  #
+  # Identity to control plane: portal.akashic.local mTLS client cert
+  # (rotated in place by Vault Agent — see
+  # services/vault-agent/templates/portal-client.tpl).
+  #
+  # Browsers reach it through the nginx-proxy's root-domain server
+  # block (services/proxy/nginx.conf). Same lazy-init pattern as
+  # admin-bff for OAuth client + control client — the portal
+  # tolerates akashic being absent at boot and recovers once
+  # akashic comes up.
+  tenant-portal:
+    # No `profiles:` — comes up with the default `docker compose up -d`,
+    # alongside admin-bff. Only akashic itself is gated by `--profile app`.
+    build:
+      context: .
+      dockerfile: ./services/tenant-portal/Dockerfile
+    container_name: akashic-tenant-portal
+    restart: unless-stopped
+    depends_on:
+      vault-agent:
+        condition: service_started
+      # akashic intentionally NOT a depends_on — same decoupling
+      # rationale as admin-bff. The portal's OAuth client init
+      # (Chapter 3) lazy-loads, so it tolerates akashic being down.
+      redis:
+        condition: service_healthy
+    environment:
+      # Branding / metadata read by app/layout.tsx + app/page.tsx.
+      AKASHIC_PORTAL_BRAND_NAME: "${AKASHIC_PORTAL_BRAND_NAME:-Akashic}"
+      AKASHIC_PORTAL_TAGLINE: "${AKASHIC_PORTAL_TAGLINE:-Identity provider built on Akashic.}"
+      # Phase 8 placeholder — Chapter 3 adds OAuth client + control
+      # client env vars (issuer, client secret path, mTLS cert paths,
+      # Redis URL, etc.) following the admin-bff template.
+      TZ: ${AKASHIC_TZ:-UTC}
+    volumes:
+      - certs:/certs:ro
+      # /keys read-only for the akashic-portal client secret that
+      # gets written by EnsureBuiltInClients in Chapter 3 Step 3.2.
+      - keys:/keys:ro
+    extra_hosts:
+      # Phase 8 three-server architecture: the portal speaks ONLY to
+      # the auth server (OAuth flows) and the api server (bearer-
+      # authenticated resource calls). It never touches the control
+      # plane — that's admin-bff/CLI territory. So `ctrl.akashic.local`
+      # is intentionally absent from this list.
+      - "host.docker.internal:host-gateway"
+      - "akashic:host-gateway"
+      - "akashic.akashic.local:host-gateway"
+      - "auth.akashic.local:host-gateway"
+      - "api.akashic.local:host-gateway"
+    networks:
+      default:
+        aliases:
+          - tenant-portal.akashic.local
 
 networks:
   default:
