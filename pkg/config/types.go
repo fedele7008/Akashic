@@ -301,6 +301,21 @@ type Config struct {
 	PKI PKIConfig `mapstructure:"pki" yaml:"pki"`
 	// OAuth/OIDC server configuration (Phase 7)
 	OAuth OAuthConfig `mapstructure:"oauth" yaml:"oauth"`
+	// Tenant-portal configuration (Phase 8)
+	Portal PortalConfig `mapstructure:"portal" yaml:"portal"`
+}
+
+// PortalConfig holds Phase 8 settings for the public tenant portal.
+// All fields are operator-supplied; Akashic itself just exposes them
+// via control-plane endpoints the portal calls (e.g.,
+// /users/forgot-password-help reads SupportContact).
+type PortalConfig struct {
+	// SupportContact is the email or URL the portal's "forgot
+	// password" page tells users to contact for a manual reset
+	// (Phase 8 doesn't have email-driven self-service reset; that's
+	// Phase 9). If empty, the help page surfaces a generic
+	// "contact your administrator" message.
+	SupportContact string `mapstructure:"support_contact" yaml:"support_contact"`
 }
 
 // OAuthConfig configures the OAuth 2.1 / OIDC authorization server.

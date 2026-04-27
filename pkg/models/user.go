@@ -30,9 +30,15 @@ func (ut UserType) IsValid() bool {
 	}
 }
 
-// User represents a user account in the system
-// Identity information (username, email, password) is stored in LDAP
-// This table only stores Akashic-specific metadata and authorization data
+// User represents a user account in the system.
+//
+// Identity information (username, email, password, display name) is
+// stored in LDAP — uid, mail, userPassword, and cn respectively.
+// This postgres row holds only Akashic-specific metadata that LDAP
+// has no natural place for. Display name is intentionally NOT here;
+// it lives in LDAP cn (see doc/phase-8-plan.md "On display names"
+// for the rule this follows: anything LDAP can naturally express
+// stays in LDAP).
 type User struct {
 	ID                   uuid.UUID  `gorm:"type:uuid;primaryKey;default:gen_random_uuid()" json:"uid"`
 	LdapDN               string     `gorm:"uniqueIndex;not null;size:512" json:"ldap_dn"` // Distinguished Name in LDAP
@@ -40,10 +46,24 @@ type User struct {
 	IsDisabled           bool       `gorm:"default:false;not null;index" json:"is_disabled"`
 	DisabledAt           *time.Time `gorm:"index" json:"disabled_at,omitempty"`
 	DisabledBy           *uuid.UUID `gorm:"type:uuid" json:"disabled_by,omitempty"`
-	MissingIdentity      bool       `gorm:"default:false;not null;index" json:"missing_identity"`           // True if LDAP entry not found
-	MissingIdentitySince *time.Time `gorm:"index" json:"missing_identity_since,omitempty"`                   // When LDAP entry was first detected missing
-	CreatedAt            time.Time  `gorm:"autoCreateTime;not null" json:"created_at"`
-	UpdatedAt            time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
+	MissingIdentity      bool       `gorm:"default:false;not null;index" json:"missing_identity"`        // True if LDAP entry not found
+	MissingIdentitySince *time.Time `gorm:"index" json:"missing_identity_since,omitempty"`               // When LDAP entry was first detected missing
+
+	// Phase 8: email-verification tracking. The flag stays false in
+	// Phase 8 (no email infrastructure yet) — Phase 9 wires the flow
+	// that sets it true. Schema added now so Phase 9 layers cleanly
+	// without a migration.
+	EmailVerified   bool       `gorm:"default:false;not null;index" json:"email_verified"`
+	EmailVerifiedAt *time.Time `json:"email_verified_at,omitempty"`
+
+	// Phase 8: tracks the most recent successful authentication for
+	// session/security UI ("last seen N days ago"). Updated by the
+	// auth-server on every successful /login/submit. Indexed so admin
+	// queries like "users inactive for 90 days" stay cheap.
+	LastLoginAt *time.Time `gorm:"index" json:"last_login_at,omitempty"`
+
+	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
+	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }
 
 // TableName specifies the table name for GORM
@@ -51,12 +71,22 @@ func (User) TableName() string {
 	return "users"
 }
 
-// CreateUserRequest represents a request to create a new user
+// CreateUserRequest represents a request to create a new user.
+//
+// Used by both the bootstrap path (root user creation) and Phase 8's
+// public self-service registration path. The two callers differ only
+// in the UserType they pass and whether they supply a DisplayName.
 type CreateUserRequest struct {
 	Username string   `json:"username"`
 	Email    string   `json:"email"`
-	Password string   `json:"password"` // Plain text password (will be hashed)
+	Password string   `json:"password"` // Plain text password (will be hashed by LDAP)
 	UserType UserType `json:"user_type"`
+
+	// DisplayName populates LDAP `cn`. Optional — empty falls back to
+	// Username, which keeps the bootstrap path's existing behavior
+	// (cn == uid when the operator doesn't specify otherwise).
+	// Phase 8 self-service registration supplies it from a form field.
+	DisplayName string `json:"display_name,omitempty"`
 }
 
 // Validate validates the create user request

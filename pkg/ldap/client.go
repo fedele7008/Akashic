@@ -457,6 +457,93 @@ func (c *Client) Authenticate(username, password string) (string, error) {
 	return userDN, nil
 }
 
+// ChangePassword updates the userPassword attribute for the user
+// identified by userDN. It first re-authenticates as the user with
+// `oldPassword` (so we never let an admin-bound connection silently
+// change someone else's password), then issues a Modify-Replace on
+// `userPassword` with `newPassword`. LDAP hashes the new password
+// internally — Akashic never stores or sees the hash.
+//
+// Concurrency model is identical to Authenticate's: the entire
+// search-bind-modify-rebind sequence runs under c.authMu, and a
+// deferred rebind-as-admin runs on every exit path so the shared
+// connection is left in a known-good state.
+//
+// Used by Phase 8's POST /users/me/password endpoint.
+func (c *Client) ChangePassword(userDN, oldPassword, newPassword string) error {
+	if c.conn == nil {
+		return fmt.Errorf("LDAP connection not established")
+	}
+	if userDN == "" {
+		return fmt.Errorf("userDN is required")
+	}
+	if oldPassword == "" || newPassword == "" {
+		return fmt.Errorf("both oldPassword and newPassword are required")
+	}
+
+	c.authMu.Lock()
+	defer c.authMu.Unlock()
+
+	// Always restore admin bind on every exit path. Same rationale as
+	// in Authenticate — a failed user bind would leave the connection
+	// anonymous and break subsequent requests.
+	defer func() {
+		if err := c.conn.Bind(c.config.BindDN, c.config.BindPassword); err != nil {
+			c.logger.App.Error("LDAP rebind-as-admin failed after ChangePassword",
+				zap.Error(err),
+			)
+		}
+	}()
+
+	// Step 1: re-authenticate as the user. Proves they own the
+	// account before we accept the change. Wrong oldPassword → fail.
+	if err := c.conn.Bind(userDN, oldPassword); err != nil {
+		c.logger.Security.Warn("ChangePassword: invalid old password",
+			zap.String("dn", userDN),
+		)
+		return fmt.Errorf("invalid current password")
+	}
+
+	// Step 2: Modify the userPassword attribute. Per RFC 4519 §2.41,
+	// userPassword can be set with a plaintext value and the LDAP
+	// server hashes it according to the configured password policy.
+	// We use Modify-Replace (not the LDAP Password Modify Extended
+	// Op, which is more capable but less universally supported across
+	// LDAP servers).
+	modifyReq := ldap.NewModifyRequest(userDN, nil)
+	modifyReq.Replace("userPassword", []string{newPassword})
+	if err := c.conn.Modify(modifyReq); err != nil {
+		c.logger.Security.Warn("ChangePassword: LDAP modify failed",
+			zap.String("dn", userDN),
+			zap.Error(err),
+		)
+		return fmt.Errorf("password change failed: %v", err)
+	}
+
+	c.logger.Security.Info("password changed successfully",
+		zap.String("dn", userDN),
+	)
+	return nil
+}
+
+// RawModify forwards a prepared LDAP Modify request to the backing
+// connection. Caller is responsible for constructing the request
+// (typically `ldap.NewModifyRequest(dn, nil).Replace(...)`).
+//
+// Used by Phase 8 user-profile updates (cn, mail) where the change
+// is on an arbitrary attribute, not the password. Modify does NOT
+// change the connection's bind state, so it runs without acquiring
+// `authMu` — same as the existing Search-based methods (GetUserByDN
+// et al). The connection is admin-bound at rest courtesy of
+// Authenticate's deferred rebind, so admin-only attributes are
+// writable.
+func (c *Client) RawModify(req *ldap.ModifyRequest) error {
+	if c.conn == nil {
+		return fmt.Errorf("LDAP connection not established")
+	}
+	return c.conn.Modify(req)
+}
+
 // GetUser retrieves user information by username
 func (c *Client) GetUser(username string) (*UserInfo, error) {
 	if c.conn == nil {

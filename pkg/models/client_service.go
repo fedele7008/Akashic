@@ -3,6 +3,7 @@ package models
 import (
 	"time"
 
+	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 
@@ -170,6 +171,26 @@ type ClientService struct {
 	// Required for confidential clients in OAuth 2.1; we extend that
 	// requirement to all clients for defense-in-depth.
 	RequirePKCE bool `gorm:"not null;default:true" json:"require_pkce"`
+
+	// Phase 8: ownership and self-service metadata for tenant-
+	// registered clients. Built-in clients (BuiltIn=true) leave
+	// OwnerUserID NULL — they have no human "owner."
+	//
+	// OwnerUserID is the user who registered the client and can
+	// edit/delete/rotate-secret on it. The control plane enforces
+	// this in the Phase 8 client CRUD handlers: an action is
+	// allowed iff requester.id == OwnerUserID OR requester is admin
+	// or root.
+	//
+	// Description is free-form; shown in the developer dashboard
+	// and on consent screens.
+	//
+	// HomepageURL is optional; shown to end-users on consent screens
+	// so they can recognize legitimate integrations and click
+	// through to the registering app's site.
+	OwnerUserID *uuid.UUID `gorm:"type:uuid;index" json:"owner_user_id,omitempty"`
+	Description string     `gorm:"type:text" json:"description,omitempty"`
+	HomepageURL string     `gorm:"type:text" json:"homepage_url,omitempty"`
 
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`

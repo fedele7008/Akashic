@@ -315,6 +315,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		app.cancel, // Pass cancel function for shutdown
 	)
 
+	// Phase 8: wire user-management deps into the control server.
+	// Required by the new /users/* and /clients/* endpoints; see
+	// pkg/server/control/{users,clients}_handlers.go.
+	app.ControlServer.SetUserDeps(userRepo, app.LDAPClient, app.DB)
+
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
 }

@@ -51,16 +51,36 @@ func (r *UserRepository) CreateFromLDAP(ctx context.Context, ldapDN string, user
 	return user, nil
 }
 
-// CreateUser creates a user in both LDAP and PostgreSQL (for bootstrap - root user creation)
-// This method creates the user in LDAP first, then creates the PostgreSQL record.
-// The password is provided in plaintext and will be hashed by LDAP.
+// CreateUser creates a user in both LDAP and PostgreSQL.
+//
+// Used by:
+//   - Bootstrap (root-user creation), via pkg/bootstrap/manager.go
+//   - Phase 8 self-service registration (Step 1.5's POST /users/register)
+//
+// The flow is the same in both cases: create the LDAP entry first
+// (so the entry exists before any postgres row that references its
+// DN), then create the postgres metadata row. If the second step
+// fails the LDAP entry is left orphaned for the deprovisioning
+// service to clean up — see the rollback note below.
+//
+// The user_type and display name come from the request; password is
+// passed in plaintext and is hashed by LDAP internally (Akashic
+// never persists a hash). Empty req.DisplayName falls back to the
+// username so the LDAP `cn` attribute is always populated (LDAP
+// requires it on inetOrgPerson entries).
 func (r *UserRepository) CreateUser(ctx context.Context, req *models.CreateUserRequest, password string) (*models.User, error) {
 	// Step 1: Create user in LDAP first
 	r.logger.Info("Creating user in LDAP",
 		zap.String("username", req.Username),
 		zap.String("email", req.Email))
 
-	ldapDN, err := r.ldapClient.CreateUser(req.Username, req.Email, req.Username, password)
+	displayName := req.DisplayName
+	if displayName == "" {
+		// LDAP requires `cn` on inetOrgPerson; default to username
+		// when the caller hasn't supplied a friendlier name.
+		displayName = req.Username
+	}
+	ldapDN, err := r.ldapClient.CreateUser(req.Username, req.Email, displayName, password)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create user in LDAP: %w", err)
 	}
