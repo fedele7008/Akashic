@@ -100,6 +100,7 @@ const (
 	DefaultOAuthIDTokenTTL          = 15 * time.Minute
 	DefaultOAuthAuthCodeTTL         = 60 * time.Second
 	DefaultOAuthAdminRedirectURI    = "https://admin.akashic.local/oauth/callback"
+	DefaultOAuthPortalRedirectURI   = "https://akashic.local/api/auth/callback"
 	DefaultOAuthAuthSessionIdleTTL  = 30 * time.Minute
 	DefaultOAuthAuthSessionMaxTTL   = 8 * time.Hour
 
@@ -283,6 +284,7 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("oauth.id_token_ttl", DefaultOAuthIDTokenTTL)
 	v.SetDefault("oauth.auth_code_ttl", DefaultOAuthAuthCodeTTL)
 	v.SetDefault("oauth.admin_redirect_uri", DefaultOAuthAdminRedirectURI)
+	v.SetDefault("oauth.portal_redirect_uri", DefaultOAuthPortalRedirectURI)
 	v.SetDefault("oauth.auth_session_idle_ttl", DefaultOAuthAuthSessionIdleTTL)
 	v.SetDefault("oauth.auth_session_max_ttl", DefaultOAuthAuthSessionMaxTTL)
 

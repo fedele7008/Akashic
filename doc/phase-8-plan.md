@@ -364,14 +364,14 @@ React-only SPAs but doesn't fit Next.js's SSR model).
 
 ### Step 2.4 — Dockerfile + compose service
 
-New service `tenant-portal` in compose. Profile: none (always
+New service `portal` in compose. Profile: none (always
 runs, like admin-bff). Container exposes 3000 (Next.js default).
 
 ### Step 2.5 — nginx-proxy server block
 
 Add `services/proxy/nginx.conf`'s **root-domain server block** (no
 subdomain regex prefix; matches the bare deployment domain
-configured via env). Proxies to `tenant-portal:3000`.
+configured via env). Proxies to `portal:3000`.
 
 ### Step 2.6 — ~~Vault Agent template for portal mTLS client cert~~
 
@@ -716,7 +716,7 @@ running on isolated networks may not need it).
 
 ### Step 8.5 — Update study guide
 
-Add `doc/study/10-tenant-portal.md` covering the portal's
+Add `doc/study/10-portal.md` covering the portal's
 architecture, similar in structure to `05-admin-bff.md`. Update
 chapter 00 (architecture map) and 09 (reference glossary) to
 include the portal.
@@ -767,7 +767,7 @@ decisions, deviations, and the as-built command set.
 | `services/vault-agent/config.hcl` | Register the new template |
 | `services/proxy/nginx.conf` | New root-domain server block |
 | `services/redisinsight/docker-entrypoint.sh` | Add DB 2 connection for portal sessions |
-| `docker-compose.yml` | Add `tenant-portal` service |
+| `docker-compose.yml` | Add `portal` service |
 | `.env.example` | New AKASHIC_PORTAL_* vars |
 
 ### New portal code (everything under `web/portal/`)
@@ -779,7 +779,7 @@ Whole new subtree — see Chapter 2, Step 2.2 for the layout.
 | Path | Purpose |
 |---|---|
 | `doc/phase-8-revision.md` | Eventual as-built doc |
-| `doc/study/10-tenant-portal.md` | Study-guide chapter |
+| `doc/study/10-portal.md` | Study-guide chapter |
 
 ---
 

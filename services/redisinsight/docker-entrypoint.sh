@@ -51,15 +51,16 @@ function api(method, path, body) {
         console.log('[redisinsight-init] Agreements accepted.');
     }
 
-    // Akashic uses TWO logical Redis databases on the same instance:
+    // Akashic uses THREE logical Redis databases on the same instance:
     //   DB 0 — owned by the akashic-server (auth-server sessions,
     //          authorization codes, rate-limit counters)
     //   DB 1 — owned by the admin-bff (browser-session store)
+    //   DB 2 — owned by the portal (Phase 8 browser sessions)
     //
     // Each gets its OWN RedisInsight connection card, so an operator
-    // browsing redisinsight.<domain> immediately sees both keyspaces
+    // browsing redisinsight.<domain> immediately sees every keyspace
     // without having to know about the database-index selector inside
-    // a single connection. Two services, two stores, two cards.
+    // a single connection. Three services, three stores, three cards.
     const desiredDbs = [
         {
             name: 'Akashic Redis (akashic server)',
@@ -70,6 +71,11 @@ function api(method, path, body) {
             name: 'Akashic Redis (admin-bff)',
             db:   1,
             note: 'admin-bff browser sessions',
+        },
+        {
+            name: 'Akashic Redis (portal)',
+            db:   2,
+            note: 'portal browser sessions',
         },
     ];
 

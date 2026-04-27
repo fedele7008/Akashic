@@ -127,7 +127,7 @@ template {
 # ─────────────────────────────────────────────────────────────
 # Tenant portal: NO mTLS client cert.
 #
-# In Phase 8's three-server architecture, the tenant portal talks to
+# In Phase 8's three-server architecture, the portal talks to
 # the API server (port 8082) using OAuth bearer tokens — not mTLS.
 # The previous `portal-client.tpl` template was removed when the
 # /users/* and /clients/* endpoints moved off the control plane onto

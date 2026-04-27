@@ -305,7 +305,7 @@ type Config struct {
 	Portal PortalConfig `mapstructure:"portal" yaml:"portal"`
 }
 
-// PortalConfig holds Phase 8 settings for the public tenant portal.
+// PortalConfig holds Phase 8 settings for the public portal.
 // All fields are operator-supplied; Akashic itself just exposes them
 // via control-plane endpoints the portal calls (e.g.,
 // /users/forgot-password-help reads SupportContact).
@@ -348,6 +348,12 @@ type OAuthConfig struct {
 	// client is registered with. Must match exactly what admin-bff
 	// sends on /authorize.
 	AdminRedirectURI string `mapstructure:"admin_redirect_uri" yaml:"admin_redirect_uri"`
+
+	// PortalRedirectURI is the redirect_uri the akashic-portal built-in
+	// client is registered with (Phase 8). Must match exactly what the
+	// portal sends on /authorize. Public surface — user-scoped (no
+	// role restriction), unlike AdminRedirectURI.
+	PortalRedirectURI string `mapstructure:"portal_redirect_uri" yaml:"portal_redirect_uri"`
 
 	// AuthSessionIdleTTL is how long an auth-server session can be
 	// idle before requiring re-login. Refreshed on every visit to

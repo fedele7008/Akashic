@@ -1,5 +1,5 @@
 # ──────────────────────────────────────────────────────────────────────
-# Akashic tenant-portal — multi-stage Next.js build
+# Akashic portal — multi-stage Next.js build
 #
 # Three stages:
 #   1. deps      — node 22-alpine, runs `npm ci` to populate node_modules
@@ -68,11 +68,17 @@ COPY --from=builder --chown=akashic:akashic /app/public ./public
 COPY --from=builder --chown=akashic:akashic /app/.next/standalone ./
 COPY --from=builder --chown=akashic:akashic /app/.next/static ./.next/static
 
+# Entrypoint script wires up the OAuth client secret and TLS trust
+# at runtime — see the script's header for details.
+COPY services/portal/portal-entrypoint.sh /usr/local/bin/portal-entrypoint.sh
+RUN chmod +x /usr/local/bin/portal-entrypoint.sh
+
 USER akashic
 
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 EXPOSE 3000
 
-# Standalone bundle's entry point is server.js at the root.
+# Default CMD is just the entrypoint's exec target; compose overrides
+# `entrypoint:` to use portal-entrypoint.sh, which then exec's node.
 CMD ["node", "server.js"]

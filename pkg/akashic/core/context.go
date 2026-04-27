@@ -302,6 +302,17 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 				AuthTypes:     string(models.AuthTypeAuthorizationCode),
 				RoleAllowlist: "root,admin",
 			},
+			{
+				// Phase 8: portal. Public-facing — no role allowlist
+				// (any user_type may sign in). The portal's own per-
+				// section gating decides who sees what once they're in.
+				ClientID:      "akashic-portal",
+				Name:          "Akashic Portal",
+				RedirectURIs:  cfg.OAuth.PortalRedirectURI,
+				AllowedScopes: "openid profile email",
+				AuthTypes:     string(models.AuthTypeAuthorizationCode),
+				RoleAllowlist: "",
+			},
 		}); err != nil {
 		return fmt.Errorf("ensure built-in OAuth clients: %v", err)
 	}

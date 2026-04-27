@@ -763,29 +763,29 @@ services:
           - admin-bff.akashic.local
 
   # ═══════════════════════════════════════════════════════════════════════════════
-  # tenant-portal: Public-facing Next.js portal (Phase 8)
+  # portal: Public-facing Next.js portal (Phase 8)
   # ═══════════════════════════════════════════════════════════════════════════════
   # Self-service surface for end users (signup, profile, password
   # change) and developers (OAuth client registration, secret
   # rotation). Hosts the bare deployment domain — e.g.,
   # https://akashic.<your-domain>/.
   #
-  # Identity to control plane: portal.akashic.local mTLS client cert
-  # (rotated in place by Vault Agent — see
-  # services/vault-agent/templates/portal-client.tpl).
+  # Trust to the akashic-server: bearer-token (post-Phase-8 refactor).
+  # The portal authenticates to the api server (port 8082) using the
+  # signed-in user's own access token; it holds no privileged trust
+  # material — no mTLS client cert.
   #
   # Browsers reach it through the nginx-proxy's root-domain server
   # block (services/proxy/nginx.conf). Same lazy-init pattern as
-  # admin-bff for OAuth client + control client — the portal
-  # tolerates akashic being absent at boot and recovers once
-  # akashic comes up.
-  tenant-portal:
+  # admin-bff for OAuth client — the portal tolerates akashic being
+  # absent at boot and recovers once akashic comes up.
+  portal:
     # No `profiles:` — comes up with the default `docker compose up -d`,
     # alongside admin-bff. Only akashic itself is gated by `--profile app`.
     build:
       context: .
-      dockerfile: ./services/tenant-portal/Dockerfile
-    container_name: akashic-tenant-portal
+      dockerfile: ./services/portal/Dockerfile
+    container_name: akashic-portal
     restart: unless-stopped
     depends_on:
       vault-agent:
@@ -799,10 +799,38 @@ services:
       # Branding / metadata read by app/layout.tsx + app/page.tsx.
       AKASHIC_PORTAL_BRAND_NAME: "${AKASHIC_PORTAL_BRAND_NAME:-Akashic}"
       AKASHIC_PORTAL_TAGLINE: "${AKASHIC_PORTAL_TAGLINE:-Identity provider built on Akashic.}"
-      # Phase 8 placeholder — Chapter 3 adds OAuth client + control
-      # client env vars (issuer, client secret path, mTLS cert paths,
-      # Redis URL, etc.) following the admin-bff template.
+
+      # --- Chapter 3: session ---
+      # 32+ byte secret used by iron-session for AEAD encryption of the
+      # session cookie. MUST be unique per deployment. The compose
+      # default is sufficient for dev; production deployments should
+      # generate a fresh value (e.g. `openssl rand -base64 48`) and set
+      # AKASHIC_PORTAL_SESSION_SECRET in their env.
+      AKASHIC_PORTAL_SESSION_SECRET: "${AKASHIC_PORTAL_SESSION_SECRET:-dev-only-please-replace-this-with-32-or-more-random-bytes}"
+      # Redis (DB 2 — separate from auth-server's DB 0 and admin-bff's DB 1).
+      AKASHIC_PORTAL_REDIS_HOST: redis
+      AKASHIC_PORTAL_REDIS_PORT: "6379"
+      AKASHIC_PORTAL_REDIS_PASSWORD: "${AKASHIC_DATABASE_REDIS_PASSWORD:-}"
+      AKASHIC_PORTAL_REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
+      AKASHIC_PORTAL_REDIS_DB: "2"
+
+      # --- Chapter 3: OAuth client ---
+      # Issuer must match what the auth server advertises in its
+      # /.well-known/openid-configuration. Same value admin-bff uses.
+      AKASHIC_OAUTH_ISSUER: "${AKASHIC_OAUTH_ISSUER:-https://auth.akashic.example.com}"
+      AKASHIC_PORTAL_CLIENT_ID: akashic-portal
+      # The client secret is provisioned on disk by EnsureBuiltInClients
+      # at /keys/oauth/client-secrets/akashic-portal.txt. The portal
+      # reads it at first OAuth call via the entrypoint that exports
+      # AKASHIC_PORTAL_CLIENT_SECRET — see the Dockerfile entrypoint.
+      AKASHIC_PORTAL_REDIRECT_URI: "${AKASHIC_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
+      AKASHIC_PORTAL_OAUTH_SCOPES: "openid profile email"
+
+      # --- Chapter 3: API server (bearer target) ---
+      AKASHIC_PORTAL_API_BASE_URL: "https://api.akashic.local:8082"
+
       TZ: ${AKASHIC_TZ:-UTC}
+    entrypoint: ["/usr/local/bin/portal-entrypoint.sh"]
     volumes:
       - certs:/certs:ro
       # /keys read-only for the akashic-portal client secret that
@@ -822,7 +850,7 @@ services:
     networks:
       default:
         aliases:
-          - tenant-portal.akashic.local
+          - portal.akashic.local
 
 networks:
   default:
