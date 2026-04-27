@@ -1,0 +1,594 @@
+openapi: 3.1.0
+info:
+  title: Akashic Resource API Server
+  version: 0.1.0
+  description: |
+    Bearer-token-authenticated resource API. Hosted on the api
+    listener (default `0.0.0.0:8082`). This is where the tenant
+    portal (and any other OAuth-bearer-token-presenting client)
+    reads/writes user-owned resources.
+
+    All authenticated endpoints validate the access token's signature
+    locally (against the in-process keystore — no network call) and
+    derive the acting user from the `sub` claim. The `openid` scope
+    is required.
+
+    All responses use the Akashic standard envelope:
+    `{success: true, data: {...}}` for success, or
+    `{success: false, error: {code, message, details?}}` for errors.
+
+    See `services/api-docs/README.md` for context.
+  contact:
+    name: Akashic
+    url: https://akashic.example.com
+
+servers:
+  - url: https://api.akashic.local:8082
+    description: Default local development listener
+  - url: https://api.{tenantDomain}
+    description: Production (subdomain of tenant root domain)
+    variables:
+      tenantDomain:
+        default: akashic.example.com
+
+# Default: no auth required. Each protected operation overrides this
+# with `security: [{ bearerAccessToken: [openid] }]`. Health, readiness,
+# self-service registration, and the password-help stub stay public.
+security: []
+
+tags:
+  - name: meta
+    description: Liveness / readiness.
+  - name: users-public
+    description: User-management endpoints accessible without authentication.
+  - name: users
+    description: Authenticated user-profile endpoints (`/users/me`).
+  - name: clients
+    description: OAuth client-service registration owned by the requesting user.
+
+paths:
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness probe.
+      responses:
+        "200":
+          description: Server up.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthEnvelope'
+
+  /ready:
+    get:
+      tags: [meta]
+      summary: Readiness probe — true once dependencies (keystore, user repo, LDAP, postgres) are wired.
+      responses:
+        "200":
+          description: Ready.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          service: { type: string, const: akashic-api }
+                          status:  { type: string, const: ready }
+        "503":
+          description: Dependencies not yet wired (startup race).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /users/register:
+    post:
+      tags: [users-public]
+      summary: Self-service registration.
+      description: |
+        Creates a user in LDAP (canonical identity) and a matching
+        Akashic-metadata row in PostgreSQL. Public — no token required.
+        Subject to a password policy (minimum length, complexity).
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RegisterRequest' }
+      responses:
+        "201":
+          description: User created.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/RegisterResponse' }
+        "400":
+          description: |
+            Validation failure. `code` ∈ `{INVALID_REQUEST,
+            VALIDATION_FAILED, PASSWORD_POLICY_VIOLATION}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "409":
+          description: 'Username already exists. `code: USERNAME_TAKEN`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "503":
+          description: 'Server still starting. `code: API_NOT_READY`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /users/forgot-password-help:
+    get:
+      tags: [users-public]
+      summary: Inform the caller how to recover an account.
+      description: |
+        **Phase 8 placeholder.** Self-service password reset is not
+        implemented yet (no email infrastructure). This endpoint
+        returns a static description pointing the caller at the
+        operator's support contact. Phase 9 will replace this with a
+        real reset flow.
+      responses:
+        "200":
+          description: Help info.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          phase:           { type: integer, example: 8 }
+                          self_service:    { type: boolean, const: false }
+                          support_contact: { type: string }
+                          message:         { type: string }
+
+  /users/me:
+    get:
+      tags: [users]
+      summary: Read the requesting user's profile.
+      security: [{ bearerAccessToken: [openid] }]
+      responses:
+        "200":
+          description: Profile.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/UserProfile' }
+        "401": { $ref: '#/components/responses/BearerError' }
+        "403": { $ref: '#/components/responses/InsufficientScope' }
+        "404": { $ref: '#/components/responses/UserNotFound' }
+    patch:
+      tags: [users]
+      summary: Update display name and/or email.
+      description: |
+        At least one field must be provided. Updates apply to the LDAP
+        entry (LDAP is canonical for `cn` and `mail`).
+      security: [{ bearerAccessToken: [openid] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateProfileRequest' }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdatedEnvelope' }
+        "400":
+          description: |
+            Validation failure. `code` ∈ `{INVALID_REQUEST, VALIDATION_FAILED}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "401": { $ref: '#/components/responses/BearerError' }
+        "404": { $ref: '#/components/responses/UserNotFound' }
+
+  /users/me/password:
+    post:
+      tags: [users]
+      summary: Change password (authenticated, requires old password).
+      description: |
+        Verifies the old password by binding to LDAP, then issues an
+        LDAP modify with the new password. Subject to the password
+        policy.
+      security: [{ bearerAccessToken: [openid] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ChangePasswordRequest' }
+      responses:
+        "200":
+          description: Password changed.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdatedEnvelope' }
+        "400":
+          description: |
+            `code` ∈ `{INVALID_REQUEST, VALIDATION_FAILED,
+            PASSWORD_POLICY_VIOLATION}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "401":
+          description: |
+            Bearer or credential failure. `code` ∈
+            `{BEARER_INVALID_TOKEN, INVALID_CREDENTIALS}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "404": { $ref: '#/components/responses/UserNotFound' }
+
+  /clients/mine:
+    get:
+      tags: [clients]
+      summary: List OAuth client_services owned by the requesting user.
+      security: [{ bearerAccessToken: [openid] }]
+      responses:
+        "200":
+          description: Owned clients.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          clients:
+                            type: array
+                            items: { $ref: '#/components/schemas/ClientView' }
+        "401": { $ref: '#/components/responses/BearerError' }
+
+  /clients:
+    post:
+      tags: [clients]
+      summary: Register a new OAuth client_service.
+      description: |
+        The returned `client_secret` is the **only** time the secret is
+        revealed. It is hashed before storage; subsequent calls cannot
+        recover it. Use `/clients/{id}/rotate-secret` if lost.
+      security: [{ bearerAccessToken: [openid] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateClientRequest' }
+      responses:
+        "201":
+          description: Client created. Note the one-time `client_secret`.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          client:        { $ref: '#/components/schemas/ClientView' }
+                          client_secret: { type: string, description: "Shown once. Hash-only after this." }
+        "400":
+          description: |
+            `code` ∈ `{INVALID_REQUEST, VALIDATION_FAILED}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "401": { $ref: '#/components/responses/BearerError' }
+
+  /clients/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+        description: The client_id assigned at creation.
+    get:
+      tags: [clients]
+      summary: Read one client.
+      security: [{ bearerAccessToken: [openid] }]
+      responses:
+        "200":
+          description: Client view.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data: { $ref: '#/components/schemas/ClientView' }
+        "401": { $ref: '#/components/responses/BearerError' }
+        "403": { $ref: '#/components/responses/NotOwner' }
+        "404": { $ref: '#/components/responses/ClientNotFound' }
+    patch:
+      tags: [clients]
+      summary: Update a client.
+      description: |
+        Built-in clients (e.g. the admin BFF's well-known client) are
+        immutable — `BUILTIN_IMMUTABLE` is returned with 403.
+      security: [{ bearerAccessToken: [openid] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/UpdateClientRequest' }
+      responses:
+        "200":
+          description: Updated.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UpdatedEnvelope' }
+        "400":
+          description: |
+            `code` ∈ `{INVALID_REQUEST, VALIDATION_FAILED}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "401": { $ref: '#/components/responses/BearerError' }
+        "403":
+          description: |
+            `code` ∈ `{NOT_OWNER, BUILTIN_IMMUTABLE}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "404": { $ref: '#/components/responses/ClientNotFound' }
+    delete:
+      tags: [clients]
+      summary: Delete a client.
+      description: Built-in clients are protected — they return 403 `BUILTIN_IMMUTABLE`.
+      security: [{ bearerAccessToken: [openid] }]
+      responses:
+        "200":
+          description: Deleted.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          deleted: { type: boolean, const: true }
+        "401": { $ref: '#/components/responses/BearerError' }
+        "403":
+          description: |
+            `code` ∈ `{NOT_OWNER, BUILTIN_IMMUTABLE}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "404": { $ref: '#/components/responses/ClientNotFound' }
+
+  /clients/{id}/rotate-secret:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: { type: string }
+    post:
+      tags: [clients]
+      summary: Rotate a client's secret. Invalidates the old secret immediately.
+      security: [{ bearerAccessToken: [openid] }]
+      responses:
+        "200":
+          description: New secret. Shown once.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          client_id:     { type: string }
+                          client_secret: { type: string, description: "Shown once." }
+        "401": { $ref: '#/components/responses/BearerError' }
+        "403":
+          description: |
+            `code` ∈ `{NOT_OWNER, BUILTIN_IMMUTABLE}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "404": { $ref: '#/components/responses/ClientNotFound' }
+
+components:
+  securitySchemes:
+    bearerAccessToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: |
+        Opaque-shaped JWT issued by the auth server's `/token`
+        endpoint. Locally verified — must include `openid` scope.
+
+  responses:
+    BearerError:
+      description: |
+        Bearer-token failure. RFC 6750 `WWW-Authenticate` header set.
+        `code` ∈ `{BEARER_INVALID_REQUEST, BEARER_INVALID_TOKEN,
+        API_NOT_READY}`.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string }
+          example: 'Bearer error="invalid_token", error_description="..."'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+    InsufficientScope:
+      description: |
+        Token does not include the `openid` scope. `code: BEARER_INSUFFICIENT_SCOPE`.
+      headers:
+        WWW-Authenticate:
+          schema: { type: string }
+          example: 'Bearer error="insufficient_scope", scope="openid"'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+    UserNotFound:
+      description: |
+        Acting user (decoded from the token's `sub`) no longer exists.
+        `code: USER_NOT_FOUND`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+    NotOwner:
+      description: |
+        Requester is not the owner of the client and is not admin/root.
+        `code: NOT_OWNER`.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+    ClientNotFound:
+      description: '`code: CLIENT_NOT_FOUND`.'
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+
+    HealthEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          properties:
+            service: { type: string, const: akashic-api }
+            status:  { type: string, const: healthy }
+
+    UpdatedEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          properties:
+            updated: { type: boolean, const: true }
+
+    RegisterRequest:
+      type: object
+      required: [username, email, password]
+      properties:
+        username:     { type: string }
+        email:        { type: string, format: email }
+        password:     { type: string, format: password }
+        display_name: { type: string, description: "Optional. Becomes LDAP `cn`. Falls back to `username` if absent." }
+
+    RegisterResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user:
+                  type: object
+                  properties:
+                    id:       { type: string, format: uuid }
+                    username: { type: string }
+                    email:    { type: string, format: email }
+                    ldap_dn:  { type: string }
+
+    UserProfile:
+      type: object
+      properties:
+        id:             { type: string, format: uuid }
+        username:       { type: string }
+        email:          { type: string, format: email }
+        display_name:   { type: string }
+        user_type:      { type: string, enum: [user, admin, root] }
+        email_verified: { type: boolean }
+        last_login_at:  { type: [string, "null"], format: date-time }
+        created_at:     { type: string, format: date-time }
+
+    UpdateProfileRequest:
+      type: object
+      description: At least one field must be present.
+      properties:
+        display_name: { type: string }
+        email:        { type: string, format: email }
+
+    ChangePasswordRequest:
+      type: object
+      required: [old_password, new_password]
+      properties:
+        old_password: { type: string, format: password }
+        new_password: { type: string, format: password }
+
+    ClientView:
+      type: object
+      description: Operator-facing view of an OAuth client_service. Never includes the secret hash.
+      properties:
+        client_id:       { type: string }
+        name:            { type: string }
+        description:     { type: string }
+        homepage_url:    { type: string, format: uri }
+        redirect_uris:   { type: string, description: Comma-separated list. }
+        allowed_scopes:  { type: string, description: Space-separated scopes. }
+        auth_types:      { type: string }
+        built_in:        { type: boolean }
+        role_allowlist:  { type: string }
+        require_pkce:    { type: boolean }
+        owner_user_id:   { type: [string, "null"], format: uuid }
+        created_at:      { type: string, format: date-time }
+        updated_at:      { type: string, format: date-time }
+
+    CreateClientRequest:
+      type: object
+      required: [name, redirect_uris]
+      properties:
+        name:           { type: string }
+        description:    { type: string }
+        homepage_url:   { type: string, format: uri }
+        redirect_uris:  { type: string, description: Comma-separated. }
+        allowed_scopes: { type: string, description: "Defaults to `openid profile email`." }
+
+    UpdateClientRequest:
+      type: object
+      description: At least one field must be present.
+      properties:
+        name:           { type: string }
+        description:    { type: string }
+        homepage_url:   { type: string, format: uri }
+        redirect_uris:  { type: string }
+        allowed_scopes: { type: string }

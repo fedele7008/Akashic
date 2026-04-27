@@ -1,0 +1,610 @@
+openapi: 3.1.0
+info:
+  title: Akashic Control Server (Admin Plane)
+  version: 0.1.0
+  description: |
+    Admin / control plane. Hosted on the control listener (default
+    `127.0.0.1:8081`, mTLS-only). Reachable from the host loopback or
+    via the proxy's `ctrl.<domain>` SNI route — never directly from
+    the public internet.
+
+    **Trust model: mutual TLS.** Every request must present a client
+    certificate signed by the `pki-mtls-akashic-ctrl` CA. There is no
+    bearer-token auth on this server. Some endpoints further require
+    a specific client-cert CN (e.g. `cli.akashic.local`) — those are
+    the endpoints that touch bootstrap.
+
+    All responses use the Akashic standard envelope.
+
+    See `services/api-docs/README.md` for context.
+  contact:
+    name: Akashic
+    url: https://akashic.example.com
+
+servers:
+  - url: https://ctrl.akashic.local:8081
+    description: Default local development listener (loopback + SNI proxy)
+
+# Default: every endpoint requires mTLS. The `requireClientIdentity`
+# middleware on top of plain mTLS narrows specific endpoints to
+# CN=cli.akashic.local (token endpoints) or CN ∈ {cli, bff}.akashic.local
+# (/bootstrap/root); those operations override with their own
+# `security:` field below.
+security:
+  - mtls: []
+
+tags:
+  - name: meta
+    description: Liveness / status / config inspection.
+  - name: lifecycle-auth
+    description: Auth-server lifecycle (start/stop/restart).
+  - name: lifecycle-api
+    description: Resource-API-server lifecycle (start/stop/restart).
+  - name: lifecycle-self
+    description: Control-server self-management (graceful shutdown, TLS reload).
+  - name: bootstrap
+    description: First-time root-user setup. CN-restricted.
+
+paths:
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness probe.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Server up.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          status: { type: string, const: healthy }
+
+  /status:
+    get:
+      tags: [meta]
+      summary: Aggregate runtime status (control + auth + API states).
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Status snapshot.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/StatusResponse' }
+
+  /config:
+    get:
+      tags: [meta]
+      summary: Inspect the loaded config (secrets redacted).
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Sanitized config.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        additionalProperties: true
+
+  /config/reload:
+    post:
+      tags: [meta]
+      summary: Re-read config from disk and re-apply (hot reload).
+      description: |
+        Triggers Viper's reload + downstream notification. The logger
+        is reconfigured. Server settings already in flight (TLS certs,
+        ports) are not changed by reload — those need start/stop or
+        process restart.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Reloaded.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          message: { type: string }
+        "500":
+          description: 'Reload failed. `code: CONFIG_RELOAD_FAILED`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /auth/start:
+    post:
+      tags: [lifecycle-auth]
+      summary: Start the auth (OIDC IdP) server.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleResponse' }
+        "409":
+          description: |
+            Cannot start from current state. `code` ∈
+            `{AUTH_SERVER_RUNNING, AUTH_SERVER_STARTING,
+            AUTH_SERVER_STOPPING}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "500":
+          description: 'Start failed. `code: AUTH_SERVER_ERROR`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /auth/stop:
+    post:
+      tags: [lifecycle-auth]
+      summary: Stop the auth server.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Stopped.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleResponse' }
+        "409":
+          description: |
+            `code` ∈ `{AUTH_SERVER_NOT_RUNNING, AUTH_SERVER_STARTING,
+            AUTH_SERVER_STOPPING}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "500":
+          description: 'Stop failed. `code: AUTH_SERVER_ERROR`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /auth/restart:
+    post:
+      tags: [lifecycle-auth]
+      summary: Stop then start the auth server.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Restarted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleResponse' }
+        "409":
+          description: 'Cannot restart from current state. `code: AUTH_SERVER_ERROR`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "500":
+          description: 'Restart failed. `code: AUTH_SERVER_ERROR`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/start:
+    post:
+      tags: [lifecycle-api]
+      summary: Start the API (resource) server.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Started.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleResponse' }
+        "500":
+          description: 'Start failed. `code: API_START_FAILED`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "503":
+          description: 'API server not wired into the control plane. `code: API_NOT_WIRED`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/stop:
+    post:
+      tags: [lifecycle-api]
+      summary: Stop the API server.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Stopped.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleResponse' }
+        "500":
+          description: 'Stop failed. `code: API_STOP_FAILED`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "503":
+          description: '`code: API_NOT_WIRED`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /api/restart:
+    post:
+      tags: [lifecycle-api]
+      summary: Stop then start the API server.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Restarted.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LifecycleResponse' }
+        "500":
+          description: 'Restart failed. `code: API_RESTART_FAILED`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "503":
+          description: '`code: API_NOT_WIRED`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /server/quit:
+    post:
+      tags: [lifecycle-self]
+      summary: Initiate a graceful process shutdown.
+      description: |
+        The response is sent **before** the shutdown begins (the
+        process exits ~100ms later). Useful for orchestrators that
+        want a clean exit without sending SIGTERM.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Shutdown initiated.
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: '#/components/schemas/SuccessEnvelope'
+                  - type: object
+                    properties:
+                      data:
+                        type: object
+                        properties:
+                          message: { type: string, const: "Shutdown initiated" }
+
+  /tls/reload:
+    post:
+      tags: [lifecycle-self]
+      summary: Re-read TLS certs/keys from disk for control + auth servers.
+      description: |
+        Manual trigger for cert rotation. Used by operators when the
+        in-process fsnotify watcher (`AKASHIC_PKI_CERT_WATCHER_ENABLED`)
+        is disabled, or as an override when it is. The response
+        reports per-server reload status.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: All reloads succeeded (each server reports its own status).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TLSReloadResponse' }
+        "500":
+          description: |
+            One or more reloads failed. `code: TLS_RELOAD_FAILED`. The
+            `details` field carries the same per-server breakdown as
+            the success body.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /bootstrap/status:
+    get:
+      tags: [bootstrap]
+      summary: Are we still in bootstrap mode?
+      description: |
+        Always reachable as long as the caller has a valid mTLS cert.
+        No client-cert CN check — answering "are you in bootstrap
+        mode?" is itself the gate for whether further bootstrap calls
+        will succeed.
+      security: [{ mtls: [] }]
+      responses:
+        "200":
+          description: Bootstrap status.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BootstrapStatusResponse' }
+
+  /bootstrap/token:
+    get:
+      tags: [bootstrap]
+      summary: Read the current bootstrap token.
+      description: |
+        Returns the existing token (does NOT mint a new one — see
+        `/bootstrap/token/regenerate`).
+
+        **CN-restricted: `cli.akashic.local` only.** The token is a
+        sensitive credential — only the CLI should ever fetch it
+        directly. The BFF doesn't need this endpoint; it goes
+        straight to `/bootstrap/root` with a token already presented
+        by the human operator.
+      security: [{ mtls-cli: [] }]
+      responses:
+        "200":
+          description: Token returned.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BootstrapTokenResponse' }
+        "403":
+          description: |
+            `code` ∈ `{MTLS_REQUIRED, CLIENT_NOT_ALLOWED, BOOTSTRAP_COMPLETE}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "404":
+          description: '`code: TOKEN_NOT_FOUND`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "429":
+          description: Rate limited.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /bootstrap/token/regenerate:
+    post:
+      tags: [bootstrap]
+      summary: Mint a fresh bootstrap token (invalidating any prior one).
+      description: |
+        **CN-restricted: `cli.akashic.local` only.** Rate-limited.
+        Pass `?force=true` to overwrite a still-valid existing token;
+        otherwise the call returns 409.
+      parameters:
+        - name: force
+          in: query
+          required: false
+          schema: { type: string, enum: ["true", "1", "yes"] }
+      security: [{ mtls-cli: [] }]
+      responses:
+        "200":
+          description: New token.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/BootstrapTokenResponse' }
+        "403":
+          description: |
+            `code` ∈ `{MTLS_REQUIRED, CLIENT_NOT_ALLOWED, BOOTSTRAP_COMPLETE}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "409":
+          description: |
+            Existing token still valid; pass `?force=true` to overwrite.
+            `code: TOKEN_ALREADY_EXISTS`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "429":
+          description: Rate limited.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+  /bootstrap/root:
+    post:
+      tags: [bootstrap]
+      summary: Create the root user, completing bootstrap.
+      description: |
+        **CN-restricted to `cli.akashic.local` OR `bff.akashic.local`.**
+        Rate-limited. The BFF needs this for the web-based bootstrap
+        flow, the CLI for the terminal flow.
+
+        On success, bootstrap mode ends — subsequent calls to bootstrap
+        endpoints will return `BOOTSTRAP_COMPLETE`.
+
+        Note: the LDAP entry must already exist. This endpoint only
+        creates the matching PostgreSQL row + flips bootstrap state.
+      security: [{ mtls-cli-or-bff: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRootUserRequest' }
+      responses:
+        "201":
+          description: Root user created. Bootstrap complete.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/CreateRootUserResponse' }
+        "400":
+          description: |
+            `code` ∈ `{INVALID_REQUEST, VALIDATION_FAILED,
+            PASSWORD_POLICY_VIOLATION}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "401":
+          description: 'Bootstrap token rejected. `code: INVALID_TOKEN`.'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "403":
+          description: |
+            `code` ∈ `{MTLS_REQUIRED, CLIENT_NOT_ALLOWED, BOOTSTRAP_COMPLETE}`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "409":
+          description: '`code: BOOTSTRAP_COMPLETE` (concurrent completion).'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+        "429":
+          description: Rate limited.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+
+components:
+  securitySchemes:
+    mtls:
+      type: mutualTLS
+      description: |
+        Any client certificate signed by `pki-mtls-akashic-ctrl` is
+        accepted.
+    mtls-cli:
+      type: mutualTLS
+      description: |
+        Client certificate must additionally have `CN=cli.akashic.local`.
+        Enforced by the `requireClientIdentity` middleware on top of
+        the standard mTLS check.
+    mtls-cli-or-bff:
+      type: mutualTLS
+      description: |
+        Client certificate must have `CN=cli.akashic.local` OR
+        `CN=bff.akashic.local`.
+
+  schemas:
+    SuccessEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+
+    StatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                control_server:
+                  type: object
+                  properties:
+                    state:   { type: string, enum: [running] }
+                    address: { type: string }
+                auth_server:
+                  type: object
+                  properties:
+                    state:   { type: string, enum: [stopped, starting, running, stopping, error] }
+                    uptime:  { type: string }
+                    address: { type: string }
+                uptime: { type: string }
+                pid:    { type: integer }
+
+    LifecycleResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                message: { type: string }
+                status:
+                  type: object
+                  properties:
+                    state:      { type: string, enum: [stopped, starting, running, stopping, error] }
+                    uptime:     { type: string }
+                    started_at: { type: string, format: date-time }
+                    address:    { type: string }
+
+    TLSReloadResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                control: { $ref: '#/components/schemas/TLSReloadServerResult' }
+                auth:    { $ref: '#/components/schemas/TLSReloadServerResult' }
+
+    TLSReloadServerResult:
+      type: object
+      properties:
+        reloaded: { type: boolean }
+        reason:   { type: string, description: "Set when `reloaded=false` for an expected reason (e.g. TLS not enabled)." }
+        error:    { type: string, description: "Set when reload failed." }
+
+    BootstrapStatusResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                needs_bootstrap:      { type: boolean }
+                bootstrap_started_at: { type: [string, "null"], format: date-time }
+                message:              { type: string }
+
+    BootstrapTokenResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                token:            { type: string, description: Base64-encoded token. }
+                ttl_seconds:      { type: integer }
+                expires_in_human: { type: string }
+                forced:           { type: boolean, description: Present on regenerate. }
+                message:          { type: string }
+
+    CreateRootUserRequest:
+      type: object
+      required: [token, username, email, password]
+      properties:
+        token:    { type: string, description: Bootstrap token from `/bootstrap/token`. }
+        username: { type: string }
+        email:    { type: string, format: email }
+        password: { type: string, format: password }
+
+    CreateRootUserResponse:
+      allOf:
+        - $ref: '#/components/schemas/SuccessEnvelope'
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                user:
+                  type: object
+                  properties:
+                    uid:        { type: string, format: uuid }
+                    ldap_dn:    { type: string }
+                    username:   { type: string }
+                    email:      { type: string, format: email }
+                    user_type:  { type: string, const: root }
+                    created_at: { type: string, format: date-time }
+                message: { type: string }

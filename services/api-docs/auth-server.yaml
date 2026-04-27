@@ -1,0 +1,440 @@
+openapi: 3.1.0
+info:
+  title: Akashic Auth Server (OIDC IdP)
+  version: 0.1.0
+  description: |
+    OAuth 2.1 + OpenID Connect authorization-server endpoints. Hosted
+    on the auth listener (default `0.0.0.0:8080`). Public-facing —
+    end-user browsers reach this server directly to log in, and OAuth
+    clients reach it for the token endpoint.
+
+    Endpoints under this spec emit **raw RFC-shaped JSON** (RFC 6749 /
+    RFC 6750 / OpenID Connect Discovery). They do **not** use the
+    `{success, data|error}` envelope used by the rest of Akashic — the
+    OAuth/OIDC specifications dictate the wire format. The exceptions
+    (`/health`, `/ready`) keep the envelope.
+
+    See `services/api-docs/README.md` for the rationale behind
+    hand-authoring these specs.
+  contact:
+    name: Akashic
+    url: https://akashic.example.com
+
+servers:
+  - url: https://auth.akashic.local:8080
+    description: Default local development listener
+  - url: https://auth.{tenantDomain}
+    description: Production (subdomain of tenant root domain)
+    variables:
+      tenantDomain:
+        default: akashic.example.com
+
+# Most endpoints on this server are intentionally public (registration,
+# login form, OIDC discovery). Operations that DO require credentials
+# override this with their own `security:` field — see /token and
+# /userinfo.
+security: []
+
+tags:
+  - name: meta
+    description: Liveness / readiness for orchestrators.
+  - name: discovery
+    description: OIDC discovery + JWKS — clients pin nothing else.
+  - name: session
+    description: Browser-facing login / logout pages and form posts.
+  - name: oauth
+    description: OAuth 2.1 authorization code + PKCE flow.
+
+paths:
+  /health:
+    get:
+      tags: [meta]
+      summary: Liveness probe.
+      description: Always returns 200 if the process is up. No deps checked.
+      responses:
+        "200":
+          description: Server is running.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HealthEnvelope' }
+
+  /ready:
+    get:
+      tags: [meta]
+      summary: Readiness probe.
+      description: Returns 200 when the server's keystore + auth-service deps are wired.
+      responses:
+        "200":
+          description: Server ready to accept OAuth flows.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ReadyEnvelope' }
+
+  /.well-known/openid-configuration:
+    get:
+      tags: [discovery]
+      summary: OpenID Connect Discovery 1.0 document.
+      description: |
+        Machine-readable description of the auth server's OIDC surface.
+        Cached for 1 hour by the `Cache-Control` header.
+      responses:
+        "200":
+          description: Discovery document.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              example: "public, max-age=3600"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OIDCDiscovery' }
+
+  /jwks.json:
+    get:
+      tags: [discovery]
+      summary: JSON Web Key Set — public keys used to sign ID tokens.
+      description: |
+        Cached for 5 minutes. Clients should retry on 503 (keystore
+        not yet initialized at startup).
+      responses:
+        "200":
+          description: JWKS.
+          headers:
+            Cache-Control:
+              schema: { type: string }
+              example: "public, max-age=300"
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/JWKS' }
+        "503":
+          description: Keystore not initialized.
+
+  /login:
+    get:
+      tags: [session]
+      summary: Server-rendered login form.
+      parameters:
+        - name: return_to
+          in: query
+          required: false
+          schema: { type: string }
+          description: Relative path to redirect to after successful login.
+      responses:
+        "200":
+          description: HTML login page.
+          content:
+            text/html:
+              schema: { type: string }
+
+  /login/submit:
+    post:
+      tags: [session]
+      summary: Submit username/password against LDAP, set session cookie.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [csrf_token, username, password]
+              properties:
+                csrf_token: { type: string }
+                username:   { type: string }
+                password:   { type: string, format: password }
+                return_to:  { type: string }
+      responses:
+        "303":
+          description: |
+            Login OK. Sets the `akashic_auth_session` cookie and
+            redirects to `return_to` (or `/` if not given).
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              example: "akashic_auth_session=...; HttpOnly; Secure; SameSite=Lax"
+            Location:
+              schema: { type: string }
+        "200":
+          description: |
+            Login failed. The login page is re-rendered with one of the
+            following inline error messages — there is no JSON error
+            envelope on this endpoint:
+              * `Session expired. Please reload and try again.` (CSRF mismatch)
+              * `Too many login attempts. Please wait and try again.` (rate limit)
+              * `Invalid username or password.`
+              * `Authentication system error. Please try again.`
+          content:
+            text/html:
+              schema: { type: string }
+
+  /logout:
+    get:
+      tags: [session]
+      summary: Clear session cookie and redirect.
+      parameters:
+        - name: post_logout_redirect_uri
+          in: query
+          required: false
+          schema: { type: string }
+          description: |
+            Optional URI to redirect to after logout. Origin must match a
+            registered client's origin; otherwise the user is sent to
+            `/login` (silent fallback, no error).
+      responses:
+        "303":
+          description: Cookie cleared, redirect issued.
+          headers:
+            Set-Cookie:
+              schema: { type: string }
+              example: "akashic_auth_session=; Max-Age=0"
+            Location:
+              schema: { type: string }
+
+  /authorize:
+    get:
+      tags: [oauth]
+      summary: OAuth 2.1 authorization endpoint (Authorization Code + PKCE).
+      description: |
+        Standard authorization code flow. PKCE is **required** —
+        only `code_challenge_method=S256` is supported.
+
+        If the user is not authenticated (no session cookie), the
+        request is redirected to `/login?return_to=<this-request-url>`.
+      parameters:
+        - { name: client_id,             in: query, required: true,  schema: { type: string } }
+        - { name: redirect_uri,          in: query, required: true,  schema: { type: string, format: uri } }
+        - { name: response_type,         in: query, required: true,  schema: { type: string, enum: [code] } }
+        - { name: scope,                 in: query, required: false, schema: { type: string }, description: "Space-separated. Defaults to `openid`." }
+        - { name: state,                 in: query, required: false, schema: { type: string } }
+        - { name: code_challenge,        in: query, required: true,  schema: { type: string } }
+        - { name: code_challenge_method, in: query, required: false, schema: { type: string, enum: [S256], default: S256 } }
+        - { name: nonce,                 in: query, required: false, schema: { type: string } }
+      responses:
+        "302":
+          description: |
+            On success, redirects to `redirect_uri?code=...&state=...`.
+            On post-validation errors, redirects to
+            `redirect_uri?error=<rfc6749_code>&error_description=...`
+            (e.g. `unsupported_response_type`, `invalid_scope`,
+            `unauthorized_client`, `invalid_request`, `server_error`).
+          headers:
+            Location:
+              schema: { type: string }
+        "400":
+          description: |
+            Pre-redirect-uri validation failed (cannot redirect because
+            `client_id` or `redirect_uri` is bad). Returns plain text /
+            HTML, not a redirect.
+        "503":
+          description: Auth service not ready.
+
+  /token:
+    post:
+      tags: [oauth]
+      summary: OAuth 2.1 token endpoint.
+      description: |
+        Exchanges an authorization code (issued by `/authorize`) for an
+        access token + ID token. Client authentication is via
+        HTTP Basic auth (`client_id:client_secret`) **or** form fields,
+        per RFC 6749 §2.3.1.
+
+        Responses follow RFC 6749 §5 — they are NOT enveloped in the
+        `{success, data|error}` shape used elsewhere.
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [grant_type, code, redirect_uri, code_verifier]
+              properties:
+                grant_type:    { type: string, enum: [authorization_code] }
+                code:          { type: string }
+                redirect_uri:  { type: string, format: uri }
+                code_verifier: { type: string, description: "PKCE proof — must hash to the `code_challenge` sent to /authorize." }
+                client_id:     { type: string, description: "Required if not using HTTP Basic auth." }
+                client_secret: { type: string, description: "Required if not using HTTP Basic auth." }
+      responses:
+        "200":
+          description: Token response (RFC 6749 §5.1).
+          headers:
+            Cache-Control: { schema: { type: string }, example: "no-store" }
+            Pragma:        { schema: { type: string }, example: "no-cache" }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/TokenResponse' }
+        "400":
+          description: |
+            RFC 6749 §5.2 error. `error` ∈ `{invalid_request,
+            unsupported_grant_type, invalid_grant}` (last covers
+            expired/consumed code, redirect mismatch, PKCE failure,
+            disabled user).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OAuthError' }
+        "401":
+          description: RFC 6749 §5.2 — `invalid_client`.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OAuthError' }
+        "503":
+          description: RFC 6749 §5.2 — `server_error`. Keystore unavailable.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/OAuthError' }
+      security:
+        - basicClientAuth: []
+        - {}
+
+  /userinfo:
+    get:
+      tags: [oauth]
+      summary: OIDC UserInfo endpoint.
+      description: |
+        Returns claims about the authenticated user. The exact set
+        depends on the access token's scopes (`profile` adds `name`
+        and `preferred_username`; `email` adds `email`).
+      responses:
+        "200":
+          description: UserInfo response (raw OIDC, not enveloped).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserInfo' }
+        "401":
+          description: |
+            RFC 6750 invalid token. Sets the `WWW-Authenticate: Bearer
+            error="invalid_token"` header. Body uses the standard
+            envelope: `code` ∈ `{BEARER_INVALID_TOKEN}`.
+          headers:
+            WWW-Authenticate:
+              schema: { type: string }
+              example: 'Bearer error="invalid_token", error_description="..."'
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ErrorEnvelope' }
+      security:
+        - bearerAccessToken: []
+    post:
+      tags: [oauth]
+      summary: OIDC UserInfo endpoint (POST variant).
+      description: Same as GET. Some clients prefer POST.
+      responses:
+        "200":
+          description: UserInfo response.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/UserInfo' }
+      security:
+        - bearerAccessToken: []
+
+components:
+  securitySchemes:
+    basicClientAuth:
+      type: http
+      scheme: basic
+      description: |
+        OAuth client authentication (RFC 6749 §2.3.1). Client ID and
+        secret encoded as `Basic base64(client_id:client_secret)`.
+    bearerAccessToken:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  schemas:
+    HealthEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          properties:
+            status: { type: string, const: healthy }
+
+    ReadyEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: true }
+        data:
+          type: object
+          properties:
+            ready: { type: boolean }
+            checks:
+              type: object
+              additionalProperties: { type: string }
+
+    ErrorEnvelope:
+      type: object
+      properties:
+        success: { type: boolean, const: false }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:    { type: string }
+            message: { type: string }
+            details: { type: object, additionalProperties: true }
+
+    OIDCDiscovery:
+      type: object
+      properties:
+        issuer:                                 { type: string, format: uri }
+        authorization_endpoint:                 { type: string, format: uri }
+        token_endpoint:                         { type: string, format: uri }
+        userinfo_endpoint:                      { type: string, format: uri }
+        jwks_uri:                               { type: string, format: uri }
+        response_types_supported:               { type: array, items: { type: string } }
+        subject_types_supported:                { type: array, items: { type: string } }
+        id_token_signing_alg_values_supported:  { type: array, items: { type: string } }
+        scopes_supported:                       { type: array, items: { type: string } }
+        token_endpoint_auth_methods_supported:  { type: array, items: { type: string } }
+        grant_types_supported:                  { type: array, items: { type: string } }
+        code_challenge_methods_supported:       { type: array, items: { type: string } }
+        claims_supported:                       { type: array, items: { type: string } }
+
+    JWKS:
+      type: object
+      properties:
+        keys:
+          type: array
+          items: { $ref: '#/components/schemas/JWK' }
+
+    JWK:
+      type: object
+      description: RFC 7517 JSON Web Key. Akashic emits RSA public keys for `RS256`.
+      properties:
+        kty: { type: string, example: RSA }
+        use: { type: string, example: sig }
+        kid: { type: string, description: Key ID — rotates on signing-key rollover. }
+        alg: { type: string, example: RS256 }
+        n:   { type: string, description: RSA modulus (base64url). }
+        e:   { type: string, description: RSA public exponent (base64url). }
+
+    TokenResponse:
+      type: object
+      description: RFC 6749 §5.1 token response.
+      required: [access_token, token_type, expires_in]
+      properties:
+        access_token: { type: string, description: Opaque-shaped JWT access token. }
+        token_type:   { type: string, const: Bearer }
+        expires_in:   { type: integer, description: TTL in seconds. }
+        scope:        { type: string }
+        id_token:     { type: string, description: "Present when the `openid` scope was granted (signed JWT)." }
+
+    OAuthError:
+      type: object
+      description: RFC 6749 §5.2 / RFC 6750 §3 error.
+      required: [error]
+      properties:
+        error:             { type: string, example: invalid_grant }
+        error_description: { type: string }
+        error_uri:         { type: string, format: uri }
+
+    UserInfo:
+      type: object
+      description: |
+        Claims emitted by `/userinfo`. The exact set depends on
+        granted scopes. Always includes `sub` and `user_type`.
+      properties:
+        sub:                { type: string, format: uuid }
+        user_type:          { type: string, enum: [user, admin, root] }
+        preferred_username: { type: string, description: "Present when scope contains `profile`." }
+        name:               { type: string, description: "Present when scope contains `profile`." }
+        email:              { type: string, format: email, description: "Present when scope contains `email`." }
