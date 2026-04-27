@@ -61,22 +61,38 @@
 
 ### What's new
 
+> **Mid-phase architecture pivot (2026-04-27).** The original Phase 8
+> design colocated end-user-facing endpoints (`/users/me`, `/clients/*`,
+> registration) on the control plane behind mTLS, with the portal
+> holding an mTLS client cert. Mid-implementation we split those
+> endpoints onto a **third dedicated listener** — the bearer-token
+> "resource API server" on port 8082 — and removed the portal's mTLS
+> footprint entirely. The portal now talks to the api server with the
+> user's own access token, the same way any third-party OAuth client
+> would. Rationale: aligns with OAuth's authorization-server vs.
+> resource-server partition, gives each surface one trust mechanism,
+> and shrinks the portal's privileged-trust footprint to zero.
+>
+> The Files Summary at the bottom reflects what shipped under this
+> three-server model. Chapter 3 below has been rewritten accordingly.
+
 ```
                                   ┌──────────────────────┐
                                   │  akashic.<domain>    │   ← NEW (Phase 8)
    admin.akashic.*  ◄─────────────┤  Next.js portal      │
-   (Phase 6 admin)                │  (with embedded API  │
-                                  │   routes acting as   │
-                                  │   BFF over mTLS)     │
+   (Phase 6 admin)                │  (browser session +  │
+                                  │   bearer-token API   │
+                                  │   client; NO mTLS)   │
                                   └──────────┬───────────┘
-                                             │ mTLS to control plane
-                                             │ OAuth to auth listener
+                                             │ OAuth to auth listener (8080)
+                                             │ Bearer to api listener   (8082)
                                              ▼
                                   ┌──────────────────────┐
                                   │  akashic server      │
-                                  │  (Phase 7, expanded  │
-                                  │   with new control   │
-                                  │   plane endpoints)   │
+                                  │  three listeners:    │
+                                  │   • auth   (8080)    │ ← OIDC IdP
+                                  │   • api    (8082)    │ ← bearer resource
+                                  │   • ctrl   (8081)    │ ← mTLS admin only
                                   └──────────────────────┘
                                              │
                                   ┌──────────┼───────────┐
@@ -92,9 +108,11 @@
 - **Postgres / Redis / LDAP** — same stores. Postgres gets new columns
   on `users` and `client_services`; LDAP gets self-service users (not
   just root-bootstrapped ones).
-- **Vault PKI / TLS-everywhere** — unchanged. The portal needs an
-  mTLS client cert too, issued from the same `pki-mtls-akashic-ctrl`
-  intermediate.
+- **Vault PKI / TLS-everywhere** — unchanged. After the three-server
+  pivot the portal does **not** need an mTLS client cert; it
+  authenticates to the api server with bearer tokens. (The api
+  server itself still gets a server cert from `pki-internal/server`
+  — `api.akashic.local`.)
 - **The admin-bff** — unchanged. It stays root/admin-only. End-users
   and developers never visit it.
 
@@ -194,7 +212,14 @@ many people register.
 
 # Chapters & Steps
 
-## Chapter 1 — Domain model & control-plane API expansion
+## Chapter 1 — Domain model & resource-API surface
+
+> **Architecture-pivot note.** Steps 1.5–1.8 originally targeted the
+> control plane (port 8081, mTLS-only). Mid-Phase 8 those endpoints
+> moved to the dedicated bearer-authenticated **api server** (port
+> 8082). The "Control-plane endpoint" wording in the step titles
+> below is the as-planned artefact; the as-built location is the api
+> server. See Files Summary.
 
 The akashic server gets new endpoints that the portal will call. All
 on the **control plane** (mTLS-only). The portal's BFF authenticates
@@ -348,14 +373,13 @@ Add `services/proxy/nginx.conf`'s **root-domain server block** (no
 subdomain regex prefix; matches the bare deployment domain
 configured via env). Proxies to `tenant-portal:3000`.
 
-### Step 2.6 — Vault Agent template for portal mTLS client cert
+### Step 2.6 — ~~Vault Agent template for portal mTLS client cert~~
 
-New template `services/vault-agent/templates/portal-client.tpl` →
-issues a cert with CN `portal.akashic.local`, written to
-`/certs/portal/akashic-ctrl-client.{crt,key}`.
-
-The control plane's mTLS allowlist needs `portal.akashic.local`
-added (`pkg/middleware/mtls.go`).
+> **Removed by architecture pivot.** The portal no longer needs an
+> mTLS client cert — it talks to the api server (8082) with bearer
+> tokens. The `portal-client.tpl` template that was briefly present
+> in the repo has been deleted. This step is left in the plan only
+> as a historical marker; nothing here needs to be done.
 
 ### Step 2.7 — Compose extra_hosts
 
@@ -368,35 +392,51 @@ Same pattern as admin-bff: `extra_hosts: host-gateway` for
 
 ---
 
-## Chapter 3 — Portal session, auth, mTLS
+## Chapter 3 — Portal session, OAuth, bearer-token API client
 
-The plumbing for "portal as OAuth client + control-plane caller."
+> **Revised post-architecture-pivot.** The original Step 3.1 (mTLS
+> control client) is gone — the portal makes no mTLS calls. In its
+> place, Step 3.1 builds a bearer-token client to the api server.
+> Steps 3.2–3.6 carry over with minor adjustments.
 
-### Step 3.1 — mTLS control client
+The plumbing for "portal as OAuth client + bearer-token API caller."
 
-`web/portal/server/akashic-control-client.ts`. Uses Node's
-`https.Agent` with client cert. Same shape as
-`pkg/admin_bff/client.go`'s `ControlClient`, ported to TypeScript.
-Reads cert paths from env vars; fsnotify-based reload analogous to
-the Go reloader.
+### Step 3.1 — Bearer-token API client
+
+`web/portal/server/akashic-api-client.ts`. Server-side helper that
+calls `https://api.akashic.local:8082` with the user's access token
+(read from the encrypted session cookie). Implements:
+
+- `apiFetch(req, path, init)` — adds `Authorization: Bearer <token>`,
+  forwards to api.akashic.local, returns parsed envelope.
+- Trust: validates the api server's TLS cert against the system
+  trust store (issued from `pki-internal/server`, which the portal
+  container has rooted via `update-ca-certificates` at build time).
+  No client cert.
+- 401 handling: clears the session cookie, redirects to `/sign-in`.
+  No silent token refresh in Phase 8 (no refresh tokens).
+
+This replaces the original mTLS-control-client step entirely.
 
 ### Step 3.2 — OAuth client integration
 
 The portal *is* an OAuth client: when a user clicks "Sign in", we
 redirect them to the akashic auth server's `/authorize`, then
 receive the code at `/api/auth/callback`. Same flow as admin-bff,
-just in TypeScript.
+just in TypeScript and with PKCE.
 
 Built-in client: a new `akashic-portal` row added to the
 `client_services` upsert in `pkg/oauth/builtin.go`. Same secret-on-
 disk pattern as `akashic-admin`. The portal's redirect_uri is the
-root domain's `/api/auth/callback`.
+portal's `/api/auth/callback`.
 
 ### Step 3.3 — Session management
 
 Redis-backed (same Redis instance as everything else, new logical
 DB index — DB 2 — for the portal). Session cookie:
 `akashic_portal_session`, HttpOnly + Secure + SameSite=Lax.
+The session value is an opaque ID; the Redis-backed payload holds
+the access token, refresh metadata, and user identity claims.
 RedisInsight provisioning gets a third connection card for DB 2
 (matching the existing pattern from Phase 7's polish work).
 
@@ -409,11 +449,16 @@ middleware applies it on state-changing API routes.
 
 Same pattern as admin-bff (Phase 7's lazy `ensureOAuth`). The
 portal must tolerate akashic-server being briefly down without
-losing its ability to start up.
+losing its ability to start up — discovery is fetched on first
+need, not at process boot.
 
 ### Step 3.6 — Audit logging
 
 Mirror admin-bff's allowlist-based audit writer in TypeScript.
+Portal-side events: `portal.signin.success`, `portal.signin.failure`,
+`portal.signup.success`, `portal.api.bearer_rejected`. The api
+server itself emits server-side audit lines for the resource-level
+operations (`user.password_changed`, `client.created`, …).
 
 ---
 
