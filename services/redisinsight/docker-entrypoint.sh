@@ -51,73 +51,137 @@ function api(method, path, body) {
         console.log('[redisinsight-init] Agreements accepted.');
     }
 
-    // Step 2: Check existing databases — update if TLS changed, remove stale entries
+    // Akashic uses TWO logical Redis databases on the same instance:
+    //   DB 0 — owned by the akashic-server (auth-server sessions,
+    //          authorization codes, rate-limit counters)
+    //   DB 1 — owned by the admin-bff (browser-session store)
+    //
+    // Each gets its OWN RedisInsight connection card, so an operator
+    // browsing redisinsight.<domain> immediately sees both keyspaces
+    // without having to know about the database-index selector inside
+    // a single connection. Two services, two stores, two cards.
+    const desiredDbs = [
+        {
+            name: 'Akashic Redis (akashic server)',
+            db:   0,
+            note: 'auth-server sessions, OAuth codes, rate-limit counters',
+        },
+        {
+            name: 'Akashic Redis (admin-bff)',
+            db:   1,
+            note: 'admin-bff browser sessions',
+        },
+    ];
+
+    // RedisInsight does NOT expose POST /api/certificates/ca — CA
+    // certs only get created as a side-effect of inlining them in a
+    // database POST under `caCert: { name, certificate }`. And it
+    // rejects duplicate CA-cert names with HTTP 400. So if two
+    // database connections both inline the same name, the second
+    // collides.
+    //
+    // Workaround: give each database its OWN uniquely-named copy of
+    // the CA. Two cert resources for the same underlying PEM is a
+    // minor waste, but it sidesteps the collision rule entirely and
+    // doesn't depend on any phantom API. Cleanup of stale cert
+    // resources is handled below before we add new connections.
+
+    function buildDbConfig(spec, wantTls) {
+        const cfg = {
+            name: spec.name,
+            host: '${REDIS_HOST}',
+            port: ${REDIS_PORT},
+            db:   spec.db,
+        };
+        if ('${REDIS_PASSWORD}') cfg.password = '${REDIS_PASSWORD}';
+        if (wantTls && fs.existsSync('${CA_CERT_PATH}')) {
+            cfg.tls = true;
+            cfg.verifyServerCert = true;
+            cfg.caCert = {
+                // Per-connection cert name, includes db index to keep
+                // it unique across connections.
+                name: 'Akashic Internal CA (db ' + spec.db + ')',
+                certificate: fs.readFileSync('${CA_CERT_PATH}', 'utf8'),
+            };
+        } else {
+            cfg.tls = false;
+        }
+        return cfg;
+    }
+
+    // Clean up stale CA cert resources from any previous run. Without
+    // this, a re-run that's already past the database-add step would
+    // find leftover certs named 'Akashic Internal CA (db 0)' etc.
+    // and re-collide on the same name. We delete every cert whose
+    // name starts with 'Akashic Internal CA' before adding new ones.
+    async function cleanStaleCACerts() {
+        const list = await api('GET', '/api/certificates/ca');
+        for (const c of list.body || []) {
+            if (typeof c.name === 'string' && c.name.startsWith('Akashic Internal CA')) {
+                console.log('[redisinsight-init] Removing stale CA cert: ' + c.name);
+                await api('DELETE', '/api/certificates/ca/' + c.id);
+            }
+        }
+    }
+
+    // Step 2: reconcile the existing RedisInsight database list
+    // against the desired list. Three actions per existing entry:
+    //   - matches a desired entry by name, with same TLS setting → keep
+    //   - matches by name but TLS setting changed → patch in place
+    //   - doesn't match any desired name → DELETE (stale leftover from
+    //     a previous schema, e.g. the old 'Akashic Redis' card)
     const wantTls = '${REDIS_TLS}' === 'on';
-    const dbs = await api('GET', '/api/databases');
-    let found = null;
-    for (const db of dbs.body) {
-        if (db.name === 'Akashic Redis') {
-            found = db;
+    const desiredNames = new Set(desiredDbs.map(d => d.name));
+    const existing = await api('GET', '/api/databases');
+    const byName = {};
+    for (const db of existing.body) {
+        if (desiredNames.has(db.name)) {
+            byName[db.name] = db;
         } else {
             console.log('[redisinsight-init] Removing stale database: ' + db.name + ' (' + db.id + ')');
             await api('DELETE', '/api/databases/' + db.id);
         }
     }
-    if (found) {
-        if (found.tls === wantTls) {
-            console.log('[redisinsight-init] Database \"Akashic Redis\" already configured (TLS=' + (wantTls ? 'on' : 'off') + ').');
-            return;
-        }
-        // TLS config changed — update in place (keeps the same ID so browser doesn't break)
-        console.log('[redisinsight-init] TLS config changed (was ' + (found.tls ? 'on' : 'off') + ', now ' + (wantTls ? 'on' : 'off') + '). Updating...');
-        const update = { tls: wantTls };
-        if (wantTls && fs.existsSync('${CA_CERT_PATH}')) {
-            update.verifyServerCert = true;
-            update.caCert = {
-                name: 'Akashic Internal CA',
-                certificate: fs.readFileSync('${CA_CERT_PATH}', 'utf8')
-            };
+
+    // Clean stale CA cert resources before we add new databases so
+    // their inlined certs don't collide with names from a prior run.
+    await cleanStaleCACerts();
+
+    // Step 3: create / update each desired connection
+    for (const spec of desiredDbs) {
+        const found = byName[spec.name];
+        if (found) {
+            if (found.tls === wantTls && found.db === spec.db) {
+                console.log('[redisinsight-init] \"' + spec.name + '\" already configured (TLS=' + (wantTls ? 'on' : 'off') + ', db=' + spec.db + ').');
+                continue;
+            }
+            console.log('[redisinsight-init] \"' + spec.name + '\" config changed; updating...');
+            const update = { tls: wantTls, db: spec.db };
+            if (wantTls && fs.existsSync('${CA_CERT_PATH}')) {
+                update.verifyServerCert = true;
+                update.caCert = {
+                    name: 'Akashic Internal CA (db ' + spec.db + ')',
+                    certificate: fs.readFileSync('${CA_CERT_PATH}', 'utf8'),
+                };
+            } else {
+                update.verifyServerCert = false;
+                update.caCert = null;
+            }
+            const r = await api('PATCH', '/api/databases/' + found.id, update);
+            if (r.status === 200) {
+                console.log('[redisinsight-init] \"' + spec.name + '\" updated.');
+            } else {
+                console.log('[redisinsight-init] Failed to update \"' + spec.name + '\":', JSON.stringify(r.body));
+            }
         } else {
-            update.verifyServerCert = false;
-            update.caCert = null;
+            console.log('[redisinsight-init] Adding \"' + spec.name + '\" (' + spec.note + ')...');
+            const r = await api('POST', '/api/databases', buildDbConfig(spec, wantTls));
+            if (r.status === 201) {
+                console.log('[redisinsight-init] \"' + spec.name + '\" added (TLS=' + (wantTls ? 'on' : 'off') + ', db=' + spec.db + ').');
+            } else {
+                console.log('[redisinsight-init] Failed to add \"' + spec.name + '\":', JSON.stringify(r.body));
+            }
         }
-        const patchResult = await api('PATCH', '/api/databases/' + found.id, update);
-        if (patchResult.status === 200) {
-            console.log('[redisinsight-init] Database updated (TLS=' + (wantTls ? 'on' : 'off') + ').');
-        } else {
-            console.log('[redisinsight-init] Failed to update database:', JSON.stringify(patchResult.body));
-        }
-        return;
-    }
-
-    // Step 3: Build database config
-    const dbConfig = {
-        name: 'Akashic Redis',
-        host: '${REDIS_HOST}',
-        port: ${REDIS_PORT},
-    };
-    if ('${REDIS_PASSWORD}') dbConfig.password = '${REDIS_PASSWORD}';
-
-    if ('${REDIS_TLS}' === 'on' && fs.existsSync('${CA_CERT_PATH}')) {
-        dbConfig.tls = true;
-        dbConfig.verifyServerCert = true;
-        dbConfig.caCert = {
-            name: 'Akashic Internal CA',
-            certificate: fs.readFileSync('${CA_CERT_PATH}', 'utf8')
-        };
-        console.log('[redisinsight-init] TLS enabled with CA cert verification.');
-    } else {
-        dbConfig.tls = false;
-        console.log('[redisinsight-init] TLS disabled.');
-    }
-
-    // Step 4: Add database
-    console.log('[redisinsight-init] Adding Redis database...');
-    const result = await api('POST', '/api/databases', dbConfig);
-    if (result.status === 201) {
-        console.log('[redisinsight-init] Database \"Akashic Redis\" added successfully.');
-    } else {
-        console.log('[redisinsight-init] Failed to add database:', JSON.stringify(result.body));
     }
 })().catch(err => console.error('[redisinsight-init] Error:', err.message));
 "
