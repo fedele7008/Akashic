@@ -46,10 +46,21 @@ RUN npm run build
 # ─── Stage 3: runtime ─────────────────────────────────────────────────
 FROM node:22-alpine AS runner
 
-# Run as a non-root user. The portal reads /certs and /keys but
-# never writes to them, so it doesn't need root. Same uid/gid
-# convention as the admin-bff (10100). Cross-container UID matters
-# for shared volumes — see Phase 7 chapter 5 of the study guide.
+# ca-certificates  — needed by update-ca-certificates so the entrypoint
+#                    can install the akashic internal CA into the OS
+#                    trust store. Once it's there, Node's TLS defaults
+#                    Just Work for both fetch (api server) and ioredis
+#                    — no NODE_EXTRA_CA_CERTS, no undici dispatcher
+#                    plumbing.
+# su-exec         — minimal "drop privileges and exec" tool. The
+#                    entrypoint runs briefly as root to update certs,
+#                    then drops to uid 10100 before exec'ing node.
+RUN apk add --no-cache ca-certificates su-exec
+
+# Run as a non-root user for the actual server process. Same uid/gid
+# convention as the admin-bff (10100). The entrypoint starts as root
+# (we don't set USER here) to update the cert trust store, then
+# drops to akashic via su-exec.
 RUN addgroup -g 10100 akashic && \
     adduser -D -u 10100 -G akashic akashic
 
@@ -61,19 +72,16 @@ WORKDIR /app
 #   .next/standalone/server.js   (the entry point)
 #   .next/static/            ← still need to be served, copy alongside
 #   public/                  ← static-files dir
-#
-# The standalone output sets an internal port via env (PORT=3000 by
-# default).
 COPY --from=builder --chown=akashic:akashic /app/public ./public
 COPY --from=builder --chown=akashic:akashic /app/.next/standalone ./
 COPY --from=builder --chown=akashic:akashic /app/.next/static ./.next/static
 
-# Entrypoint script wires up the OAuth client secret and TLS trust
-# at runtime — see the script's header for details.
+# Entrypoint runs as root (cert install) then drops to akashic.
 COPY services/portal/portal-entrypoint.sh /usr/local/bin/portal-entrypoint.sh
 RUN chmod +x /usr/local/bin/portal-entrypoint.sh
 
-USER akashic
+# NOTE: NO `USER akashic` here. The entrypoint script handles that
+# transition itself (via su-exec) after running update-ca-certificates.
 
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0

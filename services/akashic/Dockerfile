@@ -1,46 +1,60 @@
 # ──────────────────────────────────────────────────────────────────────────────
 # Akashic IDP server — multi-stage build
 #
-# Stage 1 compiles the static binary; stage 2 is a minimal Alpine image that
-# just runs it. We keep Alpine (rather than distroless) so operators can `exec`
-# in with a shell for troubleshooting TLS / cert-watcher behaviour.
+# Three stages:
+#   1. widget-builder  — builds the embeddable Web Component bundle
+#                        (web/widgets/) that the api-server hosts at
+#                        /widgets/akashic.js and /widgets/akashic-default.css
+#   2. go-builder      — compiles the static Go binary
+#   3. runtime         — minimal Alpine that runs the binary; widget
+#                        artefacts copied into /usr/local/share/akashic-widgets/
 # ──────────────────────────────────────────────────────────────────────────────
-FROM golang:1.24-alpine AS builder
+
+# ─── Stage 1: widget bundle ───────────────────────────────────────────────────
+FROM node:22-alpine AS widget-builder
+
+WORKDIR /widgets
+
+# Copy package metadata first so the npm install layer caches across
+# source edits.
+COPY web/widgets/package.json web/widgets/package-lock.json* ./
+RUN npm install --no-audit --no-fund
+
+# Copy widget source and build. Output: dist/akashic.js + dist/akashic-default.css.
+COPY web/widgets/ ./
+RUN npm run build
+
+# ─── Stage 2: Go binary ───────────────────────────────────────────────────────
+FROM golang:1.24-alpine AS go-builder
 
 WORKDIR /src
 
-# Copy module files first so the dep-download layer is cached across source edits.
+# Module deps first — caches across source edits.
 COPY go.mod go.sum ./
 RUN go mod download
 
-# Copy the rest of the source tree. .dockerignore excludes tmp/, certs/, .git,
-# and other host-only artifacts to keep the build context small.
+# Copy the rest of the source. .dockerignore excludes tmp/, certs/, .git, etc.
 COPY . .
 
-# CGO off → fully static binary. -s -w strips DWARF and symbol tables, cutting
-# binary size roughly in half without impacting runtime behaviour.
+# CGO off → fully static binary. -s -w strips DWARF and symbol tables.
 RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w" \
     -o /out/akashic \
     ./cmd/akashic
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ─── Stage 3: runtime ─────────────────────────────────────────────────────────
 FROM alpine:3.20
 
-# ca-certificates is required for the Go stdlib's http client to verify
-# external TLS endpoints (e.g. outbound OIDC calls if ever added). tzdata
-# keeps AKASHIC_TZ meaningful.
+# ca-certificates for the Go stdlib's http client; tzdata for AKASHIC_TZ.
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY --from=builder /out/akashic /usr/local/bin/akashic
+# Akashic binary.
+COPY --from=go-builder /out/akashic /usr/local/bin/akashic
 
-# Drop to an unprivileged uid. /certs is mounted read-only from the certs
-# volume (same one Vault Agent writes to), so uid 1000 can read everything
-# issued with writeToFile ... "0644" permissions. The 0600 keys are owned
-# by root but readable by us because we run as root inside the build stage,
-# then chown-copy the binary. Pragmatic for dev; revisit for production.
-#
-# Keeping root for now — matches the pattern used by postgres/redis entrypoints.
+# Widget bundle artefacts. Served by api-server at /widgets/akashic.js
+# and /widgets/akashic-default.css. Read-only at runtime.
+COPY --from=widget-builder /widgets/dist /usr/local/share/akashic-widgets
+
 WORKDIR /app
 
 ENTRYPOINT ["/usr/local/bin/akashic"]

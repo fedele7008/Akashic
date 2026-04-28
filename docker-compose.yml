@@ -768,25 +768,33 @@ services:
           - admin-bff.akashic.local
 
   # ═══════════════════════════════════════════════════════════════════════════════
-  # portal: Public-facing Next.js portal (Phase 8)
+  # portal: Sample Next.js portal (Phase 8b — sample profile)
   # ═══════════════════════════════════════════════════════════════════════════════
-  # Self-service surface for end users (signup, profile, password
-  # change) and developers (OAuth client registration, secret
-  # rotation). Hosts the bare deployment domain — e.g.,
-  # https://akashic.<your-domain>/.
+  # Reference implementation showing how a tenant integrates Akashic.
+  # Demonstrates BOTH integration patterns at once:
+  #   • OAuth + BFF (server-side iron-session, code exchange) for SSR
+  #     and bearer-protected server-to-server calls
+  #   • Web Component widgets (Phase 8b) for in-page surfaces —
+  #     signup, profile, password change, OAuth client management
   #
-  # Trust to the akashic-server: bearer-token (post-Phase-8 refactor).
-  # The portal authenticates to the api server (port 8082) using the
-  # signed-in user's own access token; it holds no privileged trust
-  # material — no mTLS client cert.
+  # Status: SAMPLE. Not part of the default deployment.
+  #   Bring up with:  docker compose --profile sample up -d
+  #   Without it,  the bare deployment domain is available for the
+  #   tenant's own product to take over (which is what real tenants
+  #   pulling Akashic will do — they bring their own website to the
+  #   root domain and embed Akashic widgets into it).
   #
-  # Browsers reach it through the nginx-proxy's root-domain server
-  # block (services/proxy/nginx.conf). Same lazy-init pattern as
-  # admin-bff for OAuth client — the portal tolerates akashic being
-  # absent at boot and recovers once akashic comes up.
+  # Reaches Akashic via:
+  #   - auth.<domain>: OAuth flow (full-page redirects), /session/token
+  #     for in-page widget bearer exchange
+  #   - api.<domain>:  resource API + widget bundle hosting
+  #     (the BFF holds bearers from OAuth code-exchange; widgets get
+  #     their own short-lived bearers via /session/token)
   portal:
-    # No `profiles:` — comes up with the default `docker compose up -d`,
-    # alongside admin-bff. Only akashic itself is gated by `--profile app`.
+    # Demoted to sample-profile in Phase 8b. Real tenants pull Akashic
+    # and bring their own website; the portal is a reference to read,
+    # not the product.
+    profiles: ["sample"]
     build:
       context: .
       dockerfile: ./services/portal/Dockerfile

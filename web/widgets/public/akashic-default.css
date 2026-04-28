@@ -1,0 +1,76 @@
+/*
+ * akashic-default.css — optional baseline stylesheet for the
+ * Akashic widget bundle.
+ *
+ * The widgets work without this file — they use Lit's component-
+ * scoped styles and their `::part()` regions can be styled by the
+ * tenant directly. This file gives tenants who don't want to write
+ * any CSS a "looks reasonable out of the box" starting point.
+ *
+ * Tier 0 integration:
+ *   <link rel="stylesheet" href="https://api.<tenant>/widgets/akashic-default.css">
+ *   <script src="https://api.<tenant>/widgets/akashic.js"></script>
+ *   <akashic-signup></akashic-signup>
+ *
+ * Tier 1 integration: load this file, then override the
+ * `--akashic-*` CSS custom properties to brand it.
+ *
+ * Tier 2 integration: skip this file, write your own rules using
+ * `akashic-signup::part(...)` etc. See doc/widgets-styling.md
+ * (Phase 8b Step 9).
+ */
+
+akashic-signup,
+akashic-profile,
+akashic-change-password,
+akashic-forgot-help,
+akashic-clients {
+  /* Token defaults — every variable is overridable. */
+  --akashic-text:           #e4e6eb;
+  --akashic-text-muted:     #8b91a0;
+  --akashic-bg:             #0f1115;
+  --akashic-card-bg:        #1a1d24;
+  --akashic-border:         #2d3038;
+
+  --akashic-button-bg:      #4f8cff;
+  --akashic-button-fg:      #ffffff;
+
+  --akashic-input-bg:       #1a1d24;
+  --akashic-input-border:   1px solid #2d3038;
+  --akashic-input-radius:   0.375rem;
+
+  --akashic-error:          #f87171;
+  --akashic-error-bg:       rgba(220, 38, 38, 0.1);
+  --akashic-success:        #4ade80;
+
+  --akashic-font-family:    -apple-system, BlinkMacSystemFont, "Segoe UI",
+                            Roboto, Oxygen, Ubuntu, sans-serif;
+  --akashic-field-gap:      1rem;
+
+  display: block;
+  max-width: 32rem;
+  font-family: var(--akashic-font-family);
+  color: var(--akashic-text);
+}
+
+/*
+ * Light-mode override. Tenants who set `color-scheme: light` on
+ * <html> get readable defaults. Most tenants will skip this and
+ * supply their own theme via CSS variables.
+ */
+@media (prefers-color-scheme: light) {
+  akashic-signup,
+  akashic-profile,
+  akashic-change-password,
+  akashic-forgot-help,
+  akashic-clients {
+    --akashic-text:         #1f2937;
+    --akashic-text-muted:   #6b7280;
+    --akashic-bg:           #ffffff;
+    --akashic-card-bg:      #f9fafb;
+    --akashic-border:       #e5e7eb;
+    --akashic-input-bg:     #ffffff;
+    --akashic-input-border: 1px solid #d1d5db;
+    --akashic-error-bg:     rgba(220, 38, 38, 0.05);
+  }
+}

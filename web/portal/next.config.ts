@@ -12,6 +12,12 @@ import type { NextConfig } from "next";
 const nextConfig: NextConfig = {
   output: "standalone",
 
+  // ioredis has Node-only imports (`node:net`, `node:dns`); keep it
+  // out of the Next/webpack bundle. Resolved from runtime node_modules
+  // instead. We only use ioredis from route handlers that run in the
+  // Node runtime, never from middleware/Edge.
+  serverExternalPackages: ["ioredis"],
+
   // Phase 8: trust X-Forwarded-* headers from the docker proxy in
   // front of us. The proxy sets X-Forwarded-Proto (http vs https),
   // X-Forwarded-For (real client IP), Host. Without this, Next would

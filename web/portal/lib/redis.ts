@@ -31,9 +31,10 @@ export function getRedis(): RedisClient {
     port: env.redis.port,
     password: env.redis.password || undefined,
     db: env.redis.db,
-    // Empty TLS object = "use defaults"; ioredis honours the host's
-    // trust store. We don't pin a cert here because the akashic CA is
-    // already a trusted root inside the portal container.
+    // Empty TLS object = "use defaults"; Node trusts the akashic CA
+    // because the portal's entrypoint installs it into the OS trust
+    // store via update-ca-certificates before exec'ing node. See
+    // services/portal/portal-entrypoint.sh.
     tls: env.redis.tls ? {} : undefined,
     // Don't keep retrying forever on first boot — fail fast so the
     // operator notices the misconfiguration.

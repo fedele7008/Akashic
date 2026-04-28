@@ -61,4 +61,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		s.requireBearer(s.handleCreateClient))
 	mux.HandleFunc("/clients/",
 		s.requireBearer(s.handleClientByID))
+
+	// Phase 8b: embeddable widget bundle hosting. Public, cacheable
+	// static assets — see widgets_handler.go for the full rationale.
+	mux.HandleFunc("/widgets/", s.handleWidgetAsset)
 }

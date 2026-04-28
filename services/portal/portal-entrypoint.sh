@@ -1,42 +1,64 @@
 #!/bin/sh
-# Tenant-portal container entrypoint.
+# Portal container entrypoint.
 #
-# Two pieces of runtime wiring this script handles:
+# Three pieces of runtime wiring (in order):
 #
-#   1. Read the OAuth client secret from disk and export it. The
-#      built-in akashic-portal client's secret is provisioned by the
-#      akashic-server's EnsureBuiltInClients on first run and lands
-#      at /keys/oauth/client-secrets/akashic-portal.txt. We export
-#      the contents as AKASHIC_PORTAL_CLIENT_SECRET so the Next.js
-#      process picks it up via process.env. (Doing this in the
-#      entrypoint rather than in the env: stanza of compose keeps
-#      the secret off the docker-inspect surface and keeps compose
-#      itself stateless about it.)
+#   1. Install the akashic internal CA into the OS trust store via
+#      update-ca-certificates. Once installed, Node's TLS defaults
+#      automatically trust certs issued from this CA — no
+#      NODE_EXTRA_CA_CERTS gymnastics, no undici dispatcher patching.
+#      Both `fetch` (to api.<tenant>) and ioredis (to redis.akashic.local)
+#      use this trust path.
 #
-#   2. Point Node's TLS at the internal akashic CA so that fetch()
-#      to api.akashic.local validates without `rejectUnauthorized:
-#      false` hacks. NODE_EXTRA_CA_CERTS is the standard knob —
-#      Node reads the file at startup and adds its certs to the
-#      system trust store.
+#   2. Read the OAuth client secret from disk and export it as an env
+#      var. The akashic-server's EnsureBuiltInClients writes the
+#      secret to /keys/oauth/client-secrets/akashic-portal.txt; we
+#      surface it to Next.js as AKASHIC_PORTAL_CLIENT_SECRET.
 #
-# Both wirings are best-effort: if the files are absent at startup
-# (e.g. first run before vault-agent has rendered, or before
-# akashic-server has provisioned the secret), the portal still
-# starts. The first OAuth or API call will then fail with a clear
-# error message, which is better than refusing to boot.
+#   3. Drop privileges from root → uid 10100 (akashic) and exec node.
+#      Step 1 must run as root (writing into /usr/local/share/...);
+#      everything else can run unprivileged.
+#
+# All steps are best-effort: if a precondition is missing (cert file
+# not yet rendered by vault-agent, secret file not yet provisioned by
+# akashic-server), the portal still starts. The first OAuth or API
+# call will fail with a clear error, which is better than refusing
+# to boot.
 
 set -e
 
+# ─── Step 1: install akashic CA into the OS trust store ───────────────
+# Two halves to this:
+#  (a) Copy the CA into /usr/local/share/ca-certificates/ and run
+#      update-ca-certificates so it's part of the OS bundle at
+#      /etc/ssl/certs/ca-certificates.crt.
+#  (b) Tell Node to USE that bundle. By default Node ships its own
+#      Mozilla-derived CA list and ignores the OS one. The
+#      --use-openssl-ca flag (passed via NODE_OPTIONS) flips this so
+#      Node reads /etc/ssl/certs/ca-certificates.crt instead. This is
+#      the missing piece that makes update-ca-certificates actually
+#      take effect for Node TLS.
+CA_FILE="/certs/akashic/api-ca.crt"
+if [ -f "$CA_FILE" ] && [ -r "$CA_FILE" ]; then
+    cp "$CA_FILE" /usr/local/share/ca-certificates/akashic-internal.crt
+    update-ca-certificates >/dev/null 2>&1 || true
+    # Tell Node to use the OS trust store.
+    if [ -z "$NODE_OPTIONS" ]; then
+        export NODE_OPTIONS="--use-openssl-ca"
+    else
+        export NODE_OPTIONS="$NODE_OPTIONS --use-openssl-ca"
+    fi
+fi
+
+# ─── Step 2: export OAuth client secret ───────────────────────────────
 SECRET_FILE="/keys/oauth/client-secrets/akashic-portal.txt"
 if [ -f "$SECRET_FILE" ] && [ -r "$SECRET_FILE" ]; then
     AKASHIC_PORTAL_CLIENT_SECRET="$(cat "$SECRET_FILE")"
     export AKASHIC_PORTAL_CLIENT_SECRET
 fi
 
-CA_FILE="/certs/akashic/api-ca.crt"
-if [ -f "$CA_FILE" ] && [ -r "$CA_FILE" ]; then
-    export NODE_EXTRA_CA_CERTS="$CA_FILE"
-fi
-
-# Hand off to the standalone Next.js bundle.
-exec node /app/server.js
+# ─── Step 3: drop privileges and exec ─────────────────────────────────
+# We're currently running as root (no USER directive in the Dockerfile
+# after the update-ca-certificates step needs root). Drop to akashic
+# (uid 10100) before launching the long-lived Node process.
+exec su-exec akashic node /app/server.js
