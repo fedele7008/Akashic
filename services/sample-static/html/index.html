@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<!--
+  Akashic — minimal static-HTML sample.
+
+  Demonstrates that the Akashic widget set integrates into a tenant
+  site with NO framework, NO build step, and NO backend — just two
+  tags in <head> and custom elements in the body. Sign-in works
+  end-to-end via Authorization Code Flow + PKCE against the
+  akashic-sample-static public OAuth client (RFC 6749 + RFC 7636 —
+  the same pattern Auth0/Okta/Cognito SPAs use).
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Akashic Sample (static HTML)</title>
+
+  <!-- Two-tag widget integration. -->
+  <link rel="stylesheet" href="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic-default.css" />
+  <script src="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic.js" type="module"></script>
+
+  <!-- Tiny PKCE helper for SPA OAuth (no backend). -->
+  <script src="/_oauth.js"></script>
+
+  <style>
+    body {
+      max-width: 40rem;
+      margin: 0 auto;
+      padding: 2rem 1rem;
+      font-family: -apple-system, system-ui, sans-serif;
+      color: #e4e6eb;
+      background: #0f1115;
+    }
+    h1, h2 { font-weight: 600; }
+    nav a { color: #4f8cff; text-decoration: none; margin-right: 1rem; }
+    nav a:hover { text-decoration: underline; }
+    section { margin: 2rem 0; }
+    button.app {
+      font: inherit;
+      padding: 0.5rem 1rem;
+      border-radius: 0.375rem;
+      background: #4f8cff;
+      color: white;
+      border: none;
+      cursor: pointer;
+    }
+    button.app:hover { opacity: 0.9; }
+    button.ghost {
+      font: inherit;
+      padding: 0.4rem 0.8rem;
+      border-radius: 0.375rem;
+      background: transparent;
+      color: #4f8cff;
+      border: 1px solid #4f8cff;
+      cursor: pointer;
+    }
+    .signed-in {
+      padding: 0.75rem 1rem;
+      border-radius: 0.375rem;
+      background: rgba(74, 222, 128, 0.1);
+      color: #4ade80;
+      font-size: 0.875rem;
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Akashic — static HTML sample</h1>
+    <nav>
+      <a href="/">Home</a>
+      <a href="/signup">Sign up</a>
+      <a href="/forgot">Forgot password</a>
+      <a href="/profile">Profile</a>
+      <a href="/password">Change password</a>
+    </nav>
+  </header>
+
+  <section>
+    <p>
+      Same widget set the Next.js sample uses, mounted into pure
+      static HTML. View source on any page in this sample to see the
+      integration. Sign-in uses Authorization Code Flow + PKCE
+      against a <strong>public</strong> OAuth client — no
+      <code>client_secret</code>, no backend.
+    </p>
+  </section>
+
+  <section>
+    <h2>Authentication</h2>
+    <div id="auth-state"></div>
+  </section>
+
+  <section>
+    <h2>Forgot-password help</h2>
+    <p>Public widget. Fetches operator-configured recovery info.</p>
+    <akashic-forgot-help></akashic-forgot-help>
+  </section>
+
+  <script>
+    // Simple session UI — show "Sign in" button if no token,
+    // "Signed in / Sign out" if we have one. The widgets pick up
+    // the token automatically via AkashicOAuth.applyToWidgets()
+    // (called on DOMContentLoaded inside _oauth.js).
+    (function renderAuthState() {
+      const box = document.getElementById("auth-state");
+      const t = AkashicOAuth.getAccessToken();
+      if (t) {
+        box.innerHTML =
+          '<div class="signed-in">Signed in. Token expires at ' +
+          new Date(t.expiresAt).toLocaleTimeString() +
+          '.</div>' +
+          '<p style="margin-top: 1rem;">' +
+          '<button class="ghost" id="signout">Sign out</button>' +
+          '</p>';
+        document.getElementById("signout").addEventListener("click", function () {
+          // signout() navigates to the IdP's /logout, which clears
+          // its session cookie and 303-redirects back here. No need
+          // to reload manually — the round-trip IS the reload.
+          AkashicOAuth.signout();
+        });
+      } else {
+        box.innerHTML =
+          '<button class="app" id="signin">Sign in to Akashic</button>';
+        document.getElementById("signin").addEventListener("click", function () {
+          AkashicOAuth.signin();
+        });
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -16,6 +16,18 @@ export interface AkashicConfig {
   apiBaseUrl: string;
   /** Base URL of the auth server. e.g., "https://auth.acme.com". No trailing slash. */
   authBaseUrl: string;
+  /**
+   * Pre-supplied bearer token for SPA tenants that hold their own
+   * via Authorization Code Flow + PKCE. When set, widgets use it
+   * directly and skip the cookie-bridge `/session/token` exchange.
+   * Tenants are responsible for refreshing it before expiry.
+   *
+   * Set via `Akashic.configure({ accessToken, accessTokenExpiresAt })`
+   * after the SPA's PKCE callback completes.
+   */
+  accessToken?: string;
+  /** Unix epoch ms when the supplied accessToken expires. */
+  accessTokenExpiresAt?: number;
 }
 
 let cfg: AkashicConfig | null = null;
@@ -60,6 +72,8 @@ export function configure(overrides: Partial<AkashicConfig>): void {
   cfg = {
     apiBaseUrl: stripTrail(overrides.apiBaseUrl ?? base.apiBaseUrl),
     authBaseUrl: stripTrail(overrides.authBaseUrl ?? base.authBaseUrl),
+    accessToken: overrides.accessToken ?? base.accessToken,
+    accessTokenExpiresAt: overrides.accessTokenExpiresAt ?? base.accessTokenExpiresAt,
   };
 }
 

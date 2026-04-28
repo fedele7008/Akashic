@@ -425,7 +425,7 @@ redirect them to the akashic auth server's `/authorize`, then
 receive the code at `/api/auth/callback`. Same flow as admin-bff,
 just in TypeScript and with PKCE.
 
-Built-in client: a new `akashic-portal` row added to the
+Built-in client: a new `akashic-sample-nextjs` row added to the
 `client_services` upsert in `pkg/oauth/builtin.go`. Same secret-on-
 disk pattern as `akashic-admin`. The portal's redirect_uri is the
 portal's `/api/auth/callback`.
@@ -644,7 +644,7 @@ agrees to share their identity with a third-party OAuth client.
 ### Step 7.1 — Consent policy
 
 Decide when consent is required:
-- **Built-in clients** (`akashic-admin`, `akashic-portal`): no consent.
+- **Built-in clients** (`akashic-admin`, `akashic-sample-nextjs`, `akashic-sample-static`): no consent.
 - **First-party tenant clients** (registered via portal): consent
   on first authorization, remembered thereafter.
 
@@ -760,7 +760,7 @@ decisions, deviations, and the as-built command set.
 | `pkg/models/client_service.go` | Add owner_user_id, description, homepage_url |
 | `pkg/repository/user_repository.go` | Generalize CreateUser beyond bootstrap |
 | `pkg/ldap/client.go` | Add ChangePassword |
-| `pkg/oauth/builtin.go` | Add `akashic-portal` built-in client |
+| `pkg/oauth/builtin.go` | Add `akashic-sample-nextjs` built-in client |
 | `pkg/middleware/mtls.go` | Allowlist `portal.akashic.local` CN |
 | `configs/config.yaml` | New portal section + support contact info |
 | `services/vault-agent/templates/portal-client.tpl` | New cert template |

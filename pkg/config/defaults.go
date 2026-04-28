@@ -99,10 +99,21 @@ const (
 	DefaultOAuthAccessTokenTTL      = 15 * time.Minute
 	DefaultOAuthIDTokenTTL          = 15 * time.Minute
 	DefaultOAuthAuthCodeTTL         = 60 * time.Second
-	DefaultOAuthAdminRedirectURI    = "https://admin.akashic.local/oauth/callback"
-	DefaultOAuthPortalRedirectURI   = "https://akashic.local/api/auth/callback"
+	// Placeholders by design — operators MUST override in .env to match
+	// the public URL the browser actually reaches, otherwise OAuth
+	// callbacks fail with redirect_uri_mismatch. The placeholder makes
+	// the misconfiguration loudly visible (browser shows
+	// "akashic.example.com" → operator notices) instead of silently
+	// pointing at a docker-internal alias the browser can't resolve.
+	DefaultOAuthAdminRedirectURI         = "https://admin.akashic.example.com/oauth/callback"
+	DefaultOAuthSampleNextjsRedirectURI  = "https://akashic.example.com/api/auth/callback"
+	DefaultOAuthSampleStaticRedirectURI  = "https://akashic.example.com/callback"
 	DefaultOAuthAuthSessionIdleTTL  = 30 * time.Minute
 	DefaultOAuthAuthSessionMaxTTL   = 8 * time.Hour
+	// Production-safe default: only the admin client is registered.
+	// Sample profiles widen this via AKASHIC_OAUTH_BUILTIN_CLIENTS in
+	// docker-compose.yml ("admin,portal" or "admin,static-sample").
+	DefaultOAuthBuiltInClients      = "admin"
 
 	// Session defaults
 	DefaultSessionTimeout = 30 * time.Minute
@@ -284,9 +295,11 @@ func setDefaults(v *viper.Viper) {
 	v.SetDefault("oauth.id_token_ttl", DefaultOAuthIDTokenTTL)
 	v.SetDefault("oauth.auth_code_ttl", DefaultOAuthAuthCodeTTL)
 	v.SetDefault("oauth.admin_redirect_uri", DefaultOAuthAdminRedirectURI)
-	v.SetDefault("oauth.portal_redirect_uri", DefaultOAuthPortalRedirectURI)
+	v.SetDefault("oauth.sample_nextjs_redirect_uri", DefaultOAuthSampleNextjsRedirectURI)
+	v.SetDefault("oauth.sample_static_redirect_uri", DefaultOAuthSampleStaticRedirectURI)
 	v.SetDefault("oauth.auth_session_idle_ttl", DefaultOAuthAuthSessionIdleTTL)
 	v.SetDefault("oauth.auth_session_max_ttl", DefaultOAuthAuthSessionMaxTTL)
+	v.SetDefault("oauth.builtin_clients", DefaultOAuthBuiltInClients)
 
 	// Session defaults
 	v.SetDefault("session.timeout", DefaultSessionTimeout)

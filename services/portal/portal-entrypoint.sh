@@ -12,8 +12,8 @@
 #
 #   2. Read the OAuth client secret from disk and export it as an env
 #      var. The akashic-server's EnsureBuiltInClients writes the
-#      secret to /keys/oauth/client-secrets/akashic-portal.txt; we
-#      surface it to Next.js as AKASHIC_PORTAL_CLIENT_SECRET.
+#      secret to /keys/oauth/client-secrets/akashic-sample-nextjs.txt; we
+#      surface it to Next.js as AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET.
 #
 #   3. Drop privileges from root → uid 10100 (akashic) and exec node.
 #      Step 1 must run as root (writing into /usr/local/share/...);
@@ -51,10 +51,10 @@ if [ -f "$CA_FILE" ] && [ -r "$CA_FILE" ]; then
 fi
 
 # ─── Step 2: export OAuth client secret ───────────────────────────────
-SECRET_FILE="/keys/oauth/client-secrets/akashic-portal.txt"
+SECRET_FILE="/keys/oauth/client-secrets/akashic-sample-nextjs.txt"
 if [ -f "$SECRET_FILE" ] && [ -r "$SECRET_FILE" ]; then
-    AKASHIC_PORTAL_CLIENT_SECRET="$(cat "$SECRET_FILE")"
-    export AKASHIC_PORTAL_CLIENT_SECRET
+    AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET="$(cat "$SECRET_FILE")"
+    export AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET
 fi
 
 # ─── Step 3: drop privileges and exec ─────────────────────────────────

@@ -589,7 +589,20 @@ services:
       # MUST agree exactly (the akashic-server registers this in
       # client_services; the portal sends it on /authorize). If the
       # two diverge, the auth server returns redirect_uri_mismatch.
-      AKASHIC_OAUTH_PORTAL_REDIRECT_URI: "${AKASHIC_OAUTH_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
+      AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI: "${AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
+      # Phase 8b: sample-static callback. Same value the static-sample
+      # OAuth helper computes (location.origin + "/callback"); MUST match
+      # exactly what the akashic-sample-static built-in is registered
+      # with or /authorize returns redirect_uri_mismatch.
+      AKASHIC_OAUTH_SAMPLE_STATIC_REDIRECT_URI: "${AKASHIC_OAUTH_SAMPLE_STATIC_REDIRECT_URI:-https://akashic.example.com/callback}"
+      # Phase 8b: comma-separated allowlist of built-in OAuth clients
+      # to register on startup. Built-ins NOT in this list are deleted
+      # from client_services (akashic reconciles the table to match
+      # this var on every boot). Production default: "admin". Sample
+      # profiles override via .env:
+      #   --profile sample-nextjs  → AKASHIC_OAUTH_BUILTIN_CLIENTS=admin,sample-nextjs
+      #   --profile sample-static  → AKASHIC_OAUTH_BUILTIN_CLIENTS=admin,sample-static
+      AKASHIC_OAUTH_BUILTIN_CLIENTS: "${AKASHIC_OAUTH_BUILTIN_CLIENTS:-admin}"
       # Phase 8b: deployment-wide CORS allowlist for tenant-product
       # origins that may embed Akashic widgets. Comma- or space-
       # separated. Both the auth-server's /session/token and the
@@ -797,14 +810,22 @@ services:
   #     (the BFF holds bearers from OAuth code-exchange; widgets get
   #     their own short-lived bearers via /session/token)
   portal:
-    # Demoted to sample-profile in Phase 8b. Real tenants pull Akashic
-    # and bring their own website; the portal is a reference to read,
-    # not the product.
-    profiles: ["sample"]
+    # One of two reference samples. Profile-gated so tenants can pick
+    # which to run (or run neither and bring their own product).
+    #
+    # `sample-nextjs` profile = "tenants with a backend" reference.
+    # Demonstrates BFF + iron-session + OAuth code-exchange + widget
+    # mounting in a real framework. Use:
+    #     docker compose --profile sample-nextjs up -d
+    #
+    # The complementary `sample-static` profile (services/sample-static/)
+    # demonstrates the same widgets in pure HTML for tenants with no
+    # backend at all.
+    profiles: ["sample-nextjs"]
     build:
       context: .
       dockerfile: ./services/portal/Dockerfile
-    container_name: akashic-portal
+    container_name: akashic-sample-nextjs
     restart: unless-stopped
     depends_on:
       vault-agent:
@@ -845,12 +866,13 @@ services:
       # Issuer must match what the auth server advertises in its
       # /.well-known/openid-configuration. Same value admin-bff uses.
       AKASHIC_OAUTH_ISSUER: "${AKASHIC_OAUTH_ISSUER:-https://auth.akashic.example.com}"
-      AKASHIC_PORTAL_CLIENT_ID: akashic-portal
+      AKASHIC_SAMPLE_NEXTJS_CLIENT_ID: akashic-sample-nextjs
       # The client secret is provisioned on disk by EnsureBuiltInClients
-      # at /keys/oauth/client-secrets/akashic-portal.txt. The portal
-      # reads it at first OAuth call via the entrypoint that exports
-      # AKASHIC_PORTAL_CLIENT_SECRET — see the Dockerfile entrypoint.
-      AKASHIC_OAUTH_PORTAL_REDIRECT_URI: "${AKASHIC_OAUTH_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
+      # at /keys/oauth/client-secrets/akashic-sample-nextjs.txt. The
+      # sample reads it at first OAuth call via the entrypoint that
+      # exports AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET — see the Dockerfile
+      # entrypoint.
+      AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI: "${AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
       AKASHIC_PORTAL_OAUTH_SCOPES: "openid profile email"
 
       # --- Chapter 3 / 8b: API server URL ---
@@ -869,8 +891,8 @@ services:
     entrypoint: ["/usr/local/bin/portal-entrypoint.sh"]
     volumes:
       - certs:/certs:ro
-      # /keys read-only for the akashic-portal client secret that
-      # gets written by EnsureBuiltInClients in Chapter 3 Step 3.2.
+      # /keys read-only for the akashic-sample-nextjs client secret
+      # that gets written by EnsureBuiltInClients in Chapter 3 Step 3.2.
       - keys:/keys:ro
     extra_hosts:
       # Phase 8 three-server architecture: the portal speaks ONLY to
@@ -887,6 +909,56 @@ services:
       default:
         aliases:
           - portal.akashic.local
+          # Shared "active sample" alias — both sample profiles
+          # (sample-nextjs and sample-static) export this. The proxy
+          # points at it without knowing which sample is up. Mutually
+          # exclusive: only one sample can hold the alias at a time
+          # because only one container per profile-pair runs.
+          - sample-portal
+
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # sample-static: Minimal static-HTML widget integration sample (Phase 8b)
+  # ═══════════════════════════════════════════════════════════════════════════════
+  # Counterpart to `portal:` (the Next.js sample). Demonstrates that
+  # the Akashic widgets work in a pure static-HTML site with no
+  # framework, no build step, and no backend — sign-in via
+  # Authorization Code Flow + PKCE against the akashic-sample-static
+  # public OAuth client.
+  #
+  # ⚠ Mutually exclusive with `portal:` (the Next.js sample): both
+  # export the `sample-portal` network alias the proxy points at.
+  # Bringing BOTH profiles up at once is permitted by docker but
+  # produces broken behaviour — Docker's embedded DNS round-robins
+  # between the two containers on each lookup, so the proxy hops
+  # randomly between samples per request. Cookies, OAuth callbacks,
+  # and sub-resources all break asymmetrically. Pick ONE.
+  #
+  # Use:
+  #     docker compose --profile sample-static up -d
+  sample-static:
+    profiles: ["sample-static"]
+    build:
+      context: .
+      dockerfile: ./services/sample-static/Dockerfile
+    container_name: akashic-sample-static
+    restart: unless-stopped
+    environment:
+      # Public URL the static-HTML pages reference for the widget
+      # bundle (envsubst at container start writes it into the HTML
+      # files). Same env the Next.js portal reads — single source of
+      # truth for "where the widgets live."
+      AKASHIC_PORTAL_API_BASE_URL: "${AKASHIC_PORTAL_API_BASE_URL:-https://api.akashic.example.com}"
+      TZ: ${AKASHIC_TZ:-UTC}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "akashic:host-gateway"
+      - "akashic.akashic.local:host-gateway"
+      - "auth.akashic.local:host-gateway"
+      - "api.akashic.local:host-gateway"
+    networks:
+      default:
+        aliases:
+          - sample-portal
 
 networks:
   default:

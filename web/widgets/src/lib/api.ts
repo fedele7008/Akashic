@@ -34,18 +34,39 @@ let cached: CachedToken | null = null;
 const REFRESH_MARGIN_MS = 30_000; // refresh 30s before expiry
 
 /**
- * Get a bearer for api-server calls. Caches the token in-memory;
- * re-fetches when missing or near-expiry. Returns null if the user
- * has no session (widget should render a sign-in CTA in that case).
+ * Get a bearer for api-server calls. Two paths:
  *
- * In-memory only — never localStorage. XSS exposure window is
- * page-lifetime, not session-lifetime.
+ *   1. **SPA tenant**: tenant called `Akashic.configure({ accessToken,
+ *      accessTokenExpiresAt })` after a PKCE flow. We use that token
+ *      directly. Tenant owns refresh.
+ *   2. **First-party widget**: tenant has a backend-set auth-server
+ *      session cookie. We exchange it for a short-lived bearer via
+ *      `auth.<tenant>/session/token`, cache in-memory.
+ *
+ * Returns null if neither path produces a bearer (widget should
+ * render a sign-in CTA).
  */
 export async function getAccessToken(): Promise<string | null> {
+  // Path 1 — explicit token supplied by an SPA via Akashic.configure.
+  const cfg = getConfig();
+  if (cfg.accessToken) {
+    if (
+      !cfg.accessTokenExpiresAt ||
+      cfg.accessTokenExpiresAt > Date.now() + REFRESH_MARGIN_MS
+    ) {
+      return cfg.accessToken;
+    }
+    // Configured token is expired. SPA needs to refresh; we don't
+    // attempt to fall back to /session/token since SPA tenants don't
+    // typically have an auth-server cookie.
+    return null;
+  }
+
+  // Path 2 — cookie-bridge for first-party widgets with a session.
   if (cached && cached.expiresAt > Date.now() + REFRESH_MARGIN_MS) {
     return cached.token;
   }
-  const { authBaseUrl } = getConfig();
+  const { authBaseUrl } = cfg;
   let res: Response;
   try {
     res = await fetch(`${authBaseUrl}/session/token`, {

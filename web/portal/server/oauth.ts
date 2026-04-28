@@ -23,8 +23,8 @@ import { readFileSync } from "node:fs";
 
 import { env } from "../lib/env";
 
-/** Path the akashic-server writes the akashic-portal client secret to. */
-const CLIENT_SECRET_FALLBACK_FILE = "/keys/oauth/client-secrets/akashic-portal.txt";
+/** Path the akashic-server writes the akashic-sample-nextjs client secret to. */
+const CLIENT_SECRET_FALLBACK_FILE = "/keys/oauth/client-secrets/akashic-sample-nextjs.txt";
 
 /**
  * Resolve the OAuth client secret. Prefers the env var; falls back
@@ -42,7 +42,7 @@ function resolveClientSecret(): string {
     return readFileSync(CLIENT_SECRET_FALLBACK_FILE, "utf8").trim();
   } catch {
     throw new Error(
-      `OAuth client secret not available: env AKASHIC_PORTAL_CLIENT_SECRET unset and ${CLIENT_SECRET_FALLBACK_FILE} unreadable`,
+      `OAuth client secret not available: env AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET unset and ${CLIENT_SECRET_FALLBACK_FILE} unreadable`,
     );
   }
 }
@@ -78,8 +78,8 @@ export async function getOAuth(): Promise<OAuthClientCache> {
     //   1. RFC 6749 §2.3.1 requires URL-encoding the client_id and
     //      secret before base64 in the Basic header. oauth4webapi
     //      complies; many auth-server implementations (ours included)
-    //      compare raw bytes and never URL-decode. So `akashic-portal`
-    //      sent as `akashic%2Dportal` looks like a different client_id
+    //      compare raw bytes and never URL-decode. So `akashic-sample-nextjs`
+    //      sent as `akashic%2Dsample%2Dnextjs` looks like a different client_id
     //      and we get 401 invalid_client. Form bodies don't have this
     //      asymmetry — both sides handle URL-encoding uniformly.
     //   2. Our auth server advertises both methods in discovery, so

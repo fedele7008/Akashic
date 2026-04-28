@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Signing you in… — Akashic Sample</title>
+  <style>
+    body { max-width: 28rem; margin: 4rem auto; padding: 2rem 1rem;
+           font-family: system-ui, sans-serif; color: #e4e6eb; background: #0f1115;
+           text-align: center; }
+    .err { color: #f87171; padding: 1rem; border: 1px solid #f87171;
+           border-radius: 0.375rem; text-align: left; }
+    a { color: #4f8cff; }
+  </style>
+</head>
+<body>
+  <h1>Signing you in…</h1>
+  <p id="status">Exchanging authorization code…</p>
+  <div id="err" class="err" style="display:none"></div>
+
+  <script src="/_oauth.js"></script>
+  <script>
+    AkashicOAuth.handleCallback()
+      .then(function () {
+        document.getElementById("status").textContent = "Signed in. Redirecting…";
+        // Land back at the app root so any in-page widget rerenders
+        // with the new bearer.
+        location.href = "/";
+      })
+      .catch(function (e) {
+        document.getElementById("status").style.display = "none";
+        var box = document.getElementById("err");
+        box.style.display = "block";
+        box.innerHTML =
+          "<strong>Sign-in failed.</strong><br>" +
+          (e.message || String(e)) +
+          '<br><br><a href="/">← Back to home</a>';
+      });
+  </script>
+</body>
+</html>

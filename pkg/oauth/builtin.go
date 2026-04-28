@@ -26,16 +26,38 @@ type BuiltInClientSpec struct {
 	AllowedScopes string // space-separated
 	AuthTypes     string // space-separated grant types
 	RoleAllowlist string // comma-separated user types; "" = any
+
+	// Public marks the client as a public OAuth client (RFC 6749
+	// §2.1) — no client_secret stored. Public clients MUST use
+	// PKCE; the code_verifier check is what proves legitimacy in
+	// place of a stored secret. Used for browser-based SPAs that
+	// can't keep secrets (e.g., the static-HTML sample).
+	//
+	// When Public=true, EnsureBuiltInClients leaves
+	// ClientSecretHash empty in the database; the auth-server's
+	// /token handler then accepts requests without client_secret
+	// for this client provided PKCE is correctly used.
+	Public bool
 }
 
-// EnsureBuiltInClients upserts each spec into the client_services
-// table. The plaintext client secret for each is loaded from disk
+// EnsureBuiltInClients reconciles the client_services table to
+// match the supplied spec list:
+//   - rows for each spec are upserted (insert-if-missing,
+//     update-if-present).
+//   - any row with built_in=true whose client_id is NOT in specs is
+//     DELETED, so removing a built-in from the allowlist actually
+//     removes it from the DB on the next boot.
+//
+// The plaintext client secret for each spec is loaded from disk
 // (./keys/oauth/client-secrets/<client_id>.txt) — generated on
 // first run, persisted for subsequent runs. Only bcrypt(secret) is
-// stored in the DB.
+// stored in the DB. Public clients (PKCE-only, no shared secret)
+// have an empty hash — see BuiltInClientSpec.Public.
 //
 // secretsDir is the parent directory; this function manages its
 // own subdirectory inside it.
+//
+// User-registered (built_in=false) clients are never touched.
 func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, specs []BuiltInClientSpec) error {
 	dir := filepath.Join(secretsDir, "client-secrets")
 	// 0755 (not 0700) because the admin-bff container runs as a
@@ -49,29 +71,32 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, s
 	}
 
 	for _, spec := range specs {
-		secret, err := loadOrCreateClientSecret(filepath.Join(dir, spec.ClientID+".txt"))
-		if err != nil {
-			return fmt.Errorf("client %s secret: %w", spec.ClientID, err)
+		var secretHash string
+		if !spec.Public {
+			// Confidential client — provision (or load) a secret on
+			// disk and bcrypt-hash for storage.
+			secret, err := loadOrCreateClientSecret(filepath.Join(dir, spec.ClientID+".txt"))
+			if err != nil {
+				return fmt.Errorf("client %s secret: %w", spec.ClientID, err)
+			}
+			hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+			if err != nil {
+				return fmt.Errorf("client %s bcrypt: %w", spec.ClientID, err)
+			}
+			secretHash = string(hash)
 		}
-		hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
-		if err != nil {
-			return fmt.Errorf("client %s bcrypt: %w", spec.ClientID, err)
-		}
+		// For public clients, secretHash stays "" — the /token
+		// handler's PKCE-aware path accepts that as "this is a
+		// public client, validate via code_verifier instead."
 
-		// Upsert: insert if missing, update everything except the
-		// secret_hash if present (we only rotate the hash if the
-		// secret on disk changed, so re-hashing on every run is
-		// wasteful but harmless — bcrypt of the same plaintext gives
-		// a different hash, so we compare with bcrypt.CompareHashAndPassword
-		// before deciding whether to overwrite).
-		//
-		// Actually simpler: always upsert with the freshly-computed
-		// hash. The DB row is "what the server thinks the client
-		// looks like right now," and re-hashing on each startup is
-		// the cheapest way to keep the row consistent.
+		// Upsert: insert if missing, update everything if present.
+		// Re-hashing on each startup is the cheapest way to keep the
+		// DB row consistent with the on-disk secret. (Public clients
+		// have no secret to re-hash; the empty hash is rewritten as
+		// empty.)
 		row := models.ClientService{
 			ClientID:         spec.ClientID,
-			ClientSecretHash: string(hash),
+			ClientSecretHash: secretHash,
 			Name:             spec.Name,
 			RedirectURIs:     spec.RedirectURIs,
 			AllowedScopes:    spec.AllowedScopes,
@@ -114,6 +139,24 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, s
 			}).Error; err != nil {
 			return fmt.Errorf("update client service %s: %w", spec.ClientID, err)
 		}
+	}
+
+	// Reconcile-style cleanup: any built_in=true row whose client_id
+	// is no longer in `specs` represents a built-in that the operator
+	// removed from AKASHIC_OAUTH_BUILTIN_CLIENTS. Drop it so a
+	// removed allowlist entry actually disappears from the DB on the
+	// next boot. User-registered clients (built_in=false) are never
+	// touched by this clause.
+	wantedIDs := make([]string, 0, len(specs))
+	for _, spec := range specs {
+		wantedIDs = append(wantedIDs, spec.ClientID)
+	}
+	tx := db.WithContext(ctx).Where("built_in = ?", true)
+	if len(wantedIDs) > 0 {
+		tx = tx.Where("client_id NOT IN ?", wantedIDs)
+	}
+	if err := tx.Delete(&models.ClientService{}).Error; err != nil {
+		return fmt.Errorf("prune stale built-in clients: %w", err)
 	}
 	return nil
 }

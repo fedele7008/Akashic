@@ -80,8 +80,9 @@ func (s AuthType) IsEnabledInPhase7() bool {
 //
 //  1. **Built-in** (BuiltIn=true): managed by akashic-server itself,
 //     re-upserted on every startup. Examples (Phase 7+):
-//     - akashic-admin       (admin.akashic.<domain> admin console)
-//     - akashic-portal       (root domain portal; Phase 8)
+//     - akashic-admin           (admin.akashic.<domain> admin console)
+//     - akashic-sample-nextjs   (Next.js reference sample; Phase 8)
+//     - akashic-sample-static   (static-HTML PKCE-only sample; Phase 8b)
 //     The plaintext client secret for these lives in Vault KV; only
 //     its bcrypt hash is stored here.
 //

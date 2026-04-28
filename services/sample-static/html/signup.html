@@ -1,0 +1,34 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sign up — Akashic Sample</title>
+  <link rel="stylesheet" href="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic-default.css" />
+  <script src="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic.js" type="module"></script>
+  <style>
+    body { max-width: 32rem; margin: 0 auto; padding: 2rem 1rem;
+           font-family: system-ui, sans-serif; color: #e4e6eb; background: #0f1115; }
+    a { color: #4f8cff; }
+  </style>
+</head>
+<body>
+  <h1>Create an account</h1>
+  <akashic-signup></akashic-signup>
+  <p style="margin-top: 1.5rem;">
+    <a href="/">← Home</a>
+  </p>
+
+  <!--
+    On successful signup the widget emits an `akashic-signup-success`
+    event. This snippet redirects to the sign-in flow afterwards —
+    same UX the Next.js sample's SignUpWidget client wrapper provides.
+  -->
+  <script>
+    document.querySelector('akashic-signup').addEventListener(
+      'akashic-signup-success',
+      function () { window.location.href = '/'; }
+    );
+  </script>
+</body>
+</html>

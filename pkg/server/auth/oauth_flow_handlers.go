@@ -357,11 +357,26 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		writeTokenError(w, http.StatusInternalServerError, "server_error", "Lookup failed.")
 		return
 	}
-	if bcrypt.CompareHashAndPassword([]byte(client.ClientSecretHash), []byte(clientSecret)) != nil {
-		s.logger.Security.Warn("token: bad client secret", zap.String("client_id", clientID))
-		writeTokenError(w, http.StatusUnauthorized, "invalid_client",
-			"Client authentication failed.")
-		return
+	// Public client (no stored secret) — only allowed when PKCE is
+	// required, because the code_verifier check that runs later
+	// provides the proof-of-legitimacy that client_secret would have.
+	// Standard SPA OAuth pattern (RFC 7636).
+	if client.ClientSecretHash == "" {
+		if !client.RequirePKCE {
+			s.logger.Security.Warn("token: public client without PKCE requirement — refusing",
+				zap.String("client_id", clientID))
+			writeTokenError(w, http.StatusUnauthorized, "invalid_client",
+				"Public clients must require PKCE.")
+			return
+		}
+		// No secret check; the code_verifier validation below is the auth.
+	} else {
+		if bcrypt.CompareHashAndPassword([]byte(client.ClientSecretHash), []byte(clientSecret)) != nil {
+			s.logger.Security.Warn("token: bad client secret", zap.String("client_id", clientID))
+			writeTokenError(w, http.StatusUnauthorized, "invalid_client",
+				"Client authentication failed.")
+			return
+		}
 	}
 
 	// Step 2: grant_type

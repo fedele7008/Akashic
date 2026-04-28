@@ -121,7 +121,7 @@ fi
 # to this project but were removed from docker-compose.yml since their
 # last start.
 echo "Bringing the Akashic stack down (if running)..."
-docker compose --profile app --profile sample down --remove-orphans
+docker compose --profile app --profile sample-nextjs --profile sample-static down --remove-orphans
 
 # ──────────────────────────────────────────────────────────────────────────
 # 2. Wipe host-side cert + secret + key + log state
@@ -198,10 +198,23 @@ if [[ "$deep" == "true" ]]; then
     docker image prune --all --force 2>&1 | sed 's/^/  /'
 fi
 
+# ──────────────────────────────────────────────────────────────────────────
+# 5. Brief settle delay
+# ──────────────────────────────────────────────────────────────────────────
+# On Docker Desktop for macOS the host-file-sharing layer (gRPC-FUSE
+# / VirtioFS) caches inode-to-path mappings. When we rapid-fire delete
+# many files and then immediately `docker compose up`, the cache can
+# momentarily disagree with reality and the next bind-mount attempt
+# fails with "no such file or directory" even though the directory
+# clearly exists. A short pause lets the reconciler catch up.
+#
+# Linux hosts don't need this; the sleep is harmless there.
+sleep 1
+
 echo ""
 echo "Reset complete."
 if [[ "$deep" != "true" ]]; then
     echo "Tip: pass --deep to also prune Docker build cache + dangling images."
     echo "     Useful if you hit \"no space left on device\" inside containers."
 fi
-echo "Next: docker compose [--profile app] up -d"
+echo "Next: docker compose [--profile app --profile sample-nextjs] up -d"

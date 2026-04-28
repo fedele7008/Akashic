@@ -64,7 +64,7 @@ export const env = {
     get issuer(): string {
       return requireEnv("AKASHIC_OAUTH_ISSUER");
     },
-    clientId: optionalEnv("AKASHIC_PORTAL_CLIENT_ID", "akashic-portal"),
+    clientId: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CLIENT_ID", "akashic-sample-nextjs"),
     /**
      * Raw env-var read; can be empty when the portal starts before
      * akashic-server finishes provisioning the secret. Callers that
@@ -77,13 +77,13 @@ export const env = {
      * Edge runtime. A `require("node:fs")` here would poison the
      * Edge bundle. So the fallback lives in oauth.ts (Node-only).
      */
-    clientSecretFromEnv: optionalEnv("AKASHIC_PORTAL_CLIENT_SECRET", ""),
+    clientSecretFromEnv: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET", ""),
     get redirectUri(): string {
       // Same env var the akashic-server reads (config path
-       // oauth.portal_redirect_uri → AKASHIC_OAUTH_PORTAL_REDIRECT_URI).
+      // oauth.sample_nextjs_redirect_uri → AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI).
       // Single source of truth across the two services prevents
       // redirect_uri_mismatch on the OAuth callback.
-      return requireEnv("AKASHIC_OAUTH_PORTAL_REDIRECT_URI");
+      return requireEnv("AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI");
     },
     scopes: optionalEnv("AKASHIC_PORTAL_OAUTH_SCOPES", "openid profile email"),
   },
@@ -136,7 +136,7 @@ export function portalOrigin(): string {
     const u = new URL(env.oauth.redirectUri);
     return `${u.protocol}//${u.host}`;
   } catch {
-    // env.oauth.redirectUri throws if AKASHIC_OAUTH_PORTAL_REDIRECT_URI
+    // env.oauth.redirectUri throws if AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI
     // is unset. In that case we have no source of truth, so return a
     // best-effort placeholder; the redirect still works as a relative
     // URL in browsers, just without an absolute base.
