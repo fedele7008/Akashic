@@ -853,8 +853,17 @@ services:
       AKASHIC_OAUTH_PORTAL_REDIRECT_URI: "${AKASHIC_OAUTH_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
       AKASHIC_PORTAL_OAUTH_SCOPES: "openid profile email"
 
-      # --- Chapter 3: API server (bearer target) ---
-      AKASHIC_PORTAL_API_BASE_URL: "https://api.akashic.local:8082"
+      # --- Chapter 3 / 8b: API server URL ---
+      # PUBLIC URL — used to render <script src> + <link rel="stylesheet">
+      # tags into pages the browser sees, AND as the origin the widget
+      # bundle infers for fetch calls. MUST be the URL a browser can
+      # actually reach (e.g., https://api.akashic.example.com), NOT the
+      # docker-internal alias.
+      #
+      # Set in .env to your real api.<domain>; the placeholder default
+      # below makes it obvious when it's been forgotten because nothing
+      # browser-side will work.
+      AKASHIC_PORTAL_API_BASE_URL: "${AKASHIC_PORTAL_API_BASE_URL:-https://api.akashic.example.com}"
 
       TZ: ${AKASHIC_TZ:-UTC}
     entrypoint: ["/usr/local/bin/portal-entrypoint.sh"]

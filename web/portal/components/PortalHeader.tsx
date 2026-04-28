@@ -38,12 +38,7 @@ export function PortalHeader({ session }: { session: SessionPayload | null }) {
 function PublicNav() {
   return (
     <nav className="flex items-center gap-3 text-sm">
-      <Link
-        href="/sign-in"
-        className="text-[var(--text-muted)] hover:text-[var(--text)]"
-      >
-        Sign in
-      </Link>
+      <akashic-signin>Sign in</akashic-signin>
       <Link
         href="/sign-up"
         className="rounded-md bg-[var(--accent)] px-3 py-1.5 text-white hover:opacity-90"

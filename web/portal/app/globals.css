@@ -27,3 +27,50 @@ body {
     Oxygen, Ubuntu, sans-serif;
   line-height: 1.5;
 }
+
+/*
+ * ─── Akashic widget overrides ──────────────────────────────────────
+ *
+ * Demonstrates Tier-2 styling: the portal reaches into the widgets'
+ * `::part(...)` regions to make `<akashic-signin>` match the
+ * portal's own design system (specifically, the Sign-up <Link> next
+ * to it). Without these rules the widget would render with the
+ * default akashic-default.css token colors; with them, the widget
+ * looks indistinguishable from the portal's own React buttons.
+ *
+ * This is the worked example tenants will read when they want
+ * Akashic widgets to match their existing brand.
+ *
+ * `::part(button)` pierces the Shadow DOM only for elements the
+ * widget exposes via `part="..."`. We can't reach arbitrary internal
+ * structure — by design, that's the contract surface.
+ */
+
+akashic-signin::part(button) {
+  /* Match landing-page sign-up: rounded-md bg-[var(--accent)] px-4 py-2
+     text-sm font-medium text-white hover:opacity-90. */
+  border-radius: 0.375rem;
+  background: var(--accent);
+  color: #ffffff;
+  border: none;
+  font: inherit;
+  font-weight: 500;
+  font-size: 0.875rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  transition: opacity 150ms;
+}
+
+akashic-signin::part(button):hover {
+  opacity: 0.9;
+}
+
+/*
+ * Header context: tighter padding so the widget sits at the same
+ * size as the adjacent Sign-up <Link>. This is per-context theming
+ * via standard CSS — one widget, two visual contexts, zero widget-
+ * side configuration.
+ */
+header akashic-signin::part(button) {
+  padding: 0.375rem 0.75rem;
+}

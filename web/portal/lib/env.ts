@@ -89,7 +89,11 @@ export const env = {
   },
 
   api: {
-    baseUrl: optionalEnv("AKASHIC_PORTAL_API_BASE_URL", "https://api.akashic.local:8082"),
+    // PUBLIC URL of the api server — used in browser-facing rendered
+    // markup (script src, stylesheet link). Must be reachable from
+    // the user's browser. Defaults to a placeholder to make a missing
+    // .env entry obvious; production deployments override this.
+    baseUrl: optionalEnv("AKASHIC_PORTAL_API_BASE_URL", "https://api.akashic.example.com"),
   },
 
   brand: {

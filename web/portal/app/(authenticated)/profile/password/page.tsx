@@ -1,10 +1,10 @@
 /**
- * /profile/password — change password.
+ * /profile/password — mounts <akashic-change-password>. The widget
+ * calls api.<tenant>/users/me/password directly via the bearer
+ * exchange. No portal-side BFF involvement.
  */
 
 import Link from "next/link";
-
-import { ChangePasswordForm } from "../../../../components/ChangePasswordForm";
 
 export default function ChangePasswordPage() {
   return (
@@ -12,11 +12,11 @@ export default function ChangePasswordPage() {
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold">Change password</h1>
         <p className="text-sm text-[var(--text-muted)]">
-          Updates your password in the operator’s identity directory.
+          Updates your password in the operator's identity directory.
         </p>
       </header>
 
-      <ChangePasswordForm />
+      <akashic-change-password />
 
       <p className="text-xs text-[var(--text-muted)]">
         <Link href="/profile" className="hover:underline">

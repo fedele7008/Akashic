@@ -1,61 +1,23 @@
 /**
- * /forgot — informational only in Phase 8.
+ * /forgot — informational. Mounts <akashic-forgot-help> which fetches
+ * `/users/forgot-password-help` from the api server itself.
  *
- * Self-service password reset is deferred to Phase 9 (no email
- * channel yet). This page tells the user how to recover their
- * account in the meantime: contact the operator's support address
- * (configured via AKASHIC_PORTAL_SUPPORT_EMAIL).
- *
- * We also call the api server's `/users/forgot-password-help`
- * endpoint at render time so the message stays in lockstep with
- * what the backend says about its own state — when Phase 9 lands
- * and self-service goes live, that endpoint's response shape
- * changes and this page picks up the new copy automatically.
+ * Phase 8 status: self-service password reset is deferred to Phase 9.
+ * The widget displays whatever the api server's help endpoint says,
+ * so this page becomes correct automatically when Phase 9 swaps in
+ * a real recovery flow.
  */
 
 import Link from "next/link";
 
-import { apiCallPublic } from "../../../server/api-client";
-import { env } from "../../../lib/env";
-
-interface ForgotHelp {
-  phase: number;
-  self_service: boolean;
-  support_contact: string;
-  message: string;
-}
-
-export const dynamic = "force-dynamic"; // never cache; reflects backend state
-
-export default async function ForgotPage() {
-  const result = await apiCallPublic<ForgotHelp>("/users/forgot-password-help");
-  const help: ForgotHelp =
-    result.ok && result.data
-      ? result.data
-      : {
-          phase: 8,
-          self_service: false,
-          support_contact: env.brand.supportEmail || "(operator not configured)",
-          message:
-            "Self-service password recovery is not yet available on this deployment.",
-        };
-
+export default function ForgotPage() {
   return (
     <section className="mx-auto flex max-w-md flex-col gap-6 px-4 py-16">
       <header className="flex flex-col gap-2">
         <h1 className="text-2xl font-semibold">Forgot your password?</h1>
       </header>
 
-      <div className="rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm text-[var(--text)]">
-        <p>{help.message}</p>
-        {help.support_contact ? (
-          <p className="mt-3 text-[var(--text-muted)]">
-            Contact your operator at{" "}
-            <span className="font-mono text-[var(--text)]">{help.support_contact}</span>{" "}
-            to request a password reset.
-          </p>
-        ) : null}
-      </div>
+      <akashic-forgot-help />
 
       <div className="flex gap-3">
         <Link

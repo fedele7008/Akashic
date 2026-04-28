@@ -44,12 +44,7 @@ export default async function LandingPage() {
             >
               Create an account
             </Link>
-            <Link
-              href="/sign-in"
-              className="rounded-md border border-[var(--text-muted)]/30 px-4 py-2 text-sm font-medium text-[var(--text)] hover:bg-[var(--card)]"
-            >
-              Sign in
-            </Link>
+            <akashic-signin>Sign in</akashic-signin>
           </>
         )}
       </div>

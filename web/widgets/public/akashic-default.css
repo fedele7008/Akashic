@@ -21,6 +21,7 @@
  */
 
 akashic-signup,
+akashic-signin,
 akashic-profile,
 akashic-change-password,
 akashic-forgot-help,
@@ -53,6 +54,13 @@ akashic-clients {
   color: var(--akashic-text);
 }
 
+/* The sign-in button is intrinsically inline; the shared block above
+   sets `display: block` for form-style widgets, override it here. */
+akashic-signin {
+  display: inline-block;
+  max-width: none;
+}
+
 /*
  * Light-mode override. Tenants who set `color-scheme: light` on
  * <html> get readable defaults. Most tenants will skip this and
@@ -60,6 +68,7 @@ akashic-clients {
  */
 @media (prefers-color-scheme: light) {
   akashic-signup,
+  akashic-signin,
   akashic-profile,
   akashic-change-password,
   akashic-forgot-help,

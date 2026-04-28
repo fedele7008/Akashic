@@ -1,14 +1,13 @@
 /**
- * /sign-up — public registration form.
- *
- * Server-rendered shell with a client-rendered form. The shell pulls
- * brand copy from env at request time; the form handles validation
- * and the POST to /api/auth/signup.
+ * /sign-up — public registration. Now mounts <akashic-signup>
+ * directly. The widget calls api.<tenant>/users/register itself
+ * (no portal BFF involved); on success the SignUpWidget client
+ * wrapper redirects to /sign-in to start the OAuth flow.
  */
 
 import Link from "next/link";
 
-import { SignUpForm } from "../../../components/SignUpForm";
+import { SignUpWidget } from "../../../components/SignUpWidget";
 import { env } from "../../../lib/env";
 
 export default function SignUpPage() {
@@ -25,10 +24,10 @@ export default function SignUpPage() {
         </p>
       </header>
 
-      <SignUpForm />
+      <SignUpWidget />
 
       <p className="text-xs text-[var(--text-muted)]">
-        By creating an account you agree to be governed by your operator’s
+        By creating an account you agree to be governed by your operator's
         terms of service. Forgot your password?{" "}
         <Link href="/forgot" className="text-[var(--accent)] hover:underline">
           Recovery options

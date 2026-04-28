@@ -24,6 +24,7 @@ import { mount } from "./lib/mount";
 
 // Side-effect imports register the elements.
 import "./components/akashic-signup";
+import "./components/akashic-signin";
 import "./components/akashic-forgot-help";
 import "./components/akashic-profile";
 import "./components/akashic-change-password";
