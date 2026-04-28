@@ -316,6 +316,31 @@ type PortalConfig struct {
 	// Phase 9). If empty, the help page surfaces a generic
 	// "contact your administrator" message.
 	SupportContact string `mapstructure:"support_contact" yaml:"support_contact"`
+
+	// TenantOrigins is a comma-separated CORS allowlist for tenant
+	// product origins that may embed Akashic widgets. Used by:
+	//   - auth-server's POST /session/token (bearer-exchange endpoint)
+	//   - api-server's bearer-protected resource endpoints
+	//
+	// Set as a single string (e.g. "https://acme.com,https://www.acme.com")
+	// for viper compatibility with env vars; consumers split by ","
+	// at use time. Helper: pkg/server/cors.ParseOrigins(cfg.Portal.TenantOrigins).
+	//
+	// Cross-origin requests from these origins are honoured with
+	// `Access-Control-Allow-Origin: <origin>` (echoed) and
+	// `Access-Control-Allow-Credentials: true`. Origins not on this
+	// list see no Access-Control-Allow-Origin header — the browser
+	// then refuses to deliver the response to its JS, blocking
+	// widget integrations from unauthorized sites.
+	//
+	// Empty = no widget origins permitted (default; widgets still
+	// load as <script> tags but their fetch calls are blocked by
+	// CORS, which is the safe default).
+	//
+	// Future (post-Phase-8b, when client_services registration is
+	// fully self-service): each registered tenant Client may
+	// contribute its own origins, dynamically extending this list.
+	TenantOrigins string `mapstructure:"tenant_origins" yaml:"tenant_origins"`
 }
 
 // OAuthConfig configures the OAuth 2.1 / OIDC authorization server.

@@ -26,6 +26,7 @@ import (
 	"akashic/akashic/pkg/database/akashic_postgres"
 	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
+	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/repository"
@@ -269,17 +270,24 @@ func (s *Server) GetAddress() string {
 }
 
 // buildMiddlewareChain wraps the routed handler with per-request
-// middleware. The API server's chain is leaner than the auth
-// server's — no CORS (server-to-server callers, no browser), no
-// session cookies (bearer tokens are in the Authorization header).
+// middleware:
+//   - Recovery (always)
+//   - CORS for tenant origins (Phase 8b — widgets running on
+//     `<tenant>` cross-origin to `api.<tenant>` need preflight
+//     responses + Access-Control-Allow-Origin echoes).
 //
-// Phase 8 starts with a deliberately minimal chain. As needs grow
-// (rate-limiting per token, structured request logging, etc.) more
-// middleware lands here.
+// CORS allowlist comes from `AKASHIC_PORTAL_TENANT_ORIGINS`. Empty
+// list = no origin echoed = browsers refuse to deliver responses to
+// JS on cross-origin pages, which is the safe default. Bearer-token
+// callers from server-to-server contexts (the BFF in the sample
+// portal, third-party SSO Clients) don't need CORS — they don't run
+// in browsers — so this is purely additive, never restrictive for
+// existing flows.
 func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
-	// Recovery from panics with a request-id-scoped log line. Wrapping
-	// the handler in a thin recoverer is enough for Phase 8 — no
-	// dependency on the broader middleware package.
+	// Apply CORS first (outermost) so preflights short-circuit before
+	// hitting the bearer middleware.
+	wrapped := s.tenantCORS()(handler)
+
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
 			if rec := recover(); rec != nil {
@@ -290,6 +298,25 @@ func (s *Server) buildMiddlewareChain(handler http.Handler) http.Handler {
 				http.Error(w, "internal server error", http.StatusInternalServerError)
 			}
 		}()
-		handler.ServeHTTP(w, r)
+		wrapped.ServeHTTP(w, r)
+	})
+}
+
+// tenantCORS builds CORS middleware seeded from
+// `AKASHIC_PORTAL_TENANT_ORIGINS`. Permits cross-origin requests
+// from the operator-allowlisted tenant product origins to ALL
+// api-server routes (bearer-protected and public alike — preflights
+// don't carry the bearer so we can't decide allowance per-route at
+// the CORS layer).
+func (s *Server) tenantCORS() middleware.Middleware {
+	origins := splitTenantOrigins(s.config.GetConfig().Portal.TenantOrigins)
+	return middleware.CORS(&middleware.CORSConfig{
+		AllowedOrigins: origins,
+		AllowedMethods: []string{
+			"GET", "HEAD", "POST", "PATCH", "DELETE", "OPTIONS",
+		},
+		AllowedHeaders:   []string{"Content-Type", "Authorization", "X-Akashic-CSRF"},
+		AllowCredentials: true,
+		MaxAge:           600,
 	})
 }

@@ -426,6 +426,12 @@ func setDefaults(v *viper.Viper) {
 	// Request limits
 	v.SetDefault("middleware.control.max_request_size_bytes", DefaultControlMaxRequestSizeBytes)
 	v.SetDefault("middleware.control.request_timeout", DefaultControlRequestTimeout)
+
+	// Phase 8b: Portal config. Empty defaults so viper recognizes the
+	// keys for AutomaticEnv binding (auto-env only reads env vars for
+	// keys viper has been told exist via SetDefault/BindEnv/Set).
+	v.SetDefault("portal.support_contact", "")
+	v.SetDefault("portal.tenant_origins", "")
 }
 
 // NormalizeContainerPaths rewrites host-relative paths on the loaded

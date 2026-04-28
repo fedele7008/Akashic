@@ -112,14 +112,16 @@ fi
 # 1. Bring the entire stack down (covers vault, akashic-server, and deps)
 # ──────────────────────────────────────────────────────────────────────────
 # `docker compose down` is idempotent -- no-op when nothing is running.
-# `--profile app` ensures the profile-gated akashic-server + admin-bff are
-# included in the teardown; without it, those containers would be left
-# behind with file handles into the bind-mounted host paths, blocking
-# the rm steps below.
-# `--remove-orphans` cleans up any containers that used to belong to this
-# project but were removed from docker-compose.yml since their last start.
+# Both `--profile app` (akashic-server) and `--profile sample` (the
+# Next.js sample portal, post-Phase-8b pivot) are needed so every
+# project-owned container is included in the teardown. Without them,
+# profile-gated containers stay running and hold open file handles
+# into the bind-mounted host paths, blocking the rm steps below.
+# `--remove-orphans` also cleans up any containers that used to belong
+# to this project but were removed from docker-compose.yml since their
+# last start.
 echo "Bringing the Akashic stack down (if running)..."
-docker compose --profile app down --remove-orphans
+docker compose --profile app --profile sample down --remove-orphans
 
 # ──────────────────────────────────────────────────────────────────────────
 # 2. Wipe host-side cert + secret + key + log state

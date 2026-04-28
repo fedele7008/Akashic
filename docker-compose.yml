@@ -590,6 +590,12 @@ services:
       # client_services; the portal sends it on /authorize). If the
       # two diverge, the auth server returns redirect_uri_mismatch.
       AKASHIC_OAUTH_PORTAL_REDIRECT_URI: "${AKASHIC_OAUTH_PORTAL_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
+      # Phase 8b: deployment-wide CORS allowlist for tenant-product
+      # origins that may embed Akashic widgets. Comma- or space-
+      # separated. Both the auth-server's /session/token and the
+      # api-server's bearer endpoints honour this list. Empty = no
+      # widget origins permitted (safe default).
+      AKASHIC_PORTAL_TENANT_ORIGINS: "${AKASHIC_PORTAL_TENANT_ORIGINS:-}"
       TZ: ${AKASHIC_TZ:-UTC}
     ports:
       # Auth server (8080): public — OAuth/OIDC.
