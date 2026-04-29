@@ -425,10 +425,17 @@ redirect them to the akashic auth server's `/authorize`, then
 receive the code at `/api/auth/callback`. Same flow as admin-bff,
 just in TypeScript and with PKCE.
 
-Built-in client: a new `akashic-sample-nextjs` row added to the
-`client_services` upsert in `pkg/oauth/builtin.go`. Same secret-on-
-disk pattern as `akashic-admin`. The portal's redirect_uri is the
-portal's `/api/auth/callback`.
+> **Superseded by Phase 8b.3 Stage 4.** The original plan
+> registered the Next.js sample as a built-in row in
+> `EnsureBuiltInClients` (same secret-on-disk pattern as
+> `akashic-admin`). The Phase 8b.3 clients-registration roadmap
+> moved sample registration to the operator: only `akashic-admin`
+> remains a built-in, and the Next.js sample's `client_id` +
+> `client_secret` come from a JSON file written by
+> `akashic-cli clients create --save-credentials-to
+> .secrets/sample/nextjs.json`. The sample reads the file at
+> OAuth-call time (`web/portal/server/oauth.ts`'s
+> `resolveCredentials`) — no built-in row, no env-var secret.
 
 ### Step 3.3 — Session management
 
@@ -469,10 +476,17 @@ The pages a visitor sees before logging in.
 ### Step 4.1 — Landing page
 
 Marketing-y top page: what is this deployment, who is it for,
-buttons for "Sign up" and "Sign in." Operator-customizable copy via
-env vars (`AKASHIC_PORTAL_BRAND_NAME`, `AKASHIC_PORTAL_TAGLINE`,
-`AKASHIC_PORTAL_DESCRIPTION`, etc.) so the deployment can rebrand
-without touching code.
+buttons for "Sign up" and "Sign in."
+
+> **Superseded by Phase 8b.5.** The original plan exposed brand
+> copy as env vars (`AKASHIC_PORTAL_BRAND_NAME`, `_TAGLINE`,
+> `_DESCRIPTION`, `_SUPPORT_EMAIL`, `_SESSION_SECRET`). The Phase
+> 8b cleanup moved all of those to hardcoded literals in
+> `web/portal/lib/env.ts`'s `brand` object. The Next.js project
+> is now treated as reference-sample code: tenants who want to
+> rebrand fork the repo and edit the strings rather than fighting
+> with runtime env that conflates akashic-server config with
+> sample-product config.
 
 ### Step 4.2 — Sign-up form
 
@@ -483,11 +497,24 @@ discourage bot signups.
 
 ### Step 4.3 — Sign-up submission
 
-`POST /api/auth/signup` → portal's BFF → mTLS to akashic
-`POST /users/register`. On success, automatically initiate sign-in
-(forward to `/signin`) — Phase 8 has no email verification gate
-between signup and first login. Phase 9 changes this to "show a
-'check your email' page and gate signin until verified."
+> **Superseded by Phase 8b.1 (widget pivot).** The original plan
+> routed signup through the portal's BFF: browser → portal API
+> route → mTLS to akashic-server's `/users/register`. After the
+> Web Components pivot the portal owns no signup logic; the
+> `<akashic-signup>` widget runs in the browser and calls the
+> akashic api-server's `POST /users/register` directly. The
+> portal's BFF is no longer involved on the signup path. (mTLS
+> from the portal is gone entirely — the original plan's
+> "portal-as-mTLS-client" footprint was removed in the
+> three-server architecture pivot already noted at the top of
+> Chapter 3.)
+>
+> On success the widget emits an `akashic-signup-success`
+> CustomEvent; the embedding page redirects to its sign-in flow.
+> Same end-state as the original plan ("automatically initiate
+> sign-in"), different mechanism. Phase 8 still has no email
+> verification gate; Phase 9 will add the "check your email"
+> page in front of sign-in.
 
 ### Step 4.4 — Sign-in initiation
 
@@ -591,10 +618,21 @@ actions.
 
 `/clients/new` — form: name, description, homepage URL, redirect
 URIs (multi-input), allowed scopes (multi-select),
-`require_pkce: true` (read-only — always required, this is OAuth
-2.1), `auth_types` (read-only — always `authorization_code` in
-Phase 8). Submit → `POST /clients` → returns `client_id` +
-plaintext secret (shown ONCE, must be copied).
+**client_type: WEB | SPA**, `auth_types` (read-only — always
+`authorization_code` in Phase 8). Submit → `POST /clients` →
+returns `client_id` + plaintext secret (shown ONCE, must be
+copied) for WEB; just the `client_id` for SPA.
+
+> **Updated by Phase 8b.3 Stage 1.** The original plan made
+> `require_pkce` always-on and read-only. The 8b roadmap split
+> clients into WEB (confidential / server-side) and SPA (public /
+> browser-only): SPA still forces PKCE (operator can't disable);
+> WEB makes `require_pkce` operator-configurable (defaults true,
+> recommended on, but checkable-off via the form). The
+> `<akashic-clients>` widget that implements this step (Step 6.2
+> = Phase 8b.3 Stage 3, ⏳ not started) MUST surface the
+> WEB/SPA radio toggle and the disambiguation copy mirrored from
+> the existing admin-web `ClientsCreate.tsx`.
 
 ### Step 6.3 — Client detail page
 
@@ -644,9 +682,12 @@ agrees to share their identity with a third-party OAuth client.
 ### Step 7.1 — Consent policy
 
 Decide when consent is required:
-- **Built-in clients** (`akashic-admin`, `akashic-sample-nextjs`, `akashic-sample-static`): no consent.
-- **First-party tenant clients** (registered via portal): consent
-  on first authorization, remembered thereafter.
+- **Built-in clients** (`akashic-admin` only — see Phase 8b.3
+  Stage 4 for why the samples are no longer built-ins): no
+  consent.
+- **First-party tenant clients** (registered via CLI or admin
+  web — including the samples post-pivot): consent on first
+  authorization, remembered thereafter.
 
 Recommended: consent on first authorization per (user, client),
 remembered in postgres `oauth_consents` table.
@@ -728,6 +769,180 @@ decisions, deviations, and the as-built command set.
 
 ---
 
+## Phase 8b — Mid-Plan Pivot & Additions
+
+The original plan above (Chapters 1–8) framed the portal as a
+server-rendered Next.js app that owns its own UI. Mid-implementation
+we pivoted: tenants integrate Akashic into their products via
+embeddable Web Components, the Next.js project becomes one sample
+consumer among several, and OAuth client registration becomes an
+operator action rather than a built-in. This section consolidates the
+mid-plan additions that didn't fit the original chapter structure so
+the plan reflects the actual delivered scope.
+
+Status legend: ✅ done · 🟡 in flight · ⏳ not started
+
+### 8b.1 — Widget pivot (Web Components) ✅
+
+Replaces the assumption that pages own their UI. The akashic-server
+now ships an embeddable widget bundle (`/widgets/akashic.js` +
+`/widgets/akashic-default.css`) built from `web/widgets/` (Lit-based
+custom elements). Tenants drop `<akashic-signup>`, `<akashic-signin>`,
+`<akashic-profile>`, etc. into their own pages. The Next.js project
+in `web/portal/` becomes a reference consumer; the static-HTML
+project in `services/sample-static/` is the no-backend counterpart.
+
+- **Net effect on Chapters 4–6**: pages become thin shells that mount
+  widgets rather than owning forms and submission logic.
+- **Net effect on Chapter 1**: the `/users/*` and `/clients/*` API
+  endpoints stay where they were planned, but their primary callers
+  shift from "the portal's BFF" to "the widget bundle running on
+  arbitrary tenant origins" — see 8b.5 for the CORS knock-ons.
+
+### 8b.2 — Static-HTML sample (no backend) ✅
+
+`services/sample-static/` — nginx-served HTML + `_oauth.js`
+implementing Authorization Code Flow + PKCE entirely in the browser.
+Counterpart to the Next.js sample for tenants without a server-side
+component.
+
+- Mutually exclusive with the Next.js sample at runtime (shared
+  `sample-portal` network alias; only one can hold it).
+- Profile: `--profile sample-static`.
+- Used as the proof-of-correctness for the WEB-vs-SPA OAuth split.
+
+### 8b.3 — Clients-registration roadmap
+
+Operator-driven OAuth client registration replacing the built-in
+clients model. Four stages:
+
+#### Stage 1 — Data model + API + /authorize ✅
+
+- `ClientService.Public bool` column with `normalize()` invariants
+  (Public ⇒ RequirePKCE + empty hash; BuiltIn ⇒ RequirePKCE).
+- `client_type: "WEB"|"SPA"` on `POST /clients` (case-insensitive
+  parse, canonical uppercase response).
+- `/authorize` PKCE check now conditional on `client.RequirePKCE`
+  (was always-required); WEB clients can be registered with PKCE
+  optional.
+- `/token` PKCE check handles four cases explicitly (challenge ±
+  verifier ±) so non-PKCE WEB flows succeed and downgrade attempts
+  on stored-PKCE codes are rejected.
+- Public-client check switched from implicit `ClientSecretHash == ""`
+  to explicit `client.Public`.
+
+#### Stage 2 — Bootstrap-time portal registration ✅
+
+- `akashic-cli clients create --type WEB|SPA --name … --redirect-uri
+  … [--save-credentials-to <path>] [--no-pkce]` — control-plane
+  endpoint at `pkg/server/control/clients_handlers.go`, mTLS-gated
+  via `requireClientIdentity("cli.akashic.local",
+  "bff.akashic.local")` + `requireBootstrapComplete`.
+- Admin-web `POST /api/clients` (session-gated to admin/root,
+  CSRF-enforced) → control-plane proxy at
+  `pkg/admin_bff/handlers.go::handleCreateClient`.
+- React form at `web/admin/src/components/ClientsCreate.tsx` with
+  the WEB/SPA disambiguation copy and the secret-shown-once panel.
+- `BOOTSTRAP_INCOMPLETE` gate (HTTP 409) prevents `clients create`
+  before bootstrap completes; CLI maps it to a friendly "run
+  bootstrap create-root first" message.
+- Post-bootstrap "next step" hint printed by `bootstrap create-root`
+  on success.
+
+#### Stage 3 — `<akashic-clients>` developer widget ⏳
+
+The original Chapter 6 work, repurposed as a widget. Tenant
+developers (NOT operators) manage their own OAuth clients against
+the bearer-authenticated `/clients/*` endpoints (already built in
+Stage 1). Owner-scoped via `/clients/mine` + `canManage()`.
+
+- Lit component at `web/widgets/src/components/akashic-clients.ts`.
+- List + create + edit + delete + rotate-secret in one widget.
+- Mirrors the admin-web's `ClientsCreate.tsx` UX but uses bearer
+  tokens instead of mTLS-via-control-plane.
+
+#### Stage 4 — Sample adaptation ✅
+
+- `akashic-sample-nextjs` and `akashic-sample-static` removed from
+  `EnsureBuiltInClients` candidates. Operator registers them via
+  `clients create --save-credentials-to .secrets/sample/<name>.json`.
+- `AKASHIC_OAUTH_BUILTIN_CLIENTS` replaced with single boolean
+  `AKASHIC_OAUTH_ADMIN_BFF_ENABLED` (only `akashic-admin` remains
+  as a built-in).
+- Next.js sample reads credentials JSON from `/secrets/sample/nextjs.json`
+  at OAuth-call time (Node `readFileSync` in `web/portal/server/oauth.ts`).
+- Static sample fetches `/akashic-config.json` from nginx (which
+  aliases `.secrets/sample/static.json`) before /authorize so
+  freshly-registered SPA clients work without a container restart.
+
+### 8b.4 — Naming alignment ✅
+
+Mid-plan rename to clean up "portal" overloading and align WEB/SPA
+labels with operator vocabulary:
+
+| Old | New |
+|-----|-----|
+| `akashic-portal` (built-in) | `akashic-sample-nextjs` |
+| `akashic-static-sample` (built-in) | `akashic-sample-static` |
+| `client_type: "bff"` / `"spa"` | `"WEB"` / `"SPA"` (uppercase, op-friendly) |
+| `AKASHIC_OAUTH_PORTAL_REDIRECT_URI` | `AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI` |
+| `AKASHIC_OAUTH_BUILTIN_CLIENTS=admin,…` | `AKASHIC_OAUTH_ADMIN_BFF_ENABLED=true` (boolean) |
+| `AKASHIC_PORTAL_BRAND_NAME`/`_TAGLINE`/`_SESSION_SECRET` | hardcoded in `web/portal/lib/env.ts` |
+
+### 8b.5 — Cross-cutting UX + ops additions ✅
+
+- **CORS on /token + /userinfo + /session/token** (`pkg/server/auth/routes.go`)
+  via `tenantCORS()` middleware seeded from `AKASHIC_PORTAL_TENANT_ORIGINS`
+  — required for SPA OAuth + bearer-exchange from arbitrary tenant origins.
+- **RP-Initiated Logout** for both samples (`/logout?post_logout_redirect_uri=…&id_token_hint=…`)
+  with origin-allowlist check against registered `redirect_uris`.
+- **`<akashic-signup>` confirm-password field + live policy fetch** —
+  fetches `GET /users/password-policy` on connectedCallback; client-side
+  pre-validates against the same rules the server applies.
+- **Public `GET /users/password-policy`** endpoint exposes the active
+  policy; widget reads it; admin-bff bootstrap form could read it too
+  (currently uses hardcoded defaults).
+- **Dynamic credential consumption** — Next.js sample reads JSON file
+  at request time (no caching of secret); discovery cached separately.
+- **`./logs:/app/logs` mount** on `--profile app` so file-based logs
+  are visible on the host alongside `docker compose logs`.
+- **`.env` cleanup** — collapsed verbose comments, removed sample
+  cosmetic envs (BRAND_NAME, TAGLINE, SESSION_SECRET, DESCRIPTION,
+  SUPPORT_EMAIL — all hardcoded in sample source now).
+
+### 8b.6 — Open items
+
+| Item | Scope | Priority |
+|---|---|---|
+| CLI `clients list / show / delete / rotate-secret` | ~40 LOC each | High |
+| Admin web client list + edit + delete + rotate UI | ~300 LOC TS + control-plane endpoints | High |
+| Stage 3 widget (`<akashic-clients>`) | ~3-5 turns | Medium |
+| Server-side password policy from operator config (replace `DefaultPasswordPolicy()` with `cfg.Bootstrap.Password` in `users_handlers.go:109,319`) | 2 lines | Low (real bug) |
+| Refactor duplicated client-create logic into `pkg/clientservice/` | ~150 LOC Go | Low (cleanup) |
+| Static sample graceful 404 on `/akashic-config.json` | ~10 LOC JS | Low |
+
+### 8b.7 — Phasing notes
+
+The 8b additions fold into the original chapter ordering as follows:
+
+```
+Chapter 1 (data model)               ← extended by 8b.3 Stage 1
+    ↓
+Chapter 2-3 (Next.js scaffold + auth) ← repurposed by 8b.1 (sample, not portal)
+    ↓
+Chapter 4-5 (public + authed surface) ← rebuilt as widget consumers (8b.1)
+    ↓
+Chapter 6 (developer surface)         ← becomes 8b.3 Stage 3
+    ↓
+Chapter 7-8 (consent + verification)  ← unchanged
+```
+
+What this means in practice: someone reading the plan today should
+read Chapters 1–8 for the conceptual shape, then read Phase 8b for
+what was actually delivered and what remains.
+
+---
+
 ## Risks & open questions
 
 | Risk | Mitigation |
@@ -739,7 +954,7 @@ decisions, deviations, and the as-built command set.
 | Two BFFs (admin-bff in Go, portal in TS) drift apart | Shared docs (Step 8.5); shared config conventions; same audit-log allowlist pattern |
 | LDAP password change semantics differ across LDAP servers | Test against OpenLDAP (our default) + AD; document the exact LDAP operations used; provide a fallback path that re-binds to verify |
 | OAuth consent UX confusing for end-users | Iterate on copy; revisit with real users in Phase 9 |
-| Rendering at the bare root domain conflicts with operator DNS conventions | Operator can override the served subdomain via env (`AKASHIC_PORTAL_DOMAIN`); default = bare root if no override |
+| Rendering at the bare root domain conflicts with operator DNS conventions | Operator overrides the public hostnames via the existing public-URL envs (`AKASHIC_PORTAL_API_BASE_URL`, `AKASHIC_OAUTH_*_REDIRECT_URI`) and the proxy's nginx config — there is no dedicated `AKASHIC_PORTAL_DOMAIN` knob. |
 
 ## Files Summary (planned)
 
@@ -757,18 +972,18 @@ decisions, deviations, and the as-built command set.
 | Path | Change |
 |---|---|
 | `pkg/models/user.go` | Add email_verified, email_verified_at, last_login_at (display name lives in LDAP cn, NOT postgres) |
-| `pkg/models/client_service.go` | Add owner_user_id, description, homepage_url |
+| `pkg/models/client_service.go` | Add owner_user_id, description, homepage_url. **8b.3 Stage 1: also adds `Public bool` + `normalize()` invariants.** |
 | `pkg/repository/user_repository.go` | Generalize CreateUser beyond bootstrap |
 | `pkg/ldap/client.go` | Add ChangePassword |
-| `pkg/oauth/builtin.go` | Add `akashic-sample-nextjs` built-in client |
-| `pkg/middleware/mtls.go` | Allowlist `portal.akashic.local` CN |
+| ~~`pkg/oauth/builtin.go`~~ | ~~Add `akashic-sample-nextjs` built-in client~~ — **REVERSED by 8b.3 Stage 4.** Sample is operator-registered, not a built-in. The only built-in now is `akashic-admin`, gated by `cfg.OAuth.AdminBFFEnabled`. |
+| ~~`pkg/middleware/mtls.go`~~ | ~~Allowlist `portal.akashic.local` CN~~ — **REVERSED by the three-server architecture pivot.** The portal makes no mTLS calls. |
 | `configs/config.yaml` | New portal section + support contact info |
-| `services/vault-agent/templates/portal-client.tpl` | New cert template |
-| `services/vault-agent/config.hcl` | Register the new template |
+| ~~`services/vault-agent/templates/portal-client.tpl`~~ | ~~New cert template~~ — **REVERSED with the mTLS removal above; portal has no client cert.** |
+| ~~`services/vault-agent/config.hcl`~~ | ~~Register the new template~~ — **REVERSED, same reason.** |
 | `services/proxy/nginx.conf` | New root-domain server block |
 | `services/redisinsight/docker-entrypoint.sh` | Add DB 2 connection for portal sessions |
 | `docker-compose.yml` | Add `portal` service |
-| `.env.example` | New AKASHIC_PORTAL_* vars |
+| `.env.example` | ~~New AKASHIC_PORTAL_* vars~~ — **8b.5: most AKASHIC_PORTAL_* runtime envs were removed.** Surviving ones: `AKASHIC_PORTAL_API_BASE_URL` (widget URL), `AKASHIC_PORTAL_TENANT_ORIGINS` (CORS allowlist). New: `AKASHIC_OAUTH_ADMIN_BFF_ENABLED` (replaces `AKASHIC_OAUTH_BUILTIN_CLIENTS`). |
 
 ### New portal code (everything under `web/portal/`)
 
