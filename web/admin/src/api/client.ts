@@ -170,6 +170,14 @@ export interface CreateClientResponse {
   client_secret: string;
 }
 
+/**
+ * Response shape for POST /api/clients/<id>/rotate-secret.
+ */
+export interface RotateSecretResponse {
+  client_id: string;
+  client_secret: string;
+}
+
 export class ClientsApi {
   /**
    * POST /api/clients — register a new OAuth client (WEB or SPA).
@@ -196,6 +204,67 @@ export class ClientsApi {
     const body: ApiResponse<CreateClientResponse> = await r.json();
     if (!r.ok || !body.success) {
       const err = new Error(body.error?.message ?? `Client registration failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data!;
+  }
+
+  /**
+   * GET /api/clients — list every registered client (built-in +
+   * tenant). Read-only; refreshes whenever the dashboard remounts
+   * the list view or after a delete/rotate succeeds.
+   */
+  static async list(): Promise<ClientView[]> {
+    const r = await fetch('/api/clients', {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ clients: ClientView[] }> = await r.json();
+    if (!r.ok || !body.success) {
+      const err = new Error(body.error?.message ?? `List failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data?.clients ?? [];
+  }
+
+  /**
+   * DELETE /api/clients/<id> — remove a registered client. Built-ins
+   * are server-side-rejected with BUILTIN_IMMUTABLE.
+   */
+  static async remove(clientID: string): Promise<void> {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientID)}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ deleted: boolean }> = await r.json();
+    if (!r.ok || !body.success) {
+      const err = new Error(body.error?.message ?? `Delete failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+  }
+
+  /**
+   * POST /api/clients/<id>/rotate-secret — issue a fresh client_secret.
+   * Returns the plaintext exactly once; UI MUST render it in a
+   * shown-once panel. Old secret is immediately invalid.
+   *
+   * Server rejects rotate for built-ins (BUILTIN_IMMUTABLE) and
+   * SPA/public clients (PUBLIC_CLIENT_NO_SECRET).
+   */
+  static async rotateSecret(clientID: string): Promise<RotateSecretResponse> {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientID)}/rotate-secret`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<RotateSecretResponse> = await r.json();
+    if (!r.ok || !body.success) {
+      const err = new Error(body.error?.message ?? `Rotate failed (HTTP ${r.status})`);
       (err as Error & { apiError?: ApiError }).apiError = body.error;
       throw err;
     }

@@ -54,5 +54,8 @@ knows where to connect and how to authenticate over mTLS.`,
 	}
 	cmd.PersistentFlags().String("profile", "", "configure profile to use (default: active)")
 	cmd.AddCommand(NewClientsCreateCmd(ctx))
+	cmd.AddCommand(NewClientsListCmd(ctx))
+	cmd.AddCommand(NewClientsDeleteCmd(ctx))
+	cmd.AddCommand(NewClientsRotateSecretCmd(ctx))
 	return cmd
 }

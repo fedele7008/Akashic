@@ -85,7 +85,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// (pkg/server/api/clients_handlers.go) is the parallel
 	// surface for tenant developers using the <akashic-clients>
 	// widget — different audience, same DB writes.
+	// /clients (collection):
+	//   POST  → register a new client (handleAdminCreateClient)
+	//   GET   → list every registered client (handleAdminListClients)
 	mux.HandleFunc("/clients",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
-			s.requireBootstrapComplete(s.handleAdminCreateClient)))
+			s.requireBootstrapComplete(s.handleAdminClients)))
+
+	// /clients/:id[/<action>] (per-id):
+	//   DELETE /clients/:id                → delete (rejects built-ins)
+	//   POST   /clients/:id/rotate-secret  → rotate (rejects built-ins, public)
+	mux.HandleFunc("/clients/",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.requireBootstrapComplete(s.handleAdminClientByID)))
 }

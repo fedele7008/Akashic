@@ -1,21 +1,36 @@
 import { useState } from 'react';
-import { SessionApi, type SessionInfo } from '../api/client';
+import { SessionApi, type ClientView, type SessionInfo } from '../api/client';
 import { ClientsCreate } from './ClientsCreate';
+import { ClientsList } from './ClientsList';
+import { ClientsRotate } from './ClientsRotate';
+
+/**
+ * View state — discriminated union rather than separate booleans.
+ * `target` is required only for the `rotate` view; the type-checker
+ * rejects an invalid `{ kind: 'create', target: ... }` combo at the
+ * compile boundary, which a `showCreate / showRotate / rotateTarget`
+ * trio of booleans can't catch.
+ */
+type View =
+  | { kind: 'list' }
+  | { kind: 'create' }
+  | { kind: 'rotate'; target: ClientView };
 
 /**
  * Dashboard is the logged-in view. Phase 8b adds OAuth client
- * registration as a primary affordance — the same operator action
- * available via `akashic-cli clients create`, surfaced here for
- * operators who prefer the web UI.
+ * management as a primary affordance — register / list / delete /
+ * rotate, mirroring `akashic-cli clients` for operators who prefer
+ * the web UI.
  *
- * Future iterations: list registered clients (ClientsApi.list),
- * edit/delete via row actions, rotate secrets in-place. For now the
- * dashboard hosts only the create flow — covers the post-bootstrap
- * "register your tenant portal" initialization step end-to-end.
+ * Three sub-views (`list`, `create`, `rotate`) handled by a state
+ * machine that single-discriminates the rendered component. List
+ * refreshes after a successful create or delete via the `refreshKey`
+ * counter.
  */
 export function Dashboard({ session }: { session: SessionInfo }) {
   const [loggingOut, setLoggingOut] = useState(false);
-  const [showCreateClient, setShowCreateClient] = useState(false);
+  const [view, setView] = useState<View>({ kind: 'list' });
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const canManageClients =
     session.user_type === 'admin' || session.user_type === 'root';
@@ -41,11 +56,35 @@ export function Dashboard({ session }: { session: SessionInfo }) {
     window.location.href = authLogoutUrl || '/';
   };
 
-  // Modal-style overlay: when the create-client form is open, it
-  // takes over the surface entirely. Avoids cramming the Dashboard
-  // with a multi-section layout before the rest of Phase 8b lands.
-  if (showCreateClient) {
-    return <ClientsCreate onClose={() => setShowCreateClient(false)} />;
+  // Modal-style overlay for create / rotate. The list lives inline
+  // in the dashboard so the operator can see what's registered at a
+  // glance; full-screen takeover for the actions that need it
+  // (registration form's many fields; rotation's shown-once panel).
+  if (view.kind === 'create') {
+    return (
+      <ClientsCreate
+        onClose={() => {
+          // Bump refresh so the freshly-registered client appears in
+          // the list when we return.
+          setRefreshKey((k) => k + 1);
+          setView({ kind: 'list' });
+        }}
+      />
+    );
+  }
+  if (view.kind === 'rotate') {
+    return (
+      <ClientsRotate
+        client={view.target}
+        onClose={() => {
+          // Refresh on close — even though the rotate action doesn't
+          // change the row's listed fields, this keeps the list in
+          // sync if anything else changed concurrently.
+          setRefreshKey((k) => k + 1);
+          setView({ kind: 'list' });
+        }}
+      />
+    );
   }
 
   return (
@@ -78,18 +117,21 @@ export function Dashboard({ session }: { session: SessionInfo }) {
           <div className="actions">
             <button
               type="button"
-              onClick={() => setShowCreateClient(true)}
+              onClick={() => setView({ kind: 'create' })}
               className="primary"
             >
               Register a new client
             </button>
           </div>
+          <ClientsList
+            refreshKey={refreshKey}
+            onRotate={(c) => setView({ kind: 'rotate', target: c })}
+          />
         </section>
       )}
 
       <p className="hint" style={{ marginTop: '1.5rem' }}>
-        Coming next — client list / edit / delete, user administration,
-        audit log viewer.
+        Coming next — user administration, audit log viewer.
       </p>
 
       <div className="actions">

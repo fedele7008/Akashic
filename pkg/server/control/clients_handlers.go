@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -12,6 +13,7 @@ import (
 
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
+	"gorm.io/gorm"
 )
 
 // Operator-side client management endpoints.
@@ -103,6 +105,202 @@ func toAdminClientView(c *models.ClientService) adminClientView {
 		CreatedAt:     c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:     c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
+}
+
+// handleAdminClients dispatches `/clients` (collection-level):
+//   GET  → list every registered client (built-in + tenant)
+//   POST → create a new client (calls handleAdminCreateClient)
+//
+// Per-id operations (DELETE, rotate-secret) live on `/clients/`
+// (trailing slash) and are dispatched by handleAdminClientByID.
+func (s *Server) handleAdminClients(w http.ResponseWriter, r *http.Request) {
+	switch r.Method {
+	case http.MethodGet:
+		s.handleAdminListClients(w, r)
+	case http.MethodPost:
+		s.handleAdminCreateClient(w, r)
+	default:
+		response.WriteJSON(w, http.StatusMethodNotAllowed,
+			response.Fail(response.ErrMethodNotAllowed,
+				"only GET or POST is allowed", nil))
+	}
+}
+
+// handleAdminListClients implements GET /clients. Returns every
+// registered client_service row (built-ins + operator-/tenant-
+// registered) — the control plane is operator-level via mTLS, so
+// there's no per-owner scoping like the api-server's /clients/mine.
+func (s *Server) handleAdminListClients(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable,
+			response.Fail("DB_NOT_READY",
+				"the control server has no database handle yet", nil))
+		return
+	}
+	var rows []models.ClientService
+	if err := s.db.WithContext(r.Context()).
+		Order("built_in DESC, created_at DESC").
+		Find(&rows).Error; err != nil {
+		s.logger.App.Error("adminListClients: db query", zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not list clients", nil))
+		return
+	}
+	views := make([]adminClientView, 0, len(rows))
+	for i := range rows {
+		views = append(views, toAdminClientView(&rows[i]))
+	}
+	response.WriteJSON(w, http.StatusOK,
+		response.Success(map[string]any{"clients": views}))
+}
+
+// handleAdminClientByID dispatches `/clients/<id>[/<action>]`:
+//   DELETE /clients/:id                → delete (rejects built-ins)
+//   POST   /clients/:id/rotate-secret  → rotate (rejects built-ins, public)
+//
+// extractClientID is the same helper the api-server uses; we reach
+// across packages rather than duplicate the parser.
+func (s *Server) handleAdminClientByID(w http.ResponseWriter, r *http.Request) {
+	if s.db == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable,
+			response.Fail("DB_NOT_READY",
+				"the control server has no database handle yet", nil))
+		return
+	}
+	clientID, action := splitClientPath(r.URL.Path)
+	if clientID == "" {
+		response.WriteJSON(w, http.StatusNotFound,
+			response.Fail("NOT_FOUND", "no route for this path", nil))
+		return
+	}
+
+	var existing models.ClientService
+	res := s.db.WithContext(r.Context()).
+		Where("client_id = ?", clientID).First(&existing)
+	if errors.Is(res.Error, gorm.ErrRecordNotFound) {
+		response.WriteJSON(w, http.StatusNotFound,
+			response.Fail("CLIENT_NOT_FOUND", "no such client_id", nil))
+		return
+	}
+	if res.Error != nil {
+		s.logger.App.Error("adminClientByID: db lookup",
+			zap.String("client_id", clientID), zap.Error(res.Error))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not load client", nil))
+		return
+	}
+
+	switch action {
+	case "":
+		switch r.Method {
+		case http.MethodDelete:
+			s.handleAdminDeleteClient(w, r, &existing)
+		default:
+			response.WriteJSON(w, http.StatusMethodNotAllowed,
+				response.Fail(response.ErrMethodNotAllowed,
+					"only DELETE is allowed on this path", nil))
+		}
+	case "rotate-secret":
+		if r.Method != http.MethodPost {
+			response.WriteJSON(w, http.StatusMethodNotAllowed,
+				response.Fail(response.ErrMethodNotAllowed,
+					"only POST is allowed on rotate-secret", nil))
+			return
+		}
+		s.handleAdminRotateSecret(w, r, &existing)
+	default:
+		response.WriteJSON(w, http.StatusNotFound,
+			response.Fail("NOT_FOUND", "no route for this path", nil))
+	}
+}
+
+// splitClientPath parses `/clients/<id>[/<action>]`. Mirrors the
+// api-server's `extractClientID`; duplicated rather than imported
+// to keep `pkg/server/control` free of `pkg/server/api` dependencies
+// (the surfaces are intentionally independent).
+func splitClientPath(path string) (id, action string) {
+	const prefix = "/clients/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", ""
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	if rest == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(rest, "/", 2)
+	id = parts[0]
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+	return id, action
+}
+
+// handleAdminDeleteClient implements DELETE /clients/:id. Built-ins
+// are rejected — they're server-managed via EnsureBuiltInClients;
+// deleting them here would leave the spec list disagreeing with the
+// DB until the next boot. Tenant-registered clients are removed.
+func (s *Server) handleAdminDeleteClient(w http.ResponseWriter, r *http.Request, c *models.ClientService) {
+	if c.BuiltIn {
+		response.WriteJSON(w, http.StatusForbidden,
+			response.Fail("BUILTIN_IMMUTABLE",
+				"built-in clients are managed by the server itself; toggle AKASHIC_OAUTH_ADMIN_BFF_ENABLED to remove the admin built-in",
+				nil))
+		return
+	}
+	if err := s.db.WithContext(r.Context()).Delete(c).Error; err != nil {
+		s.logger.App.Error("adminDeleteClient: db", zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not delete client", nil))
+		return
+	}
+	s.logger.Security.Info("oauth client deleted via control plane",
+		zap.String("client_id", c.ClientID),
+		zap.String("name", c.Name))
+	response.WriteJSON(w, http.StatusOK,
+		response.Success(map[string]any{"deleted": true}))
+}
+
+// handleAdminRotateSecret implements POST /clients/:id/rotate-secret.
+// Rejected for built-ins (server-managed) and public/SPA clients
+// (have no shared secret — PKCE replaces it).
+func (s *Server) handleAdminRotateSecret(w http.ResponseWriter, r *http.Request, c *models.ClientService) {
+	if c.BuiltIn {
+		response.WriteJSON(w, http.StatusForbidden,
+			response.Fail("BUILTIN_IMMUTABLE",
+				"built-in clients' secrets are managed by the server itself", nil))
+		return
+	}
+	if c.Public {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("PUBLIC_CLIENT_NO_SECRET",
+				"public (SPA) clients have no client_secret; PKCE replaces it on every authorization", nil))
+		return
+	}
+	secret, err := generateAdminClientSecret()
+	if err != nil {
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not generate secret", nil))
+		return
+	}
+	hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+	if err != nil {
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not hash secret", nil))
+		return
+	}
+	if err := s.db.WithContext(r.Context()).Model(c).
+		Update("client_secret_hash", string(hash)).Error; err != nil {
+		s.logger.App.Error("adminRotateSecret: db", zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not rotate secret", nil))
+		return
+	}
+	s.logger.Security.Info("oauth client secret rotated via control plane",
+		zap.String("client_id", c.ClientID))
+	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
+		"client_id":     c.ClientID,
+		"client_secret": secret,
+	}))
 }
 
 // handleAdminCreateClient implements POST /clients on the control plane.

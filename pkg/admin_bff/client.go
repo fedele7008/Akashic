@@ -245,6 +245,78 @@ func (c *ControlClient) ClientCreate(ctx context.Context, req *CreateClientReque
 	return &out, nil
 }
 
+// ListClientsResponse is the shape of GET /clients's data envelope.
+type ListClientsResponse struct {
+	Clients []ClientView `json:"clients"`
+}
+
+// ClientList calls GET /clients on the control plane and returns the
+// full set of registered clients (built-in + tenant). Operator-level
+// view: no per-owner scoping (the admin-bff is allowed to see all).
+func (c *ControlClient) ClientList(ctx context.Context) (*ListClientsResponse, error) {
+	resp, body, err := c.do(ctx, http.MethodGet, "/clients", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var out ListClientsResponse
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		return nil, fmt.Errorf("malformed list-clients payload: %w", err)
+	}
+	return &out, nil
+}
+
+// ClientDelete calls DELETE /clients/<id> on the control plane.
+// Built-ins and not-found are returned as ControlError with the
+// appropriate code so the handler can map them to user-friendly
+// browser messages.
+func (c *ControlClient) ClientDelete(ctx context.Context, clientID string) error {
+	resp, body, err := c.do(ctx, http.MethodDelete, "/clients/"+clientID, nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return parseControlError(resp.StatusCode, body)
+	}
+	return nil
+}
+
+// RotateSecretResponse is the shape of POST /clients/:id/rotate-secret's
+// data envelope. The plaintext is shown ONCE to the operator; only its
+// bcrypt hash is persisted server-side.
+type RotateSecretResponse struct {
+	ClientID     string `json:"client_id"`
+	ClientSecret string `json:"client_secret"`
+}
+
+// ClientRotateSecret calls POST /clients/<id>/rotate-secret. Rejected
+// for built-ins and public/SPA clients server-side; the handler maps
+// those codes to user-facing messages.
+func (c *ControlClient) ClientRotateSecret(ctx context.Context, clientID string) (*RotateSecretResponse, error) {
+	resp, body, err := c.do(ctx, http.MethodPost, "/clients/"+clientID+"/rotate-secret", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var out RotateSecretResponse
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		return nil, fmt.Errorf("malformed rotate-secret payload: %w", err)
+	}
+	return &out, nil
+}
+
 // do is the shared HTTP-call helper. Returns the response, body bytes,
 // and a low-level error (network/timeout). Higher-level callers
 // inspect the status code and parse the body as needed.

@@ -74,6 +74,42 @@ func (s *Server) handleBootstrapCreateRoot(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// requireAdminSession enforces the "logged-in admin/root" gate that
+// every /api/clients/* handler shares. Returns true when the request
+// passes; on failure it writes the appropriate error envelope and
+// returns false (caller bails immediately).
+//
+// Three rejection codes the FE branches on:
+//   NOT_AUTHENTICATED — no session cookie at all (re-render to landing)
+//   SESSION_EXPIRED   — cookie present but no Redis row (clear + re-render)
+//   INSUFFICIENT_ROLE — session exists but user_type isn't admin/root
+//
+// Splitting these out keeps the React shell responsive: a logged-out
+// user gets the sign-in landing; an expired session clears the dead
+// cookie before doing the same; an under-privileged user gets a
+// permission error rather than being silently bounced to login.
+func (s *Server) requireAdminSession(w http.ResponseWriter, r *http.Request) bool {
+	sid := readCookie(r, sessionCookieName)
+	if sid == "" {
+		writeError(w, http.StatusUnauthorized, "NOT_AUTHENTICATED",
+			"You must be signed in to manage OAuth clients.")
+		return false
+	}
+	sess, err := s.sessions.Touch(r.Context(), sid)
+	if err != nil {
+		clearCookie(w, sessionCookieName, r)
+		writeError(w, http.StatusUnauthorized, "SESSION_EXPIRED",
+			"Your session has expired. Please sign in again.")
+		return false
+	}
+	if sess.UserType != "admin" && sess.UserType != "root" {
+		writeError(w, http.StatusForbidden, "INSUFFICIENT_ROLE",
+			"Only admin or root users may manage OAuth clients.")
+		return false
+	}
+	return true
+}
+
 // handleCreateClient is POST /api/clients. Session-gated to admin or
 // root user types — registering OAuth clients is an operator action,
 // not something the average end-user should reach via this endpoint.
@@ -87,26 +123,7 @@ func (s *Server) handleBootstrapCreateRoot(w http.ResponseWriter, r *http.Reques
 // reach this handler, the request is already authenticated AND
 // throttled.
 func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
-	// Session gate: must be logged in as admin or root.
-	sid := readCookie(r, sessionCookieName)
-	if sid == "" {
-		writeError(w, http.StatusUnauthorized, "NOT_AUTHENTICATED",
-			"You must be signed in to register OAuth clients.")
-		return
-	}
-	sess, err := s.sessions.Touch(r.Context(), sid)
-	if err != nil {
-		clearCookie(w, sessionCookieName, r)
-		writeError(w, http.StatusUnauthorized, "SESSION_EXPIRED",
-			"Your session has expired. Please sign in again.")
-		return
-	}
-	if sess.UserType != "admin" && sess.UserType != "root" {
-		// Not a hard 403 with details — don't leak the existence of
-		// admin-only endpoints to non-privileged users. They got past
-		// session check but their role doesn't qualify.
-		writeError(w, http.StatusForbidden, "INSUFFICIENT_ROLE",
-			"Only admin or root users may register OAuth clients.")
+	if !s.requireAdminSession(w, r) {
 		return
 	}
 
@@ -147,6 +164,114 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
 		"success": true,
 		"data": map[string]any{
 			"client":        resp.Client,
+			"client_secret": resp.ClientSecret,
+		},
+	})
+}
+
+// handleListClients is GET /api/clients. Session-gated; proxies to
+// the control plane's GET /clients which returns every registered
+// row (built-in + tenant). The FE renders this as a table with
+// per-row Delete / Rotate-Secret actions.
+//
+// Response envelope: `{success:true, data:{clients:[...]}}` —
+// pass-through of the control-plane shape.
+func (s *Server) handleListClients(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	resp, err := s.controlClient.ClientList(r.Context())
+	if err != nil {
+		s.writeControlError(w, err, "listing OAuth clients")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"clients": resp.Clients},
+	})
+}
+
+// handleClientByID dispatches DELETE/POST on /api/clients/<id>[/<action>].
+// Path parsing extracts the id (and optional `rotate-secret` action);
+// the method then determines the operation. Session-gated as a single
+// upfront check.
+//
+// Why a single dispatcher rather than two HandleFunc registrations:
+// Go's http.ServeMux pattern routing for `/api/clients/` matches both
+// `/api/clients/abc` and `/api/clients/abc/rotate-secret` — splitting
+// would force two registrations + duplicate auth gates. One dispatcher,
+// one auth check, branch on parsed action.
+func (s *Server) handleClientByID(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	id, action := splitAdminClientPath(r.URL.Path)
+	if id == "" {
+		writeError(w, http.StatusNotFound, "NOT_FOUND",
+			"No route for this path.")
+		return
+	}
+	switch action {
+	case "":
+		if r.Method != http.MethodDelete {
+			writeError(w, http.StatusMethodNotAllowed,
+				"METHOD_NOT_ALLOWED", "Only DELETE is allowed on this path.")
+			return
+		}
+		s.deleteClient(w, r, id)
+	case "rotate-secret":
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed,
+				"METHOD_NOT_ALLOWED", "Only POST is allowed on rotate-secret.")
+			return
+		}
+		s.rotateClientSecret(w, r, id)
+	default:
+		writeError(w, http.StatusNotFound, "NOT_FOUND",
+			"No route for this path.")
+	}
+}
+
+// splitAdminClientPath parses `/api/clients/<id>[/<action>]`. Returns
+// empty id when the path doesn't match the expected shape (404 case).
+func splitAdminClientPath(path string) (id, action string) {
+	const prefix = "/api/clients/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", ""
+	}
+	rest := strings.TrimPrefix(path, prefix)
+	if rest == "" {
+		return "", ""
+	}
+	parts := strings.SplitN(rest, "/", 2)
+	id = parts[0]
+	if len(parts) == 2 {
+		action = parts[1]
+	}
+	return id, action
+}
+
+func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request, id string) {
+	if err := s.controlClient.ClientDelete(r.Context(), id); err != nil {
+		s.writeControlError(w, err, "deleting OAuth client")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"deleted": true},
+	})
+}
+
+func (s *Server) rotateClientSecret(w http.ResponseWriter, r *http.Request, id string) {
+	resp, err := s.controlClient.ClientRotateSecret(r.Context(), id)
+	if err != nil {
+		s.writeControlError(w, err, "rotating client secret")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data": map[string]any{
+			"client_id":     resp.ClientID,
 			"client_secret": resp.ClientSecret,
 		},
 	})
@@ -199,6 +324,32 @@ func (s *Server) writeControlError(w http.ResponseWriter, err error, context str
 			// generically and audit-log loudly in Step 4.
 			writeError(w, http.StatusBadGateway, "BFF_AUTH_FAILED",
 				"The admin UI's connection to the server is misconfigured. Contact the deployment operator.")
+		case "CLIENT_NOT_FOUND":
+			writeError(w, http.StatusNotFound, "CLIENT_NOT_FOUND",
+				"No client with that id exists.")
+		case "BUILTIN_IMMUTABLE":
+			// Server-managed clients (akashic-admin) — operators
+			// configure them via env, not via this UI. Reflecting
+			// the server's message verbatim is fine here; it
+			// already names the env var.
+			writeError(w, http.StatusForbidden, "BUILTIN_IMMUTABLE",
+				ctlErr.Message)
+		case "PUBLIC_CLIENT_NO_SECRET":
+			// SPA / public clients have no secret to rotate. The
+			// FE should hide the rotate button for these rows;
+			// this branch is the safety net for race conditions
+			// where the UI sees a stale row.
+			writeError(w, http.StatusBadRequest, "PUBLIC_CLIENT_NO_SECRET",
+				"This is a public (SPA) client; PKCE replaces the shared secret on every authorization, so there is nothing to rotate.")
+		case "BOOTSTRAP_INCOMPLETE":
+			// Hit when an admin user has a session predating a DB
+			// reset. The natural fix is to bootstrap again; surface
+			// it clearly so the operator knows what to do.
+			writeError(w, http.StatusConflict, "BOOTSTRAP_INCOMPLETE",
+				"Bootstrap is not yet complete. Run `akashic-cli bootstrap create-root` first.")
+		case "DB_NOT_READY":
+			writeError(w, http.StatusServiceUnavailable, "DB_NOT_READY",
+				"The akashic-server's database isn't fully wired yet. Retry shortly.")
 		default:
 			// Any other 4xx → 400; 5xx → 502.
 			status := http.StatusBadGateway

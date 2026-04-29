@@ -268,6 +268,22 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleCreateClient)))
 
+	// /api/clients (GET): list every registered client (built-in +
+	// tenant). Read-only, idempotent — same CSRF + rate-limit
+	// envelope as the rest, but no real CSRF risk on a GET. Powers
+	// the admin web's clients table.
+	mux.HandleFunc("GET /api/clients",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleListClients)))
+
+	// /api/clients/<id>[/<action>] (DELETE / POST): per-id ops.
+	// One dispatcher branches on action + method:
+	//   DELETE /api/clients/<id>                 → delete
+	//   POST   /api/clients/<id>/rotate-secret   → rotate
+	mux.HandleFunc("/api/clients/",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleClientByID)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).
