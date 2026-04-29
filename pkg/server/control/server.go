@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/gorm"
 )
 
 // Server represents the Control Server (management API)
@@ -33,6 +34,28 @@ type Server struct {
 	shutdownFn       context.CancelFunc // Function to trigger app shutdown
 	certReloader     *pki.Reloader
 	bootstrapLimiter *middleware.InMemoryRateLimiter // per-CN rate limit for /bootstrap/* (Phase 5.1.2)
+
+	// db is the GORM handle to the akashic_postgres database, wired
+	// in by SetDB() after initialization. Used by the operator-side
+	// client management endpoints (Stage 2 of the clients-registration
+	// roadmap) to upsert into the same `client_services` table the
+	// API-server's bearer-authenticated handlers write to.
+	//
+	// Why a direct *gorm.DB rather than a manager type: the control
+	// plane is mTLS-gated already; there's no per-user auth to thread
+	// through, no audit-log fields to populate, no rate limit to apply
+	// per requester. A thin handler that calls the DB directly is
+	// clearer than a wrapped manager that adds no value.
+	db *gorm.DB
+}
+
+// SetDB wires the GORM handle into the control server. Called from
+// pkg/akashic/core/context after the database connection is up but
+// before the server starts. Optional — handlers that need DB access
+// nil-check before use so the control server still starts in
+// degraded mode without it.
+func (s *Server) SetDB(db *gorm.DB) {
+	s.db = db
 }
 
 // SetAPIServer wires the API server's state manager into the control

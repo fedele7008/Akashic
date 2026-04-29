@@ -25,6 +25,7 @@ func NewRootCmd() *cobra.Command {
 	cmd.AddCommand(NewPkiCmd(ctx))
 	cmd.AddCommand(NewConfigureCmd(ctx))
 	cmd.AddCommand(NewBootstrapCmd(ctx))
+	cmd.AddCommand(NewClientsCmd(ctx))
 
 	// SilenceUsage: don't dump full help on every RunE error.
 	// SilenceErrors: HandleExitError prints; cobra shouldn't double-print.
@@ -53,6 +54,14 @@ akashic-cli bootstrap status
 
 # Create root user (during bootstrap)
 akashic-cli bootstrap create-root --token <token> --username root --email root@example.com
+
+# Register your tenant's primary portal (post-bootstrap initialization)
+akashic-cli clients create --type WEB --name "Acme Portal" \
+    --redirect-uri https://acme.com/api/auth/callback
+
+# Register a public SPA client (PKCE-only, no client_secret)
+akashic-cli clients create --type SPA --name "Acme SPA" \
+    --redirect-uri https://acme.com/callback
 
 # Create an admin user
 akashic-cli user create --username admin --email admin@example.com --type admin

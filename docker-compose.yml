@@ -894,6 +894,17 @@ services:
       # /keys read-only for the akashic-sample-nextjs client secret
       # that gets written by EnsureBuiltInClients in Chapter 3 Step 3.2.
       - keys:/keys:ro
+      # Operator-managed credentials drop. After running:
+      #   akashic-cli clients create --type WEB \
+      #     --save-credentials-to .secrets/sample/nextjs.json
+      # …the credentials JSON appears at /secrets/sample/nextjs.json
+      # inside this container. The Next.js OAuth code reads it on
+      # every /authorize call (NOT cached), so post-bootstrap
+      # registration takes effect with no portal restart. The
+      # transitional EnsureBuiltInClients-managed keys/ path above
+      # remains as a fallback during the migration to fully
+      # operator-registered samples.
+      - ./.secrets/sample:/secrets/sample:ro
     extra_hosts:
       # Phase 8 three-server architecture: the portal speaks ONLY to
       # the auth server (OAuth flows) and the api server (bearer-

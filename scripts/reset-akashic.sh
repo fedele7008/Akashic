@@ -141,6 +141,16 @@ find ./keys -mindepth 1 ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {}
 echo "Wiping ./.secrets/vault and ./.secrets/vault-agent..."
 rm -rf ./.secrets/vault ./.secrets/vault-agent
 
+# Operator-managed sample credentials (Phase 8b clients-registration).
+# Wiped because the underlying client_services rows are gone after a
+# DB reset — keeping stale credentials would point the sample at a
+# non-existent client. The dir itself + metadata files survive so
+# docker-compose bind mounts have a host path on next bring-up.
+if [[ -d ./.secrets/sample ]]; then
+    echo "Wiping ./.secrets/sample/ (preserving .gitignore and README.md)..."
+    find ./.secrets/sample -mindepth 1 ! -name '.gitignore' ! -name 'README.md' -exec rm -rf {} + 2>/dev/null || true
+fi
+
 # ./logs may not exist if host-run mode hasn't been used; the dir is
 # created lazily by pkg/logging when configured. Test for existence
 # so the find doesn't error.

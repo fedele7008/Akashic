@@ -74,6 +74,84 @@ func (s *Server) handleBootstrapCreateRoot(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// handleCreateClient is POST /api/clients. Session-gated to admin or
+// root user types — registering OAuth clients is an operator action,
+// not something the average end-user should reach via this endpoint.
+//
+// Forwards to the control plane's /clients (mTLS via the BFF's own
+// client cert). On success, the plaintext client_secret returned by
+// the control plane is passed through to the FE so it can render the
+// "shown once" panel — same UX as Auth0/Okta dashboards.
+//
+// CSRF is enforced by middleware; rate limit too. By the time we
+// reach this handler, the request is already authenticated AND
+// throttled.
+func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request) {
+	// Session gate: must be logged in as admin or root.
+	sid := readCookie(r, sessionCookieName)
+	if sid == "" {
+		writeError(w, http.StatusUnauthorized, "NOT_AUTHENTICATED",
+			"You must be signed in to register OAuth clients.")
+		return
+	}
+	sess, err := s.sessions.Touch(r.Context(), sid)
+	if err != nil {
+		clearCookie(w, sessionCookieName, r)
+		writeError(w, http.StatusUnauthorized, "SESSION_EXPIRED",
+			"Your session has expired. Please sign in again.")
+		return
+	}
+	if sess.UserType != "admin" && sess.UserType != "root" {
+		// Not a hard 403 with details — don't leak the existence of
+		// admin-only endpoints to non-privileged users. They got past
+		// session check but their role doesn't qualify.
+		writeError(w, http.StatusForbidden, "INSUFFICIENT_ROLE",
+			"Only admin or root users may register OAuth clients.")
+		return
+	}
+
+	var body CreateClientRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"Could not parse request body.")
+		return
+	}
+	defer r.Body.Close()
+
+	// Cheap up-front validation — rejecting an obviously-empty submit
+	// at the BFF saves a control-plane round-trip and gives a sharper
+	// message than the generic VALIDATION_FAILED echoed from upstream.
+	if body.Name == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED",
+			"A client name is required.")
+		return
+	}
+	if body.RedirectURIs == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED",
+			"A redirect_uri is required.")
+		return
+	}
+	if body.ClientType == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED",
+			"Client type is required: WEB (server-side, gets a client_secret) or SPA (browser/native, PKCE-only).")
+		return
+	}
+
+	resp, err := s.controlClient.ClientCreate(r.Context(), &body)
+	if err != nil {
+		s.writeControlError(w, err, "registering OAuth client")
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"success": true,
+		"data": map[string]any{
+			"client":        resp.Client,
+			"client_secret": resp.ClientSecret,
+		},
+	})
+}
+
 // writeControlError translates an upstream control-plane error into a
 // browser-facing response. We deliberately re-map most server error
 // codes to a smaller browser-friendly set; passing through internal

@@ -140,27 +140,40 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// PKCE: required for all clients (Akashic policy). RFC 7636 §4.4.
+	// PKCE gating depends on the client's RequirePKCE flag:
+	//   - Public clients (SPA/native) and built-ins: RequirePKCE is
+	//     always true; code_challenge is mandatory. RFC 7636 §4.4 +
+	//     OAuth 2.1 mandate this.
+	//   - Confidential clients (BFF/server-side): RequirePKCE is
+	//     operator-configurable. When false, code_challenge is
+	//     optional but, if supplied, MUST still be S256 + valid —
+	//     a half-broken PKCE attempt would be a sign of misconfig
+	//     rather than something to silently ignore.
 	if codeChallenge == "" {
-		redirectWithError(w, r, redirectURI, state,
-			"invalid_request",
-			"code_challenge is required (PKCE).")
-		return
-	}
-	if codeChallengeMethod == "" {
-		codeChallengeMethod = "plain" // explicit so we reject below
-	}
-	if codeChallengeMethod != oauth.PKCEMethodS256 {
-		redirectWithError(w, r, redirectURI, state,
-			"invalid_request",
-			"Only S256 code_challenge_method is supported.")
-		return
-	}
-	if err := oauth.ValidateChallenge(codeChallenge); err != nil {
-		redirectWithError(w, r, redirectURI, state,
-			"invalid_request",
-			"code_challenge is malformed.")
-		return
+		if client.RequirePKCE {
+			redirectWithError(w, r, redirectURI, state,
+				"invalid_request",
+				"code_challenge is required (PKCE).")
+			return
+		}
+		// PKCE not required and not supplied — skip method/format
+		// validation entirely.
+	} else {
+		if codeChallengeMethod == "" {
+			codeChallengeMethod = "plain" // explicit so we reject below
+		}
+		if codeChallengeMethod != oauth.PKCEMethodS256 {
+			redirectWithError(w, r, redirectURI, state,
+				"invalid_request",
+				"Only S256 code_challenge_method is supported.")
+			return
+		}
+		if err := oauth.ValidateChallenge(codeChallenge); err != nil {
+			redirectWithError(w, r, redirectURI, state,
+				"invalid_request",
+				"code_challenge is malformed.")
+			return
+		}
 	}
 
 	// Session check. No session → /login with return_to = this URL.
@@ -360,8 +373,12 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	// Public client (no stored secret) — only allowed when PKCE is
 	// required, because the code_verifier check that runs later
 	// provides the proof-of-legitimacy that client_secret would have.
-	// Standard SPA OAuth pattern (RFC 7636).
-	if client.ClientSecretHash == "" {
+	// Standard SPA OAuth pattern (RFC 7636). Dispatches on the
+	// explicit Public flag rather than hash-empty so that a future
+	// auth method that authenticates without a stored secret (mTLS,
+	// JWT bearer assertion) doesn't accidentally fall into this
+	// branch.
+	if client.Public {
 		if !client.RequirePKCE {
 			s.logger.Security.Warn("token: public client without PKCE requirement — refusing",
 				zap.String("client_id", clientID))
@@ -427,13 +444,31 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Step 6: PKCE
+	//
+	// PKCE on the token side mirrors the /authorize gate: required iff
+	// a challenge was actually stored alongside the auth code. Cases:
+	//   - challenge stored, verifier supplied → must match (current path).
+	//   - challenge stored, verifier missing  → 400 (the client started
+	//     a PKCE flow and is now trying to skip the proof).
+	//   - no challenge stored, verifier missing → fine (BFF non-PKCE).
+	//   - no challenge stored, verifier supplied → 400 (sender has a
+	//     verifier without anything to verify against — almost
+	//     certainly a misconfig or attempted downgrade).
 	verifier := r.PostForm.Get("code_verifier")
-	if verifier == "" {
+	if authCode.CodeChallenge == "" {
+		if verifier != "" {
+			s.logger.Security.Warn("token: code_verifier supplied for non-PKCE code",
+				zap.String("client_id", clientID))
+			writeTokenError(w, http.StatusBadRequest, "invalid_request",
+				"code_verifier supplied but no PKCE challenge was bound to this code.")
+			return
+		}
+		// No PKCE was used; nothing to verify. Fall through.
+	} else if verifier == "" {
 		writeTokenError(w, http.StatusBadRequest, "invalid_request",
 			"code_verifier is required.")
 		return
-	}
-	if err := oauth.VerifyChallenge(verifier, authCode.CodeChallenge); err != nil {
+	} else if err := oauth.VerifyChallenge(verifier, authCode.CodeChallenge); err != nil {
 		s.logger.Security.Warn("token: PKCE mismatch",
 			zap.String("client_id", clientID))
 		writeTokenError(w, http.StatusBadRequest, "invalid_grant",

@@ -168,10 +168,41 @@ type ClientService struct {
 	RoleAllowlist string `gorm:"size:255" json:"role_allowlist,omitempty"`
 
 	// RequirePKCE forces PKCE (RFC 7636) on all auth flows for this
-	// client service. Default true. We never set false for built-ins.
-	// Required for confidential clients in OAuth 2.1; we extend that
-	// requirement to all clients for defense-in-depth.
+	// client service. /authorize gates `code_challenge` on this flag.
+	//
+	// Invariants enforced by BeforeCreate / BeforeUpdate:
+	//   - Public=true   → RequirePKCE=true (PKCE is mandatory for
+	//                     public clients per OAuth 2.1 / RFC 8252).
+	//   - BuiltIn=true  → RequirePKCE=true (defense-in-depth for
+	//                     server-managed clients).
+	//   - Public=false + BuiltIn=false (a tenant-registered BFF):
+	//                     operator-configurable. Default true (best
+	//                     practice); operator can opt out per-client.
 	RequirePKCE bool `gorm:"not null;default:true" json:"require_pkce"`
+
+	// Public marks the client as a public OAuth client (RFC 6749
+	// §2.1) — no client_secret stored. Public clients MUST use PKCE
+	// (the code_verifier check substitutes for the missing shared
+	// secret). Used by browser-based SPAs and native apps that have
+	// no secure place to keep a credential.
+	//
+	// Concrete shapes:
+	//   - Public=true   (SPA, native): ClientSecretHash MUST be ""
+	//                   and RequirePKCE MUST be true. /token accepts
+	//                   the request without client_secret provided
+	//                   PKCE verifies.
+	//   - Public=false  (BFF, server-side): ClientSecretHash holds
+	//                   bcrypt(secret); /token requires client_secret.
+	//                   PKCE recommended but optional.
+	//
+	// Why this is an explicit column rather than derived from
+	// `ClientSecretHash == ""`: the semantic intent ("this client
+	// has no secure credential storage") is what matters for OAuth
+	// flow decisions, not the accident of whether a secret happens
+	// to be empty. Future auth methods (mTLS-bound clients, JWT
+	// bearer assertions) may also be confidential without a stored
+	// secret hash; making Public an explicit field future-proofs.
+	Public bool `gorm:"not null;default:false" json:"public"`
 
 	// Phase 8: ownership and self-service metadata for tenant-
 	// registered clients. Built-in clients (BuiltIn=true) leave
@@ -206,13 +237,28 @@ func (ClientService) TableName() string {
 	return "client_services"
 }
 
-// BeforeCreate hook validates that built-in clients have RequirePKCE=true.
-// We could enforce this via a CHECK constraint, but a hook gives us a
-// clearer error message and keeps the schema portable.
+// BeforeCreate / BeforeUpdate enforce the cross-field invariants
+// described on the Public + RequirePKCE fields. We could express
+// these as a CHECK constraint, but a hook keeps the error path in
+// Go (clearer messages) and the schema portable.
 func (c *ClientService) BeforeCreate(tx *gorm.DB) error {
-	if c.BuiltIn && !c.RequirePKCE {
-		// Built-ins must always require PKCE. Phase 7 invariant.
+	c.normalize()
+	return nil
+}
+
+func (c *ClientService) BeforeUpdate(tx *gorm.DB) error {
+	c.normalize()
+	return nil
+}
+
+func (c *ClientService) normalize() {
+	// Public clients MUST use PKCE (OAuth 2.1 / RFC 8252).
+	if c.Public {
+		c.RequirePKCE = true
+		c.ClientSecretHash = "" // public clients have no shared secret
+	}
+	// Built-ins always require PKCE (defense-in-depth, server-managed).
+	if c.BuiltIn {
 		c.RequirePKCE = true
 	}
-	return nil
 }

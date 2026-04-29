@@ -1,18 +1,24 @@
 import { useState } from 'react';
 import { SessionApi, type SessionInfo } from '../api/client';
+import { ClientsCreate } from './ClientsCreate';
 
 /**
- * Dashboard is the placeholder logged-in view for Phase 7. It just
- * shows who is logged in and a logout button. The real admin
- * dashboard (clients, users, policies, audit) is Phase 8+.
+ * Dashboard is the logged-in view. Phase 8b adds OAuth client
+ * registration as a primary affordance — the same operator action
+ * available via `akashic-cli clients create`, surfaced here for
+ * operators who prefer the web UI.
  *
- * Why a placeholder lands now: Step 9 of Phase 7 wires up the OAuth
- * flow end-to-end. Without *some* logged-in surface to land on, we
- * can't visually confirm the flow worked. A minimal page is enough
- * to prove out the redirect/cookie/role-check chain.
+ * Future iterations: list registered clients (ClientsApi.list),
+ * edit/delete via row actions, rotate secrets in-place. For now the
+ * dashboard hosts only the create flow — covers the post-bootstrap
+ * "register your tenant portal" initialization step end-to-end.
  */
 export function Dashboard({ session }: { session: SessionInfo }) {
   const [loggingOut, setLoggingOut] = useState(false);
+  const [showCreateClient, setShowCreateClient] = useState(false);
+
+  const canManageClients =
+    session.user_type === 'admin' || session.user_type === 'root';
 
   const handleLogout = async () => {
     setLoggingOut(true);
@@ -35,6 +41,13 @@ export function Dashboard({ session }: { session: SessionInfo }) {
     window.location.href = authLogoutUrl || '/';
   };
 
+  // Modal-style overlay: when the create-client form is open, it
+  // takes over the surface entirely. Avoids cramming the Dashboard
+  // with a multi-section layout before the rest of Phase 8b lands.
+  if (showCreateClient) {
+    return <ClientsCreate onClose={() => setShowCreateClient(false)} />;
+  }
+
   return (
     <div className="card">
       <h1>Akashic admin console</h1>
@@ -54,9 +67,29 @@ export function Dashboard({ session }: { session: SessionInfo }) {
         <dd>{new Date(session.expires_at).toLocaleString()}</dd>
       </dl>
 
-      <p className="hint">
-        Phase 7.5 dashboard coming soon — client management, user
-        administration, audit log viewer.
+      {canManageClients && (
+        <section style={{ marginTop: '1.5rem' }}>
+          <h2 style={{ fontSize: '1.125rem' }}>OAuth clients</h2>
+          <p className="hint">
+            Register your tenant's primary portal (the post-bootstrap
+            initialization step), or add additional WEB / SPA clients
+            for sub-services that need to authenticate via Akashic.
+          </p>
+          <div className="actions">
+            <button
+              type="button"
+              onClick={() => setShowCreateClient(true)}
+              className="primary"
+            >
+              Register a new client
+            </button>
+          </div>
+        </section>
+      )}
+
+      <p className="hint" style={{ marginTop: '1.5rem' }}>
+        Coming next — client list / edit / delete, user administration,
+        audit log viewer.
       </p>
 
       <div className="actions">

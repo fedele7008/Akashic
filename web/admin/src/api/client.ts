@@ -126,6 +126,83 @@ export class SessionApi {
   }
 }
 
+/**
+ * Request body for POST /api/clients. Matches the server-side shape
+ * (pkg/admin_bff/client.go:CreateClientRequest).
+ */
+export interface CreateClientRequest {
+  name: string;
+  client_type: 'WEB' | 'SPA';
+  redirect_uris: string;
+  description?: string;
+  homepage_url?: string;
+  /**
+   * WEB clients only — operator-configurable. Default true. Ignored
+   * for SPA (always-true is enforced server-side regardless).
+   */
+  require_pkce?: boolean;
+}
+
+export interface ClientView {
+  client_id: string;
+  name: string;
+  description?: string;
+  homepage_url?: string;
+  client_type: 'WEB' | 'SPA';
+  public: boolean;
+  redirect_uris: string;
+  allowed_scopes: string;
+  auth_types: string;
+  built_in: boolean;
+  require_pkce: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+/**
+ * Response from POST /api/clients on success. `client_secret` is
+ * present (and non-empty) only for WEB clients; absent for SPA. The
+ * UI MUST render the secret in a one-time-display panel — only its
+ * bcrypt hash is persisted server-side.
+ */
+export interface CreateClientResponse {
+  client: ClientView;
+  client_secret: string;
+}
+
+export class ClientsApi {
+  /**
+   * POST /api/clients — register a new OAuth client (WEB or SPA).
+   *
+   * On success: returns the new client's view + (for WEB) the
+   * plaintext client_secret. On any 4xx/5xx the call throws with
+   * the structured error attached so the caller can render
+   * server-supplied messages directly.
+   *
+   * Session is enforced server-side (admin/root only). A 401/403
+   * response indicates the FE shell should reload to surface the
+   * sign-in landing page.
+   */
+  static async create(req: CreateClientRequest): Promise<CreateClientResponse> {
+    const r = await fetch('/api/clients', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify(req),
+    });
+    const body: ApiResponse<CreateClientResponse> = await r.json();
+    if (!r.ok || !body.success) {
+      const err = new Error(body.error?.message ?? `Client registration failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data!;
+  }
+}
+
 export class BootstrapApi {
   /**
    * GET /api/bootstrap/status — fetch the current bootstrap state.

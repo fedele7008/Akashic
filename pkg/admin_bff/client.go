@@ -177,6 +177,74 @@ func (c *ControlClient) BootstrapCreateRoot(ctx context.Context, req *CreateRoot
 	return &out, nil
 }
 
+// CreateClientRequest mirrors the control plane's
+// adminCreateClientRequest shape (pkg/server/control/clients_handlers.go).
+// Field names match the JSON the control plane expects so this struct
+// can be forwarded as-is.
+type CreateClientRequest struct {
+	Name         string `json:"name"`
+	ClientType   string `json:"client_type"` // "WEB" or "SPA"
+	RedirectURIs string `json:"redirect_uris"`
+	Description  string `json:"description,omitempty"`
+	HomepageURL  string `json:"homepage_url,omitempty"`
+	// RequirePKCE: WEB clients only — operator-configurable, default
+	// true. Pointer (*bool) so we can distinguish "operator omitted"
+	// (→ default true) from "operator explicitly set false". Forced
+	// true for SPA regardless.
+	RequirePKCE *bool `json:"require_pkce,omitempty"`
+}
+
+// ClientView mirrors the control-plane response shape for a single
+// registered client.
+type ClientView struct {
+	ClientID      string `json:"client_id"`
+	Name          string `json:"name"`
+	Description   string `json:"description,omitempty"`
+	HomepageURL   string `json:"homepage_url,omitempty"`
+	ClientType    string `json:"client_type"`
+	Public        bool   `json:"public"`
+	RedirectURIs  string `json:"redirect_uris"`
+	AllowedScopes string `json:"allowed_scopes"`
+	AuthTypes     string `json:"auth_types"`
+	BuiltIn       bool   `json:"built_in"`
+	RequirePKCE   bool   `json:"require_pkce"`
+	CreatedAt     string `json:"created_at"`
+	UpdatedAt     string `json:"updated_at"`
+}
+
+// CreateClientResponse is what the control plane returns on a
+// successful POST /clients. The `client_secret` field is the
+// plaintext, returned exactly ONCE for WEB clients and empty for SPA.
+// The BFF passes this through to the FE unchanged so the operator
+// can copy it from the dashboard's one-time-display panel.
+type CreateClientResponse struct {
+	Client       ClientView `json:"client"`
+	ClientSecret string     `json:"client_secret,omitempty"`
+}
+
+// ClientCreate calls POST /clients with the form data. Returns
+// ControlError for 4xx/5xx responses so handlers can map specific
+// error codes to user messages (most notably VALIDATION_FAILED for
+// missing client_type).
+func (c *ControlClient) ClientCreate(ctx context.Context, req *CreateClientRequest) (*CreateClientResponse, error) {
+	resp, body, err := c.do(ctx, http.MethodPost, "/clients", req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusCreated {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var out CreateClientResponse
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		return nil, fmt.Errorf("malformed create-client payload: %w", err)
+	}
+	return &out, nil
+}
+
 // do is the shared HTTP-call helper. Returns the response, body bytes,
 // and a low-level error (network/timeout). Higher-level callers
 // inspect the status code and parse the body as needed.

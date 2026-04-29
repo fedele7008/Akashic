@@ -23,31 +23,88 @@ import { readFileSync } from "node:fs";
 
 import { env } from "../lib/env";
 
-/** Path the akashic-server writes the akashic-sample-nextjs client secret to. */
-const CLIENT_SECRET_FALLBACK_FILE = "/keys/oauth/client-secrets/akashic-sample-nextjs.txt";
+/**
+ * Two-tier caching strategy:
+ *
+ *   - Discovery + JWKS endpoint URLs are cached (`discoveryCache`)
+ *     because re-fetching them on every OAuth call is wasteful and
+ *     they change rarely (only on signing-key rotation, which we
+ *     handle via `resetOAuthCache` from the 401 path).
+ *
+ *   - Credentials (client_id + client_secret) are NOT cached. They're
+ *     re-resolved on every OAuth call so that `akashic-cli clients
+ *     create --save-credentials-to <path>` writing the credentials
+ *     file mid-flight is picked up by the next /authorize without a
+ *     portal restart. This is the in-stack-sample dev-flow case;
+ *     real-tenant deployments hardcode their secret into env and
+ *     incur the same per-call read of an env var (negligible).
+ *
+ * The split is what makes the user experience "operator runs `clients
+ * create`, then user clicks sign-in, it just works" possible without
+ * any container restart in the sample stack.
+ */
+
+interface Credentials {
+  clientId: string;
+  clientSecret: string;
+}
 
 /**
- * Resolve the OAuth client secret. Prefers the env var; falls back
- * to reading the secret file akashic-server provisions on first
- * boot. The file fallback decouples portal startup from akashic
- * startup — see lib/env.ts comment on `clientSecretFromEnv` for
- * the full reasoning.
+ * Resolve the OAuth credentials (client_id + client_secret).
+ *
+ * Resolution order:
+ *   1. Credentials JSON file (env.oauth.credentialsFile). Written by
+ *      `akashic-cli clients create --save-credentials-to <path>`. The
+ *      docker-compose mount makes this available inside the sample
+ *      container at /secrets/sample/nextjs.json by default. Read on
+ *      every call so post-bootstrap registrations + later rotations
+ *      take effect immediately.
+ *   2. Env vars (AKASHIC_SAMPLE_NEXTJS_CLIENT_ID +
+ *      AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET). Real-tenant deployments
+ *      hardcode these and skip the file dance.
+ *
+ * Throws if neither source produces a usable pair — caller maps to
+ * a 503 "sign-in temporarily unavailable" page.
  *
  * Only call this from inside Node-runtime code (route handlers).
  * Edge-runtime callers cannot use node:fs.
  */
-function resolveClientSecret(): string {
-  if (env.oauth.clientSecretFromEnv) return env.oauth.clientSecretFromEnv;
-  try {
-    return readFileSync(CLIENT_SECRET_FALLBACK_FILE, "utf8").trim();
-  } catch {
-    throw new Error(
-      `OAuth client secret not available: env AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET unset and ${CLIENT_SECRET_FALLBACK_FILE} unreadable`,
-    );
+function resolveCredentials(): Credentials {
+  const credFile = env.oauth.credentialsFile;
+  if (credFile) {
+    try {
+      const raw = readFileSync(credFile, "utf8");
+      const parsed = JSON.parse(raw) as Partial<Credentials> & {
+        client_id?: string;
+        client_secret?: string;
+      };
+      const clientId = parsed.client_id ?? parsed.clientId ?? "";
+      const clientSecret = parsed.client_secret ?? parsed.clientSecret ?? "";
+      if (clientId && clientSecret) {
+        return { clientId, clientSecret };
+      }
+      // File present but missing one of the fields — fall through to
+      // env. (Don't throw here: the file may have been half-written
+      // by something other than our atomic writer; env may still
+      // succeed and let the portal limp along.)
+    } catch {
+      // File missing / unreadable / non-JSON. Expected in the gap
+      // between sample container start and `clients create`. Fall
+      // through to env.
+    }
   }
+  if (env.oauth.clientId && env.oauth.clientSecretFromEnv) {
+    return {
+      clientId: env.oauth.clientId,
+      clientSecret: env.oauth.clientSecretFromEnv,
+    };
+  }
+  throw new Error(
+    `OAuth credentials not available: credentials file '${credFile}' unreadable AND env (AKASHIC_SAMPLE_NEXTJS_CLIENT_ID + AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET) unset. Have you run 'akashic-cli clients create --save-credentials-to ${credFile}' yet?`,
+  );
 }
 
-interface OAuthClientCache {
+interface OAuthClientCtx {
   issuer: oauth.AuthorizationServer;
   client: oauth.Client;
   clientAuth: oauth.ClientAuth;
@@ -55,58 +112,68 @@ interface OAuthClientCache {
   scopes: string;
 }
 
-let cache: OAuthClientCache | undefined;
+/** Discovery cache — issuer metadata only, no credentials. */
+let discoveryCache: oauth.AuthorizationServer | undefined;
 
-/**
- * Resolve (and memoise) the OAuth client. Throws on discovery failure
- * — the caller should map that to a 503 "Sign-in temporarily
- * unavailable" page rather than a 500.
- */
-export async function getOAuth(): Promise<OAuthClientCache> {
-  if (cache) return cache;
-
+async function getDiscovery(): Promise<oauth.AuthorizationServer> {
+  if (discoveryCache) return discoveryCache;
   const issuerUrl = new URL(env.oauth.issuer);
   const discoveryRes = await oauth.discoveryRequest(issuerUrl, {
     algorithm: "oidc",
   });
-  const issuer = await oauth.processDiscoveryResponse(issuerUrl, discoveryRes);
+  discoveryCache = await oauth.processDiscoveryResponse(issuerUrl, discoveryRes);
+  return discoveryCache;
+}
+
+/**
+ * Resolve the OAuth client context. Throws on discovery failure or
+ * missing credentials — the caller should map that to a 503 "Sign-in
+ * temporarily unavailable" page rather than a 500.
+ *
+ * Discovery is cached; credentials are read fresh on every call (see
+ * the comment block at the top of this file).
+ */
+export async function getOAuth(): Promise<OAuthClientCtx> {
+  const issuer = await getDiscovery();
+  const creds = resolveCredentials();
 
   const client: oauth.Client = {
-    client_id: env.oauth.clientId,
+    client_id: creds.clientId,
     // Use client_secret_post (credentials in form body) rather than
     // client_secret_basic (Authorization header). Two reasons:
     //   1. RFC 6749 §2.3.1 requires URL-encoding the client_id and
     //      secret before base64 in the Basic header. oauth4webapi
     //      complies; many auth-server implementations (ours included)
-    //      compare raw bytes and never URL-decode. So `akashic-sample-nextjs`
-    //      sent as `akashic%2Dsample%2Dnextjs` looks like a different client_id
-    //      and we get 401 invalid_client. Form bodies don't have this
-    //      asymmetry — both sides handle URL-encoding uniformly.
+    //      compare raw bytes and never URL-decode. So a hyphenated
+    //      client_id sent as %2D-escaped looks like a different
+    //      client_id and we get 401 invalid_client. Form bodies don't
+    //      have this asymmetry — both sides handle URL-encoding
+    //      uniformly.
     //   2. Our auth server advertises both methods in discovery, so
     //      this is a pure client-side switch.
     token_endpoint_auth_method: "client_secret_post",
   };
 
-  const clientAuth = oauth.ClientSecretPost(resolveClientSecret());
-
-  cache = {
+  return {
     issuer,
     client,
-    clientAuth,
+    clientAuth: oauth.ClientSecretPost(creds.clientSecret),
     redirectUri: env.oauth.redirectUri,
     scopes: env.oauth.scopes,
   };
-  return cache;
 }
 
 /**
  * Force a re-fetch of discovery on next access. Used by the callback
  * handler when a 401 from the token endpoint suggests our cached
- * client config is stale (e.g. the auth server's signing key rotated
- * after we cached the JWKS endpoint URL).
+ * discovery (e.g. the auth server's signing key rotated, JWKS URL
+ * stale) is the cause.
+ *
+ * Does NOT clear credentials — they're re-read on every call, so a
+ * stale cached secret cannot exist.
  */
 export function resetOAuthCache(): void {
-  cache = undefined;
+  discoveryCache = undefined;
 }
 
 /** Generate a cryptographically random `state` parameter. */

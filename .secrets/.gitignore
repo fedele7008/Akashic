@@ -3,3 +3,7 @@
 # Except this .gitignore file itself and README.md
 !.gitignore
 !README.md
+# Allow the sample/ subdirectory to exist in git (so docker-compose
+# bind mounts have a host path on a fresh clone). Its OWN .gitignore
+# inside .secrets/sample/ decides which of its files are tracked.
+!sample/

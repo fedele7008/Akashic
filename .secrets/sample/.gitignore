@@ -1,0 +1,6 @@
+# Ignore every file in this directory (operator-managed credentials).
+*
+# Except the metadata files that establish the directory's existence
+# in git so docker-compose bind mounts work on a fresh clone.
+!.gitignore
+!README.md

@@ -64,13 +64,15 @@ export const env = {
     get issuer(): string {
       return requireEnv("AKASHIC_OAUTH_ISSUER");
     },
-    clientId: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CLIENT_ID", "akashic-sample-nextjs"),
+    clientId: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CLIENT_ID", ""),
     /**
-     * Raw env-var read; can be empty when the portal starts before
-     * akashic-server finishes provisioning the secret. Callers that
-     * need the actual secret (only the OAuth code path) use
-     * `resolveClientSecret()` from server/oauth.ts, which falls
-     * back to reading the secret file on disk.
+     * Raw env-var read; can be empty in the in-stack-sample flow
+     * where the operator runs `akashic-cli clients create
+     * --save-credentials-to ...` AFTER the sample container has
+     * already started. Callers that need the actual secret (only
+     * the OAuth code path) use `resolveCredentials()` from
+     * server/oauth.ts, which prefers the dynamic credentials file
+     * and falls back to this env var.
      *
      * Why not putting the disk fallback here: lib/env.ts is imported
      * (transitively) by middleware.ts, which Next.js bundles for the
@@ -78,6 +80,19 @@ export const env = {
      * Edge bundle. So the fallback lives in oauth.ts (Node-only).
      */
     clientSecretFromEnv: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET", ""),
+    /**
+     * Path to a JSON file written by `akashic-cli clients create
+     * --save-credentials-to <path>` containing `{client_id,
+     * client_secret}`. Read at every OAuth call so a freshly-
+     * registered client takes effect without a portal restart.
+     *
+     * In-stack-sample default: the path the docker-compose mount
+     * makes available inside the container. Real-tenant deployments
+     * leave this empty (or override) and rely on the env-var path
+     * above.
+     */
+    credentialsFile: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CREDENTIALS_FILE",
+      "/secrets/sample/nextjs.json"),
     get redirectUri(): string {
       // Same env var the akashic-server reads (config path
       // oauth.sample_nextjs_redirect_uri → AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI).

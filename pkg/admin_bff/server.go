@@ -254,6 +254,20 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleSessionInfo)))
 
+	// ─── Phase 8b clients-registration roadmap ─────────────────────
+	//
+	// /api/clients (POST): register a new OAuth client. Session-gated
+	// to admin/root user_type inside the handler. CSRF enforced (POST,
+	// state-changing). Rate-limited via the looser bucket — register
+	// is occasional human-driven, not a high-frequency endpoint.
+	//
+	// The handler proxies to the control plane's /clients over mTLS.
+	// Response includes the plaintext client_secret for WEB clients,
+	// which the FE renders in a "shown once" panel.
+	mux.HandleFunc("POST /api/clients",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleCreateClient)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).

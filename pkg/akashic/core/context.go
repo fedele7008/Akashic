@@ -392,6 +392,12 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// manage it just like /auth/* manages the auth server.
 	app.ControlServer.SetAPIServer(app.APIServer)
 
+	// Phase 8b clients-registration roadmap: the control plane's
+	// operator-side /clients endpoint needs DB access to upsert
+	// into client_services. Same DB the API-server's bearer-auth
+	// /clients writes to — single source of truth.
+	app.ControlServer.SetDB(app.DB.DB)
+
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
 }

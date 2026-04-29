@@ -64,4 +64,21 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
 			s.rateLimitBootstrap(s.bootstrapLimiter,
 				s.requireBootstrapMode(s.handleCreateRootUser))))
+
+	// Operator-side OAuth client management. Used by the
+	// akashic-cli during the post-bootstrap "register your tenant
+	// portal" initialization step (and ad-hoc client management
+	// thereafter). mTLS-gated by requireClientIdentity to operator
+	// certs only — both `cli.akashic.local` (akashic-cli) and
+	// `bff.akashic.local` (admin-bff) qualify, so the same
+	// endpoint serves both the CLI flow and the future admin-web
+	// flow.
+	//
+	// The API-server's bearer-authenticated /clients surface
+	// (pkg/server/api/clients_handlers.go) is the parallel
+	// surface for tenant developers using the <akashic-clients>
+	// widget — different audience, same DB writes.
+	mux.HandleFunc("/clients",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.handleAdminCreateClient))
 }

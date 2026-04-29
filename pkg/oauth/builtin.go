@@ -104,6 +104,7 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, s
 			BuiltIn:          true,
 			RoleAllowlist:    spec.RoleAllowlist,
 			RequirePKCE:      true,
+			Public:           spec.Public,
 		}
 
 		// Upsert by ClientID.
@@ -125,7 +126,11 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, s
 			}
 			continue
 		}
-		// Update everything except CreatedAt
+		// Update everything except CreatedAt.
+		// `public` is included so flipping a built-in's public/conf
+		// status (rare, but possible if a spec's Public flag changes
+		// across releases) actually takes effect on the next boot
+		// rather than silently keeping the stale value.
 		if err := db.WithContext(ctx).Model(&existing).
 			Updates(map[string]any{
 				"client_secret_hash": row.ClientSecretHash,
@@ -136,6 +141,7 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, s
 				"built_in":           true,
 				"role_allowlist":     row.RoleAllowlist,
 				"require_pkce":       true,
+				"public":             row.Public,
 			}).Error; err != nil {
 			return fmt.Errorf("update client service %s: %w", spec.ClientID, err)
 		}

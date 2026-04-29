@@ -27,10 +27,29 @@ import (
 // ─── shared types ──────────────────────────────────────────────────
 
 type clientView struct {
-	ClientID      string  `json:"client_id"`
-	Name          string  `json:"name"`
-	Description   string  `json:"description,omitempty"`
-	HomepageURL   string  `json:"homepage_url,omitempty"`
+	ClientID    string `json:"client_id"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	HomepageURL string `json:"homepage_url,omitempty"`
+	// ClientType is the operator-facing label derived from Public:
+	//   "WEB"  → confidential client (server-side, holds
+	//            client_secret). Maps to BFF/Backend-for-Frontend
+	//            in architectural terms; the operator-facing label
+	//            is "WEB" to match how Auth0/Okta/Cognito name this
+	//            shape on their create-client forms.
+	//   "SPA"  → public client (PKCE-only, no shared secret).
+	//            Browser-only or native apps with no server-side
+	//            secret storage.
+	//
+	// Footgun: "WEB" doesn't mean "anything that runs in a browser"
+	// — a SPA also runs in a browser. The clarifying question is
+	// "does the app have a server you control that can store
+	// secrets?" Yes → WEB. No → SPA.
+	//
+	// Surfaced alongside the protocol-correct `public` bool so UI
+	// code (admin-bff, <akashic-clients> widget) can render either.
+	ClientType    string  `json:"client_type"`
+	Public        bool    `json:"public"`
 	RedirectURIs  string  `json:"redirect_uris"`
 	AllowedScopes string  `json:"allowed_scopes"`
 	AuthTypes     string  `json:"auth_types"`
@@ -42,12 +61,28 @@ type clientView struct {
 	UpdatedAt     string  `json:"updated_at"`
 }
 
+// Canonical wire labels for client_type. Always uppercase on the
+// way out; case-insensitive on the way in (see parseClientType).
+const (
+	clientTypeWeb = "WEB" // confidential, server-side (a.k.a. BFF)
+	clientTypeSPA = "SPA" // public, browser/native (PKCE-only)
+)
+
+func clientTypeLabel(public bool) string {
+	if public {
+		return clientTypeSPA
+	}
+	return clientTypeWeb
+}
+
 func toClientView(c *models.ClientService) clientView {
 	v := clientView{
 		ClientID:      c.ClientID,
 		Name:          c.Name,
 		Description:   c.Description,
 		HomepageURL:   c.HomepageURL,
+		ClientType:    clientTypeLabel(c.Public),
+		Public:        c.Public,
 		RedirectURIs:  c.RedirectURIs,
 		AllowedScopes: c.AllowedScopes,
 		AuthTypes:     c.AuthTypes,
@@ -137,16 +172,42 @@ func (s *Server) handleListMyClients(w http.ResponseWriter, r *http.Request, uid
 // ─── POST /clients ─────────────────────────────────────────────────
 
 type createClientRequest struct {
-	Name          string `json:"name"`
-	Description   string `json:"description,omitempty"`
-	HomepageURL   string `json:"homepage_url,omitempty"`
-	RedirectURIs  string `json:"redirect_uris"`
+	Name        string `json:"name"`
+	Description string `json:"description,omitempty"`
+	HomepageURL string `json:"homepage_url,omitempty"`
+	// ClientType is required:
+	//   "WEB" — confidential / server-side (a.k.a. BFF). The app has
+	//           a backend that can hold a client_secret; PKCE is
+	//           configurable (default on, recommended).
+	//   "SPA" — public / browser-only or native. No secure secret
+	//           storage; PKCE is required (forced on by the model
+	//           regardless of what the operator sends).
+	// Case-insensitive on input; canonical "WEB"/"SPA" on output.
+	// Determines whether a client_secret is provisioned and whether
+	// RequirePKCE is operator-configurable.
+	ClientType   string `json:"client_type"`
+	RedirectURIs string `json:"redirect_uris"`
+	// RequirePKCE applies only to WEB clients (operator-configurable
+	// per OAuth 2.1 best-practice; default true). Ignored for SPA
+	// clients (which always require PKCE — the field is forced true
+	// by the model's BeforeCreate hook regardless).
+	//
+	// Pointer (*bool) so we can distinguish "operator omitted the
+	// field" (→ default true) from "operator explicitly set false."
+	RequirePKCE   *bool  `json:"require_pkce,omitempty"`
 	AllowedScopes string `json:"allowed_scopes"`
 }
 
 type createClientResponse struct {
-	Client       clientView `json:"client"`
-	ClientSecret string     `json:"client_secret"`
+	Client clientView `json:"client"`
+	// ClientSecret is the plaintext client_secret, returned ONCE at
+	// creation time so the operator can copy it into their WEB
+	// app's secret store. Never persisted in plaintext server-side.
+	//
+	// Empty string for SPA (public) clients — they have no secret
+	// to share. The omitempty here helps callers JSON-decode into a
+	// "secret may be absent" shape without special-casing.
+	ClientSecret string `json:"client_secret,omitempty"`
 }
 
 func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid uuid.UUID, _ *oauth.AccessTokenClaims) {
@@ -166,14 +227,45 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 
 	req.Name = strings.TrimSpace(req.Name)
 	req.RedirectURIs = strings.TrimSpace(req.RedirectURIs)
+	// Case-insensitive on input — operators will type "web", "WEB",
+	// "Web", etc. Normalise to canonical uppercase before dispatch.
+	req.ClientType = strings.ToUpper(strings.TrimSpace(req.ClientType))
 	if req.Name == "" || req.RedirectURIs == "" {
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("VALIDATION_FAILED",
 				"name and redirect_uris are required", nil))
 		return
 	}
+	var public bool
+	switch req.ClientType {
+	case clientTypeWeb:
+		public = false
+	case clientTypeSPA:
+		public = true
+	case "":
+		// Validation message reads as the disambiguating question
+		// rather than a list of magic strings — most operators
+		// pause on "WEB vs SPA" and the answer to "do you have a
+		// server you control?" is what they actually need to pick.
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED",
+				"client_type is required: 'WEB' (server-side app that can hold a client_secret) or 'SPA' (browser/native app, PKCE-only)", nil))
+		return
+	default:
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED",
+				"client_type must be 'WEB' or 'SPA'", nil))
+		return
+	}
 	if req.AllowedScopes == "" {
 		req.AllowedScopes = "openid profile email"
+	}
+
+	// Decide on PKCE: SPA always-true (model invariant); BFF
+	// operator-configurable, default true.
+	requirePKCE := true
+	if !public && req.RequirePKCE != nil {
+		requirePKCE = *req.RequirePKCE
 	}
 
 	clientID, err := generateClientID()
@@ -182,23 +274,34 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 			response.Fail("INTERNAL", "could not generate client_id", nil))
 		return
 	}
-	secret, err := generateClientSecret()
-	if err != nil {
-		response.WriteJSON(w, http.StatusInternalServerError,
-			response.Fail("INTERNAL", "could not generate client secret", nil))
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
-	if err != nil {
-		response.WriteJSON(w, http.StatusInternalServerError,
-			response.Fail("INTERNAL", "could not hash secret", nil))
-		return
+	// Secret provisioning is gated on client type. Public clients
+	// have no secret (no secure storage to keep one in); confidential
+	// clients get a freshly-generated one returned in plaintext
+	// exactly once.
+	var (
+		secret string
+		hash   string
+	)
+	if !public {
+		secret, err = generateClientSecret()
+		if err != nil {
+			response.WriteJSON(w, http.StatusInternalServerError,
+				response.Fail("INTERNAL", "could not generate client secret", nil))
+			return
+		}
+		h, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
+		if err != nil {
+			response.WriteJSON(w, http.StatusInternalServerError,
+				response.Fail("INTERNAL", "could not hash secret", nil))
+			return
+		}
+		hash = string(h)
 	}
 
 	owner := uid
 	row := models.ClientService{
 		ClientID:         clientID,
-		ClientSecretHash: string(hash),
+		ClientSecretHash: hash,
 		Name:             req.Name,
 		Description:      req.Description,
 		HomepageURL:      req.HomepageURL,
@@ -206,7 +309,8 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 		AllowedScopes:    req.AllowedScopes,
 		AuthTypes:        string(models.AuthTypeAuthorizationCode),
 		BuiltIn:          false,
-		RequirePKCE:      true,
+		Public:           public,
+		RequirePKCE:      requirePKCE,
 		OwnerUserID:      &owner,
 	}
 	if err := s.db.WithContext(r.Context()).Create(&row).Error; err != nil {
@@ -218,7 +322,9 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 	s.logger.Security.Info("oauth client created",
 		zap.String("client_id", clientID),
 		zap.String("owner_user_id", uid.String()),
-		zap.String("name", req.Name))
+		zap.String("name", req.Name),
+		zap.String("client_type", req.ClientType),
+		zap.Bool("require_pkce", requirePKCE))
 	response.WriteJSON(w, http.StatusCreated, response.Success(createClientResponse{
 		Client:       toClientView(&row),
 		ClientSecret: secret,
@@ -385,6 +491,15 @@ func (s *Server) handleRotateSecret(w http.ResponseWriter, r *http.Request, ctx 
 		response.WriteJSON(w, http.StatusForbidden,
 			response.Fail("BUILTIN_IMMUTABLE",
 				"built-in clients' secrets are managed by the server itself", nil))
+		return
+	}
+	if ctx.client.Public {
+		// Public (SPA) clients don't have a shared secret — there's
+		// nothing to rotate. PKCE is the credential, generated fresh
+		// per /authorize call by the SPA itself.
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("PUBLIC_CLIENT_NO_SECRET",
+				"public (SPA) clients have no client_secret; PKCE replaces it on every authorization", nil))
 		return
 	}
 	secret, err := generateClientSecret()
