@@ -1,0 +1,13 @@
+# Operator's runtime config — contains the OAuth client_secret.
+# .env.example is the committable template; .env is local-only.
+.env
+
+# Python virtualenv — not portable; each operator creates their own.
+venv/
+.venv/
+
+# Python build artifacts.
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/

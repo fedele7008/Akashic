@@ -35,3 +35,4 @@ tmp/
 # (note: global node_modules/ and dist/ rules above already cover the
 # build outputs at web/admin/node_modules/ and cmd/admin-bff/dist/)
 web/admin/*.local
+venv

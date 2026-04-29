@@ -62,20 +62,28 @@ func renderTemplate(w http.ResponseWriter, name string, status int, data any) {
 	// the initial POST target. With `form-action 'self'` the browser
 	// silently blocks step 3 and the user gets stuck on the login page.
 	//
-	// We allow `https:` (any HTTPS origin) for form-action. The actual
-	// redirect_uri is still validated against the registered client's
-	// redirect_uris in client_services.redirect_uris (see /authorize's
-	// redirectURIAllowed() — exact-string match, no wildcards), so the
-	// CSP loosening doesn't open a new attack surface — the auth-server
-	// itself refuses to redirect to anything not registered. Combined
-	// with `script-src 'none'` (which prevents anyone from rewriting
-	// <form action="..."> in the page), this is safe.
+	// We allow:
+	//   'self'              — same-origin POST target (always)
+	//   https:              — any HTTPS redirect destination (production
+	//                         tenants register https:// redirect_uris)
+	//   http://localhost:*  — local dev / test clients on any port
+	//   http://127.0.0.1:*  — same, IP form (browsers resolve differently)
+	//
+	// The actual redirect_uri is still validated against the registered
+	// client's redirect_uris in client_services.redirect_uris (see
+	// /authorize's redirectURIAllowed() — exact-string match, no
+	// wildcards), so the CSP loosening doesn't open a new attack
+	// surface — the auth-server itself refuses to redirect to anything
+	// not registered. Combined with `script-src 'none'` (which prevents
+	// anyone from rewriting <form action="..."> in the page), this is
+	// safe. The localhost entries unlock test-clients/login-with-akashic-py
+	// and similar third-party-on-the-host integrations.
 	w.Header().Set("Content-Security-Policy",
 		"default-src 'self'; "+
 			"script-src 'none'; "+
 			"style-src 'self'; "+
 			"img-src 'self' data:; "+
-			"form-action 'self' https:; "+
+			"form-action 'self' https: http://localhost:* http://127.0.0.1:*; "+
 			"frame-ancestors 'none'; "+
 			"base-uri 'self'")
 	w.WriteHeader(status)

@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+
+{% block content %}
+{% if user %}
+  <span class="badge signed-in">● Signed in</span>
+  <h1>Hello, {{ user.username }}</h1>
+  <p class="lede">
+    You're signed in via Akashic. Below is the identity Akashic
+    returned in the id_token.
+  </p>
+
+  <dl>
+    <dt>sub</dt>          <dd><code>{{ user.sub }}</code></dd>
+    <dt>username</dt>     <dd>{{ user.username }}</dd>
+    <dt>email</dt>        <dd>{{ user.email or '(not set)' }}</dd>
+    {% if user.name %}
+    <dt>name</dt>         <dd>{{ user.name }}</dd>
+    {% endif %}
+  </dl>
+
+  <h2>What this proves</h2>
+  <p>
+    Akashic just authenticated a user, minted an id_token and an
+    access_token, and this app verified the id_token's signature
+    against Akashic's JWKS before trusting any of the claims. The
+    token exchange used PKCE in addition to the client_secret
+    (defense-in-depth for confidential clients).
+  </p>
+
+  <p style="margin-top: 1.5rem;">
+    <a href="/logout" class="btn secondary">Sign out</a>
+  </p>
+{% else %}
+  <span class="badge signed-out">○ Signed out</span>
+  <h1>Login with Akashic</h1>
+  <p class="lede">
+    A minimal Flask app demonstrating OAuth 2.1 + OpenID Connect
+    against an Akashic deployment.
+  </p>
+
+  <p>
+    <a href="/login" class="btn">Sign in with Akashic</a>
+  </p>
+
+  <h2>This app's configuration</h2>
+  <dl>
+    <dt>issuer</dt>       <dd><code>{{ issuer }}</code></dd>
+    <dt>client_id</dt>    <dd><code>{{ client_id }}</code></dd>
+    <dt>redirect_uri</dt> <dd><code>{{ redirect_uri }}</code></dd>
+  </dl>
+
+  <p style="font-size: 0.875rem; color: var(--muted); margin-top: 1rem;">
+    The redirect_uri above must match exactly what was passed to
+    <code>akashic-cli clients create&nbsp;--redirect-uri</code>
+    when this client was registered. Mismatches return
+    <code>redirect_uri_mismatch</code> from Akashic's /authorize.
+  </p>
+{% endif %}
+{% endblock %}

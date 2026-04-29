@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+
+{% block title %}Error — Login with Akashic demo{% endblock %}
+
+{% block content %}
+<h1>{{ title }}</h1>
+<p class="lede">Something went wrong during the OAuth flow.</p>
+
+<div class="error-box">
+  <pre>{{ message }}</pre>
+</div>
+
+<p style="margin-top: 1.5rem;">
+  <a href="/" class="btn secondary">← Back to home</a>
+</p>
+{% endblock %}
