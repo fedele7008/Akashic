@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Your OAuth clients — Akashic Sample</title>
+  <link rel="stylesheet" href="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic-default.css" />
+  <script src="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic.js" type="module"></script>
+  <script src="/_oauth.js"></script>
+  <style>
+    /* Wider than the other authenticated pages — the clients table
+       benefits from horizontal real estate when tenants register
+       multiple integrations. */
+    body { max-width: 56rem; margin: 0 auto; padding: 2rem 1rem;
+           font-family: system-ui, sans-serif; color: #e4e6eb; background: #0f1115; }
+    a { color: #4f8cff; }
+    p.lede { color: #8b91a0; margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Your OAuth clients</h1>
+  <p class="lede">
+    Register integrations, rotate secrets, and remove clients you
+    no longer use.
+  </p>
+
+  <!--
+    The widget reads the bearer set by _oauth.js
+    (AkashicOAuth.applyToWidgets() on DOMContentLoaded → calls
+    Akashic.configure({ accessToken })). On no-token the widget
+    emits `akashic-needs-signin`, which we listen for below to
+    bounce through the SPA OAuth flow.
+  -->
+  <akashic-clients></akashic-clients>
+
+  <p style="margin-top: 1.5rem;">
+    <a href="/profile">← Back to profile</a>
+    &nbsp;·&nbsp;
+    <a href="/">Home</a>
+  </p>
+
+  <script>
+    document.addEventListener("akashic-needs-signin", function () {
+      AkashicOAuth.signin();
+    });
+  </script>
+</body>
+</html>

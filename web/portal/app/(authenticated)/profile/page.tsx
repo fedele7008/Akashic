@@ -33,6 +33,21 @@ export default function ProfilePage() {
           Open
         </Link>
       </div>
+
+      <div className="flex items-center justify-between rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm">
+        <div>
+          <p className="font-medium">OAuth clients</p>
+          <p className="text-[var(--text-muted)]">
+            Register integrations and manage their credentials.
+          </p>
+        </div>
+        <Link
+          href="/profile/clients"
+          className="rounded-md border border-[var(--text-muted)]/30 px-3 py-1.5 hover:bg-[var(--bg)]"
+        >
+          Open
+        </Link>
+      </div>
     </section>
   );
 }
