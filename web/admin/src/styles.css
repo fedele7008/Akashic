@@ -1,17 +1,30 @@
-/* Minimal stylesheet for Phase 6's single-page admin FE.
-   Phase 7 brings a proper design system; for now this is just
-   "readable form on a centered card". */
+/* Admin web stylesheet.
+   Pre-Phase-8b: a single centered card.
+   Phase 8b: full app shell — fixed sidebar + topbar + content grid.
+   The .center-card wrapper preserves the old single-card layout
+   for surfaces that aren't the shell (BootstrapForm, sign-in
+   landing, error states). */
 
 :root {
   --bg: #0f1115;
   --card-bg: #1a1d24;
+  --surface: #14171d;
   --text: #e4e6eb;
   --text-muted: #8b91a0;
+  --text-subtle: #5e6471;
   --border: #2a2f3a;
+  --border-subtle: #21252e;
   --accent: #4f8cff;
   --accent-hover: #6ba0ff;
+  --accent-soft: rgba(79, 140, 255, 0.12);
   --error: #ff6b6b;
   --hint-bg: #1f2530;
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+  --shadow-lg: 0 12px 32px rgba(0, 0, 0, 0.35);
+  --sidebar-width: 240px;
+  --sidebar-width-collapsed: 64px;
+  --topbar-height: 60px;
 }
 
 * {
@@ -26,15 +39,26 @@ body {
   color: var(--text);
   line-height: 1.5;
   min-height: 100vh;
-  display: flex;
-  align-items: center;
-  justify-content: center;
 }
 
 #root {
   width: 100%;
-  max-width: 520px;
+  min-height: 100vh;
+}
+
+/* ─── Single-card layout (BootstrapForm, sign-in landing, errors) ─── */
+
+.center-card {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   padding: 24px;
+}
+
+.center-card > * {
+  width: 100%;
+  max-width: 520px;
 }
 
 .card {
@@ -42,7 +66,10 @@ body {
   border: 1px solid var(--border);
   border-radius: 12px;
   padding: 32px;
+  box-shadow: var(--shadow-sm);
 }
+
+/* ─── Typography (unchanged from Phase 7) ─── */
 
 h1 {
   margin: 0 0 8px 0;
@@ -69,6 +96,8 @@ h2 {
   color: var(--text-muted);
   margin-bottom: 24px;
 }
+
+/* ─── Form primitives (unchanged from Phase 7) ─── */
 
 form {
   display: flex;
@@ -164,7 +193,7 @@ hr {
   margin: 24px 0;
 }
 
-/* Phase 7: Dashboard + sign-in landing styles */
+/* ─── Buttons + actions (Phase 7 carryover) ─── */
 
 .actions {
   display: flex;
@@ -237,4 +266,355 @@ details summary {
 
 details[open] summary {
   margin-bottom: 12px;
+}
+
+/* ═══ Phase 8b — App shell layout ═════════════════════════════════ */
+
+.app-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) 1fr;
+  grid-template-rows: var(--topbar-height) 1fr;
+  grid-template-areas:
+    "sidebar topbar"
+    "sidebar content";
+  min-height: 100vh;
+  transition: grid-template-columns 0.2s ease;
+}
+
+.app-shell.collapsed {
+  grid-template-columns: var(--sidebar-width-collapsed) 1fr;
+}
+
+/* Mobile: sidebar narrows to icons-only automatically. */
+@media (max-width: 768px) {
+  .app-shell {
+    grid-template-columns: var(--sidebar-width-collapsed) 1fr;
+  }
+}
+
+/* ─── Sidebar ─── */
+
+.sidebar {
+  grid-area: sidebar;
+  background: var(--surface);
+  border-right: 1px solid var(--border-subtle);
+  display: flex;
+  flex-direction: column;
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  height: var(--topbar-height);
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.sidebar-brand-mark {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--accent);
+  display: grid;
+  place-items: center;
+  font-weight: 700;
+  font-size: 1rem;
+  color: white;
+  flex-shrink: 0;
+}
+
+.sidebar-brand-text {
+  font-weight: 600;
+  font-size: 1rem;
+  letter-spacing: -0.01em;
+}
+
+.sidebar-nav {
+  flex: 1;
+  padding: 12px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.nav-item {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  margin: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  transition: background 0.15s, color 0.15s;
+}
+
+.nav-item:hover:not(:disabled) {
+  background: var(--hint-bg);
+  color: var(--text);
+}
+
+.nav-item.active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.nav-item-icon {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+
+.nav-item-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.sidebar-footer {
+  padding: 12px 8px;
+  border-top: 1px solid var(--border-subtle);
+}
+
+.sidebar-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  padding: 8px;
+  border-radius: 6px;
+  cursor: pointer;
+  margin: 0;
+}
+
+.sidebar-toggle:hover {
+  background: var(--hint-bg);
+  color: var(--text);
+}
+
+/* When the shell is collapsed (or auto-collapsed on mobile),
+   hide the text labels — keep only icons. */
+.app-shell.collapsed .sidebar-brand-text,
+.app-shell.collapsed .nav-item-label {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  .sidebar-brand-text,
+  .nav-item-label {
+    display: none;
+  }
+  .sidebar-toggle {
+    display: none;
+  }
+}
+
+/* ─── Topbar ─── */
+
+.topbar {
+  grid-area: topbar;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border-subtle);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 24px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.topbar-title {
+  font-size: 1.125rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  margin: 0;
+}
+
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  position: relative;
+}
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  display: grid;
+  place-items: center;
+  font-weight: 600;
+  font-size: 0.875rem;
+  cursor: pointer;
+  border: 1px solid transparent;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.avatar:hover,
+.avatar.open {
+  border-color: var(--accent);
+}
+
+.avatar-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 220px;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  box-shadow: var(--shadow-lg);
+  padding: 8px;
+  z-index: 20;
+}
+
+.avatar-menu-header {
+  padding: 12px 12px 8px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 8px;
+}
+
+.avatar-menu-header strong {
+  display: block;
+  font-size: 0.875rem;
+}
+
+.avatar-menu-header span {
+  display: block;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.avatar-menu button {
+  width: 100%;
+  text-align: left;
+  background: transparent;
+  color: var(--text);
+  border: none;
+  padding: 10px 12px;
+  margin: 0;
+  border-radius: 6px;
+  font-size: 0.875rem;
+  font-weight: 400;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.avatar-menu button:hover:not(:disabled) {
+  background: var(--hint-bg);
+}
+
+/* ─── Main content ─── */
+
+.content {
+  grid-area: content;
+  padding: 24px;
+  overflow-x: auto;
+}
+
+.content-inner {
+  max-width: 1280px;
+  margin: 0 auto;
+}
+
+/* Grid for stat / widget cards on the overview page. auto-fit +
+   minmax keeps the layout naturally responsive — cards reflow as
+   the window narrows without explicit breakpoints. */
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+}
+
+.grid-wide {
+  grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+}
+
+/* Compact cards used in the overview grid. The existing .card is
+   designed for centered single-form contexts (32px padding); .panel
+   is its grid-friendly sibling. */
+.panel {
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 20px;
+  box-shadow: var(--shadow-sm);
+  transition: box-shadow 0.15s, border-color 0.15s;
+}
+
+.panel.interactive {
+  cursor: pointer;
+}
+
+.panel.interactive:hover {
+  box-shadow: var(--shadow-md);
+  border-color: var(--border);
+}
+
+.panel h3 {
+  margin: 0 0 6px 0;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.panel-value {
+  font-size: 2rem;
+  font-weight: 600;
+  letter-spacing: -0.02em;
+  line-height: 1.1;
+  margin: 0;
+}
+
+.panel-sub {
+  font-size: 0.8125rem;
+  color: var(--text-muted);
+  margin: 6px 0 0 0;
+}
+
+/* Page header — title + optional action buttons */
+
+.page-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+}
+
+.page-header-title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.page-header-sub {
+  font-size: 0.875rem;
+  color: var(--text-muted);
+  margin: 4px 0 0 0;
 }

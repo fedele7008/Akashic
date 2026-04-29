@@ -47,50 +47,68 @@ export function App() {
       .finally(() => setLoading(false));
   }, []);
 
+  // Pre-Phase-8b each conditional render returned a single card and
+  // body's CSS centered it on the viewport. After the Phase-8b shell
+  // overhaul, body uses block layout so the Dashboard can fill the
+  // viewport — non-shell renders now need the `.center-card`
+  // wrapper to opt back into the centered single-card look.
   if (loading) {
-    return <div className="card"><p>Loading…</p></div>;
+    return (
+      <div className="center-card">
+        <div className="card"><p>Loading…</p></div>
+      </div>
+    );
   }
 
   if (statusError) {
     return (
-      <div className="card">
-        <h1>Cannot reach Akashic server</h1>
-        <p className="error">{statusError}</p>
-        <p className="hint">
-          Is the Akashic server running? Try{' '}
-          <code>docker compose --profile app up -d</code>.
-        </p>
+      <div className="center-card">
+        <div className="card">
+          <h1>Cannot reach Akashic server</h1>
+          <p className="error">{statusError}</p>
+          <p className="hint">
+            Is the Akashic server running? Try{' '}
+            <code>docker compose --profile app up -d</code>.
+          </p>
+        </div>
       </div>
     );
   }
 
   // Bootstrap not yet complete → must finish that first.
   if (!status?.is_complete) {
-    return <BootstrapForm />;
+    return (
+      <div className="center-card">
+        <BootstrapForm />
+      </div>
+    );
   }
 
-  // Bootstrap complete + logged in → show admin dashboard.
+  // Bootstrap complete + logged in → show admin dashboard. Dashboard
+  // owns the full-viewport shell; no center-card wrapper here.
   if (session) {
     return <Dashboard session={session} />;
   }
 
   // Bootstrap complete + NOT logged in → invite to sign in.
   return (
-    <div className="card">
-      <h1>Sign in to Akashic</h1>
-      <p>Bootstrap is complete. Sign in with the root account or an admin account.</p>
-      <p className="hint">
-        Only users with role <code>root</code> or <code>admin</code> may access this console.
-      </p>
-      <div className="actions">
-        <a href="/login" className="primary">Sign in</a>
+    <div className="center-card">
+      <div className="card">
+        <h1>Sign in to Akashic</h1>
+        <p>Bootstrap is complete. Sign in with the root account or an admin account.</p>
+        <p className="hint">
+          Only users with role <code>root</code> or <code>admin</code> may access this console.
+        </p>
+        <div className="actions">
+          <a href="/login" className="primary">Sign in</a>
+        </div>
+        {status && (
+          <details>
+            <summary>Bootstrap details</summary>
+            <BootstrapAlreadyComplete status={status} />
+          </details>
+        )}
       </div>
-      {status && (
-        <details>
-          <summary>Bootstrap details</summary>
-          <BootstrapAlreadyComplete status={status} />
-        </details>
-      )}
     </div>
   );
 }
