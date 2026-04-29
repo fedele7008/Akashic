@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
-	"strings"
 	"syscall"
 
 	authpkg "akashic/akashic/pkg/auth"
@@ -292,77 +291,31 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// before the operator has finished mint-the-root-user.
 	app.AuthServer.SetBootstrapManager(app.BootstrapMgr)
 
-	// Phase 7 Step 8 / Phase 8b: register built-in OAuth client
-	// services on startup. The candidate set lives below; the
-	// `AKASHIC_OAUTH_BUILTIN_CLIENTS` env (comma-separated short
-	// names) decides which of them actually get registered.
-	// EnsureBuiltInClients also DELETES any built-in row whose
-	// client_id isn't in the filtered list, so removing a sample
-	// from the allowlist actually removes its row on the next boot
-	// — the point being that switching from --profile sample-nextjs
-	// to --profile sample-static (or back) shouldn't leave both
-	// sample clients lingering in client_services.
-	candidates := map[string]oauth.BuiltInClientSpec{
-		"admin": {
+	// Built-in OAuth client registration. After Phase 8b's tenant-
+	// client registration roadmap landed, akashic-admin is the only
+	// server-managed built-in — every other client (tenant portals,
+	// sub-services, samples) is operator-registered via
+	// `akashic-cli clients create` or the admin web console.
+	//
+	// AdminBFFEnabled gates this single client. When false, the
+	// akashic-admin row is REMOVED from client_services on boot
+	// (EnsureBuiltInClients deletes any built_in row not in the
+	// passed-in spec list), so admin-bff can no longer OAuth-login
+	// — the deployment is in "minimal mode": CLI is the only
+	// operator surface.
+	var specs []oauth.BuiltInClientSpec
+	if cfg.OAuth.AdminBFFEnabled {
+		specs = append(specs, oauth.BuiltInClientSpec{
 			ClientID:      "akashic-admin",
 			Name:          "Akashic Admin Console",
 			RedirectURIs:  cfg.OAuth.AdminRedirectURI,
 			AllowedScopes: "openid profile email",
 			AuthTypes:     string(models.AuthTypeAuthorizationCode),
 			RoleAllowlist: "root,admin",
-		},
-		"sample-nextjs": {
-			// Phase 8: Next.js reference sample. Public-facing — no
-			// role allowlist (any user_type may sign in). The
-			// sample's own per-section gating decides who sees
-			// what once they're in.
-			ClientID:      "akashic-sample-nextjs",
-			Name:          "Akashic Sample (Next.js)",
-			RedirectURIs:  cfg.OAuth.SampleNextjsRedirectURI,
-			AllowedScopes: "openid profile email",
-			AuthTypes:     string(models.AuthTypeAuthorizationCode),
-			RoleAllowlist: "",
-		},
-		"sample-static": {
-			// Phase 8b: static-HTML sample (no backend) public
-			// client. Demonstrates the SPA OAuth pattern —
-			// Authorization Code Flow + PKCE without a
-			// client_secret. Same flow every Auth0/Okta/Cognito
-			// SPA integration uses.
-			ClientID:      "akashic-sample-static",
-			Name:          "Akashic Sample (static, PKCE-only)",
-			RedirectURIs:  cfg.OAuth.SampleStaticRedirectURI,
-			AllowedScopes: "openid profile email",
-			AuthTypes:     string(models.AuthTypeAuthorizationCode),
-			RoleAllowlist: "",
-			Public:        true,
-		},
-	}
-	var specs []oauth.BuiltInClientSpec
-	var unknown []string
-	for _, name := range strings.Split(cfg.OAuth.BuiltInClients, ",") {
-		name = strings.TrimSpace(name)
-		if name == "" {
-			continue
-		}
-		spec, ok := candidates[name]
-		if !ok {
-			unknown = append(unknown, name)
-			continue
-		}
-		specs = append(specs, spec)
-	}
-	if len(unknown) > 0 {
-		// Surface as a startup warning rather than a fatal error
-		// so a typo in the env doesn't take akashic offline; the
-		// list of valid names is short enough that operators will
-		// notice quickly.
-		app.Logger.App.Warn("Unknown built-in OAuth client names ignored",
-			zap.Strings("names", unknown),
-			zap.Strings("valid", []string{"admin", "sample-nextjs", "sample-static"}))
+		})
 	}
 	app.Logger.App.Info("Ensuring built-in OAuth client services",
-		zap.String("allowlist", cfg.OAuth.BuiltInClients))
+		zap.Bool("admin_bff_enabled", cfg.OAuth.AdminBFFEnabled))
 	if err := oauth.EnsureBuiltInClients(app.ctx, app.DB.DB, cfg.OAuth.SigningKeyDir, specs); err != nil {
 		return fmt.Errorf("ensure built-in OAuth clients: %v", err)
 	}

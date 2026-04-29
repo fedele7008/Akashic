@@ -1,8 +1,8 @@
 /**
  * Landing page — the bare deployment domain (`/`).
  *
- * Operator-rebrandable copy via env (`AKASHIC_PORTAL_BRAND_NAME`,
- * `AKASHIC_PORTAL_TAGLINE`, `AKASHIC_PORTAL_DESCRIPTION`).
+ * Brand copy is hardcoded in lib/env.ts. Tenants forking this sample
+ * for their own deployment edit the literals there.
  *
  * Session-aware CTAs: a signed-in visitor lands here too (e.g. if
  * they clicked the brand link in the header). For them we show

@@ -15,6 +15,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   buildAuthorizeUrl,
   computeCodeChallenge,
+  CredentialsMissingError,
   generateCodeVerifier,
   generateNonce,
   generateState,
@@ -41,9 +42,33 @@ export async function GET(req: NextRequest) {
   try {
     url = await buildAuthorizeUrl({ state, nonce, codeChallenge });
   } catch (err) {
+    const errMsg = err instanceof Error ? err.message : String(err);
+
+    // Distinguish "operator hasn't registered the sample yet" (an
+    // actionable misconfiguration) from "real network/discovery
+    // failure" (transient, retry / escalate). Same friendly browser
+    // message; different machine-readable code + diagnostic detail.
+    if (err instanceof CredentialsMissingError) {
+      auditLog(req, "portal.signin.credentials_missing", {
+        outcome: "fail",
+        message: errMsg,
+      });
+      return NextResponse.json(
+        {
+          success: false,
+          error: {
+            code: "CREDENTIALS_MISSING",
+            message: "Sign-in is unavailable: this sample hasn't been registered yet.",
+            details: { hint: errMsg },
+          },
+        },
+        { status: 503 },
+      );
+    }
+
     auditLog(req, "portal.signin.discovery_failed", {
       outcome: "fail",
-      message: err instanceof Error ? err.message : String(err),
+      message: errMsg,
     });
     return NextResponse.json(
       {
@@ -51,6 +76,7 @@ export async function GET(req: NextRequest) {
         error: {
           code: "OAUTH_DISCOVERY_FAILED",
           message: "Sign-in is temporarily unavailable. Please retry shortly.",
+          details: { hint: errMsg },
         },
       },
       { status: 503 },

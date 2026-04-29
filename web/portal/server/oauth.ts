@@ -50,57 +50,72 @@ interface Credentials {
 }
 
 /**
- * Resolve the OAuth credentials (client_id + client_secret).
+ * Tagged error so route handlers can distinguish "operator hasn't
+ * dropped a credentials file yet" (CREDENTIALS_MISSING — actionable)
+ * from real network/discovery failures (OAUTH_DISCOVERY_FAILED —
+ * retry, escalate to ops). Plain Error wouldn't let `route.ts`
+ * branch on the cause without string-matching the message.
+ */
+export class CredentialsMissingError extends Error {
+  readonly code = "CREDENTIALS_MISSING";
+  constructor(message: string) {
+    super(message);
+    this.name = "CredentialsMissingError";
+  }
+}
+
+/**
+ * Hardcoded path the sample reads its credentials from. Kept here
+ * (Node-only file) rather than in lib/env.ts because lib/env.ts is
+ * pulled into the Edge bundle via middleware.ts → server/csrf.ts.
  *
- * Resolution order:
- *   1. Credentials JSON file (env.oauth.credentialsFile). Written by
- *      `akashic-cli clients create --save-credentials-to <path>`. The
- *      docker-compose mount makes this available inside the sample
- *      container at /secrets/sample/nextjs.json by default. Read on
- *      every call so post-bootstrap registrations + later rotations
- *      take effect immediately.
- *   2. Env vars (AKASHIC_SAMPLE_NEXTJS_CLIENT_ID +
- *      AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET). Real-tenant deployments
- *      hardcode these and skip the file dance.
+ * The docker-compose `sample-nextjs` service mounts the host's
+ * `.secrets/sample/` directory at /secrets/, so the operator-issued
+ * credentials JSON written by:
  *
- * Throws if neither source produces a usable pair — caller maps to
- * a 503 "sign-in temporarily unavailable" page.
+ *   akashic-cli clients create --save-credentials-to .secrets/sample/nextjs.json
+ *
+ * shows up here without any env wiring. Real tenants taking the
+ * sample to production fork the repo and replace the path (or read
+ * from their secret manager directly).
+ */
+const CREDENTIALS_FILE = "/secrets/sample/nextjs.json";
+
+/**
+ * Resolve the OAuth credentials (client_id + client_secret) by
+ * reading the operator-managed JSON file at CREDENTIALS_FILE. Read
+ * on every OAuth call so a freshly-registered client (from
+ * `akashic-cli clients create --save-credentials-to`) takes effect
+ * without a portal restart.
+ *
+ * Throws if the file is missing, unreadable, or doesn't contain
+ * both fields — caller maps to a 503 "sign-in temporarily
+ * unavailable" page. The error message points the operator at the
+ * exact CLI command needed to fix it.
  *
  * Only call this from inside Node-runtime code (route handlers).
  * Edge-runtime callers cannot use node:fs.
  */
 function resolveCredentials(): Credentials {
-  const credFile = env.oauth.credentialsFile;
-  if (credFile) {
-    try {
-      const raw = readFileSync(credFile, "utf8");
-      const parsed = JSON.parse(raw) as Partial<Credentials> & {
-        client_id?: string;
-        client_secret?: string;
-      };
-      const clientId = parsed.client_id ?? parsed.clientId ?? "";
-      const clientSecret = parsed.client_secret ?? parsed.clientSecret ?? "";
-      if (clientId && clientSecret) {
-        return { clientId, clientSecret };
-      }
-      // File present but missing one of the fields — fall through to
-      // env. (Don't throw here: the file may have been half-written
-      // by something other than our atomic writer; env may still
-      // succeed and let the portal limp along.)
-    } catch {
-      // File missing / unreadable / non-JSON. Expected in the gap
-      // between sample container start and `clients create`. Fall
-      // through to env.
-    }
-  }
-  if (env.oauth.clientId && env.oauth.clientSecretFromEnv) {
-    return {
-      clientId: env.oauth.clientId,
-      clientSecret: env.oauth.clientSecretFromEnv,
+  try {
+    const raw = readFileSync(CREDENTIALS_FILE, "utf8");
+    const parsed = JSON.parse(raw) as Partial<Credentials> & {
+      client_id?: string;
+      client_secret?: string;
     };
+    const clientId = parsed.client_id ?? parsed.clientId ?? "";
+    const clientSecret = parsed.client_secret ?? parsed.clientSecret ?? "";
+    if (clientId && clientSecret) {
+      return { clientId, clientSecret };
+    }
+  } catch {
+    // File missing / unreadable / non-JSON. Expected in the gap
+    // between sample container start and `clients create`. Throw a
+    // tagged error so the route handler can surface a sharper code
+    // than the generic "discovery failed" wrapper.
   }
-  throw new Error(
-    `OAuth credentials not available: credentials file '${credFile}' unreadable AND env (AKASHIC_SAMPLE_NEXTJS_CLIENT_ID + AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET) unset. Have you run 'akashic-cli clients create --save-credentials-to ${credFile}' yet?`,
+  throw new CredentialsMissingError(
+    `OAuth credentials not available at ${CREDENTIALS_FILE}. Run: akashic-cli clients create --type WEB --save-credentials-to .secrets/sample/nextjs.json --redirect-uri <your-callback> --name "Next.js sample"`,
   );
 }
 

@@ -589,20 +589,12 @@ services:
       # MUST agree exactly (the akashic-server registers this in
       # client_services; the portal sends it on /authorize). If the
       # two diverge, the auth server returns redirect_uri_mismatch.
-      AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI: "${AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
-      # Phase 8b: sample-static callback. Same value the static-sample
-      # OAuth helper computes (location.origin + "/callback"); MUST match
-      # exactly what the akashic-sample-static built-in is registered
-      # with or /authorize returns redirect_uri_mismatch.
-      AKASHIC_OAUTH_SAMPLE_STATIC_REDIRECT_URI: "${AKASHIC_OAUTH_SAMPLE_STATIC_REDIRECT_URI:-https://akashic.example.com/callback}"
-      # Phase 8b: comma-separated allowlist of built-in OAuth clients
-      # to register on startup. Built-ins NOT in this list are deleted
-      # from client_services (akashic reconciles the table to match
-      # this var on every boot). Production default: "admin". Sample
-      # profiles override via .env:
-      #   --profile sample-nextjs  → AKASHIC_OAUTH_BUILTIN_CLIENTS=admin,sample-nextjs
-      #   --profile sample-static  → AKASHIC_OAUTH_BUILTIN_CLIENTS=admin,sample-static
-      AKASHIC_OAUTH_BUILTIN_CLIENTS: "${AKASHIC_OAUTH_BUILTIN_CLIENTS:-admin}"
+      # Toggle the akashic-admin built-in OAuth client (admin-bff
+      # console login). Default true. Set false for "minimal mode" —
+      # CLI is the only operator surface, no admin web. The
+      # akashic-admin row is removed from client_services on next
+      # boot when this is false.
+      AKASHIC_OAUTH_ADMIN_BFF_ENABLED: "${AKASHIC_OAUTH_ADMIN_BFF_ENABLED:-true}"
       # Phase 8b: deployment-wide CORS allowlist for tenant-product
       # origins that may embed Akashic widgets. Comma- or space-
       # separated. Both the auth-server's /session/token and the
@@ -836,43 +828,32 @@ services:
       redis:
         condition: service_healthy
     environment:
-      # Branding / metadata read by app/layout.tsx + app/(public)/page.tsx.
-      AKASHIC_PORTAL_BRAND_NAME: "${AKASHIC_PORTAL_BRAND_NAME:-Akashic}"
-      AKASHIC_PORTAL_TAGLINE: "${AKASHIC_PORTAL_TAGLINE:-Identity provider built on Akashic.}"
-      AKASHIC_PORTAL_DESCRIPTION: "${AKASHIC_PORTAL_DESCRIPTION:-Sign in or create an account to manage your identity and OAuth integrations.}"
-      # Optional: shown on the /forgot informational page so users
-      # know who to contact for password reset (Phase 9 will add the
-      # real flow). Empty string disables the contact line.
-      AKASHIC_PORTAL_SUPPORT_EMAIL: "${AKASHIC_PORTAL_SUPPORT_EMAIL:-}"
+      # Branding (BRAND_NAME, TAGLINE, DESCRIPTION, SUPPORT_EMAIL) and
+      # the iron-session secret are hardcoded in the sample's source
+      # (web/portal/lib/env.ts). Sample is reference code: tenants who
+      # want to rebrand fork the repo and replace the literals; mixing
+      # those into runtime env conflates akashic-server config with
+      # sample-product config.
 
-      # --- Chapter 3: session ---
-      # 32+ byte secret used by iron-session for AEAD encryption of the
-      # session cookie. MUST be unique per deployment. The compose
-      # default is sufficient for dev; production deployments should
-      # generate a fresh value (e.g. `openssl rand -base64 48`) and set
-      # AKASHIC_PORTAL_SESSION_SECRET in their env.
-      AKASHIC_PORTAL_SESSION_SECRET: "${AKASHIC_PORTAL_SESSION_SECRET:-dev-only-please-replace-this-with-32-or-more-random-bytes}"
       # Redis (DB 2 — separate from auth-server's DB 0 and admin-bff's DB 1).
-      # Use the network alias (matching the Redis TLS cert's SAN);
-      # the bare `redis` service name is NOT in the cert and TLS
-      # validation rejects it.
       AKASHIC_PORTAL_REDIS_HOST: redis.akashic.local
       AKASHIC_PORTAL_REDIS_PORT: "6379"
       AKASHIC_PORTAL_REDIS_PASSWORD: "${AKASHIC_DATABASE_REDIS_PASSWORD:-}"
       AKASHIC_PORTAL_REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
       AKASHIC_PORTAL_REDIS_DB: "2"
 
-      # --- Chapter 3: OAuth client ---
-      # Issuer must match what the auth server advertises in its
-      # /.well-known/openid-configuration. Same value admin-bff uses.
+      # OAuth client. Issuer must match the auth server's /.well-known/
+      # openid-configuration (same value admin-bff uses). Client
+      # credentials (client_id + client_secret) come from the
+      # operator-managed JSON file at /secrets/sample/nextjs.json,
+      # written by `akashic-cli clients create --save-credentials-to`.
+      # See web/portal/server/oauth.ts for the resolveCredentials path.
       AKASHIC_OAUTH_ISSUER: "${AKASHIC_OAUTH_ISSUER:-https://auth.akashic.example.com}"
-      AKASHIC_SAMPLE_NEXTJS_CLIENT_ID: akashic-sample-nextjs
-      # The client secret is provisioned on disk by EnsureBuiltInClients
-      # at /keys/oauth/client-secrets/akashic-sample-nextjs.txt. The
-      # sample reads it at first OAuth call via the entrypoint that
-      # exports AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET — see the Dockerfile
-      # entrypoint.
-      AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI: "${AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI:-https://akashic.local/api/auth/callback}"
+      # Deployment-specific callback URL the sample sends to /authorize.
+      # Must match exactly what the operator passed to `akashic-cli
+      # clients create --redirect-uri ...` when registering this
+      # sample, or /authorize returns redirect_uri_mismatch.
+      AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI: "${AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI:-https://akashic.example.com/api/auth/callback}"
       AKASHIC_PORTAL_OAUTH_SCOPES: "openid profile email"
 
       # --- Chapter 3 / 8b: API server URL ---
@@ -960,6 +941,15 @@ services:
       # truth for "where the widgets live."
       AKASHIC_PORTAL_API_BASE_URL: "${AKASHIC_PORTAL_API_BASE_URL:-https://api.akashic.example.com}"
       TZ: ${AKASHIC_TZ:-UTC}
+    volumes:
+      # Operator-managed credentials drop. After running:
+      #   akashic-cli clients create --type SPA \
+      #     --save-credentials-to .secrets/sample/static.json
+      # …nginx serves the JSON at /akashic-config.json (see nginx.conf
+      # alias). _oauth.js fetches it before any /authorize so a
+      # freshly-registered SPA client takes effect with no container
+      # restart.
+      - ./.secrets/sample:/secrets/sample:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
       - "akashic:host-gateway"

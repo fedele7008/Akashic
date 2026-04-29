@@ -374,22 +374,6 @@ type OAuthConfig struct {
 	// sends on /authorize.
 	AdminRedirectURI string `mapstructure:"admin_redirect_uri" yaml:"admin_redirect_uri"`
 
-	// SampleNextjsRedirectURI is the redirect_uri the
-	// akashic-sample-nextjs built-in client is registered with
-	// (Phase 8). Must match exactly what the Next.js sample sends on
-	// /authorize. Public surface — user-scoped (no role restriction),
-	// unlike AdminRedirectURI.
-	SampleNextjsRedirectURI string `mapstructure:"sample_nextjs_redirect_uri" yaml:"sample_nextjs_redirect_uri"`
-
-	// SampleStaticRedirectURI is the redirect_uri the
-	// akashic-sample-static PUBLIC built-in client is registered with
-	// (Phase 8b). Used only by the services/sample-static reference
-	// integration — a no-backend SPA flow that proves the
-	// public-client + PKCE story works end-to-end. Typically
-	// https://<tenant-root>/callback (the static sample serves a
-	// callback page at that path).
-	SampleStaticRedirectURI string `mapstructure:"sample_static_redirect_uri" yaml:"sample_static_redirect_uri"`
-
 	// AuthSessionIdleTTL is how long an auth-server session can be
 	// idle before requiring re-login. Refreshed on every visit to
 	// /authorize within the absolute TTL.
@@ -399,27 +383,19 @@ type OAuthConfig struct {
 	// session. Cannot be extended past this even with active use.
 	AuthSessionMaxTTL time.Duration `mapstructure:"auth_session_max_ttl" yaml:"auth_session_max_ttl"`
 
-	// BuiltInClients is a comma-separated allowlist of built-in OAuth
-	// client IDs to register on startup. Built-in clients NOT in this
-	// list are deleted from client_services on the next boot, so the
-	// list is effectively a desired-state spec.
+	// AdminBFFEnabled controls whether the akashic-admin built-in
+	// OAuth client is registered on startup. This is the single
+	// remaining server-managed client; everything else (tenant
+	// portals, sub-services, samples) is operator-registered via
+	// `akashic-cli clients create` or the admin web console.
 	//
-	// Recognised values:
-	//   - "admin"          — akashic-admin (admin-bff console login)
-	//   - "sample-nextjs"  — akashic-sample-nextjs (Next.js sample)
-	//   - "sample-static"  — akashic-sample-static  (no-backend SPA sample)
-	//
-	// Default: "admin" — production deployments register only the
-	// admin client. Sample profiles override this in docker-compose:
-	//   --profile sample-nextjs  → "admin,sample-nextjs"
-	//   --profile sample-static  → "admin,sample-static"
-	//
-	// Why this exists: registering both sample clients
-	// unconditionally means the akashic-sample-static row sits in the
-	// DB even when running --profile sample-nextjs (and vice versa),
-	// which is operationally noisy and surprising to operators who
-	// expect the active sample's client to be the only one present.
-	BuiltInClients string `mapstructure:"builtin_clients" yaml:"builtin_clients"`
+	// Default: true. Disable for the "minimal mode" deployment
+	// (CLAUDE.md): no admin web console, CLI is the only operator
+	// surface, control plane stays loopback-only. When false, the
+	// akashic-admin row is removed from client_services on next
+	// boot so admin-bff (if running) can no longer authenticate
+	// through the OIDC flow.
+	AdminBFFEnabled bool `mapstructure:"admin_bff_enabled" yaml:"admin_bff_enabled"`
 }
 
 // PKIConfig controls the in-process PKI / cert-rotation subsystem (Phase 4)

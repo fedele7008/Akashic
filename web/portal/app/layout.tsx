@@ -16,10 +16,8 @@ import "./globals.css";
 // `::part(...)` rules instead.
 
 export const metadata: Metadata = {
-  title: process.env.AKASHIC_PORTAL_BRAND_NAME ?? "Akashic",
-  description:
-    process.env.AKASHIC_PORTAL_TAGLINE ??
-    "Identity provider built on Akashic.",
+  title: env.brand.name,
+  description: env.brand.tagline,
 };
 
 export default function RootLayout({

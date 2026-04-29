@@ -1,7 +1,7 @@
 #!/bin/sh
 # Portal container entrypoint.
 #
-# Three pieces of runtime wiring (in order):
+# Two pieces of runtime wiring (in order):
 #
 #   1. Install the akashic internal CA into the OS trust store via
 #      update-ca-certificates. Once installed, Node's TLS defaults
@@ -10,20 +10,19 @@
 #      Both `fetch` (to api.<tenant>) and ioredis (to redis.akashic.local)
 #      use this trust path.
 #
-#   2. Read the OAuth client secret from disk and export it as an env
-#      var. The akashic-server's EnsureBuiltInClients writes the
-#      secret to /keys/oauth/client-secrets/akashic-sample-nextjs.txt; we
-#      surface it to Next.js as AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET.
-#
-#   3. Drop privileges from root → uid 10100 (akashic) and exec node.
+#   2. Drop privileges from root → uid 10100 (akashic) and exec node.
 #      Step 1 must run as root (writing into /usr/local/share/...);
 #      everything else can run unprivileged.
 #
-# All steps are best-effort: if a precondition is missing (cert file
-# not yet rendered by vault-agent, secret file not yet provisioned by
-# akashic-server), the portal still starts. The first OAuth or API
-# call will fail with a clear error, which is better than refusing
-# to boot.
+# OAuth credentials (client_id + client_secret) come from the
+# operator-managed JSON file mounted at /secrets/sample/nextjs.json,
+# read at OAuth-call time by web/portal/server/oauth.ts. No
+# entrypoint-time secret loading needed.
+#
+# All steps are best-effort: if a precondition is missing (CA file
+# not yet rendered by vault-agent, etc.), the portal still starts.
+# The first OAuth or API call will fail with a clear error, which is
+# better than refusing to boot.
 
 set -e
 
@@ -50,14 +49,7 @@ if [ -f "$CA_FILE" ] && [ -r "$CA_FILE" ]; then
     fi
 fi
 
-# ─── Step 2: export OAuth client secret ───────────────────────────────
-SECRET_FILE="/keys/oauth/client-secrets/akashic-sample-nextjs.txt"
-if [ -f "$SECRET_FILE" ] && [ -r "$SECRET_FILE" ]; then
-    AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET="$(cat "$SECRET_FILE")"
-    export AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET
-fi
-
-# ─── Step 3: drop privileges and exec ─────────────────────────────────
+# ─── Step 2: drop privileges and exec ─────────────────────────────────
 # We're currently running as root (no USER directive in the Dockerfile
 # after the update-ca-certificates step needs root). Drop to akashic
 # (uid 10100) before launching the long-lived Node process.

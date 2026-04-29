@@ -148,11 +148,11 @@ func EnsureBuiltInClients(ctx context.Context, db *gorm.DB, secretsDir string, s
 	}
 
 	// Reconcile-style cleanup: any built_in=true row whose client_id
-	// is no longer in `specs` represents a built-in that the operator
-	// removed from AKASHIC_OAUTH_BUILTIN_CLIENTS. Drop it so a
-	// removed allowlist entry actually disappears from the DB on the
-	// next boot. User-registered clients (built_in=false) are never
-	// touched by this clause.
+	// is no longer in `specs` is a built-in the caller has stopped
+	// requesting (e.g., AKASHIC_OAUTH_ADMIN_BFF_ENABLED=false drops
+	// akashic-admin from the spec list). Delete it so the DB matches
+	// the desired-state spec. User-registered clients (built_in=false)
+	// are never touched by this clause.
 	wantedIDs := make([]string, 0, len(specs))
 	for _, spec := range specs {
 		wantedIDs = append(wantedIDs, spec.ClientID)

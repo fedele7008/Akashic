@@ -50,10 +50,12 @@ export const env = {
 
   session: {
     cookieName: optionalEnv("AKASHIC_PORTAL_SESSION_COOKIE", "akashic_portal_session"),
-    get password(): string {
-      // 32+ bytes. Used by iron-session for AEAD encryption.
-      return requireEnv("AKASHIC_PORTAL_SESSION_SECRET");
-    },
+    // ⚠ DEV-ONLY hardcoded secret. iron-session uses this for AEAD
+    // encryption of the session cookie. The sample is reference code
+    // not intended for production; tenants taking it to production
+    // fork the repo and replace this literal with a deployment-
+    // unique 32+ byte value (generate with `openssl rand -base64 48`).
+    password: "dev-only-please-replace-this-with-32-or-more-random-bytes",
     // Idle: refreshed on activity. Default 30 minutes.
     idleSeconds: envInt("AKASHIC_PORTAL_SESSION_IDLE_SECONDS", 30 * 60),
     // Absolute: never extended. Default 12 hours.
@@ -64,40 +66,12 @@ export const env = {
     get issuer(): string {
       return requireEnv("AKASHIC_OAUTH_ISSUER");
     },
-    clientId: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CLIENT_ID", ""),
-    /**
-     * Raw env-var read; can be empty in the in-stack-sample flow
-     * where the operator runs `akashic-cli clients create
-     * --save-credentials-to ...` AFTER the sample container has
-     * already started. Callers that need the actual secret (only
-     * the OAuth code path) use `resolveCredentials()` from
-     * server/oauth.ts, which prefers the dynamic credentials file
-     * and falls back to this env var.
-     *
-     * Why not putting the disk fallback here: lib/env.ts is imported
-     * (transitively) by middleware.ts, which Next.js bundles for the
-     * Edge runtime. A `require("node:fs")` here would poison the
-     * Edge bundle. So the fallback lives in oauth.ts (Node-only).
-     */
-    clientSecretFromEnv: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CLIENT_SECRET", ""),
-    /**
-     * Path to a JSON file written by `akashic-cli clients create
-     * --save-credentials-to <path>` containing `{client_id,
-     * client_secret}`. Read at every OAuth call so a freshly-
-     * registered client takes effect without a portal restart.
-     *
-     * In-stack-sample default: the path the docker-compose mount
-     * makes available inside the container. Real-tenant deployments
-     * leave this empty (or override) and rely on the env-var path
-     * above.
-     */
-    credentialsFile: optionalEnv("AKASHIC_SAMPLE_NEXTJS_CREDENTIALS_FILE",
-      "/secrets/sample/nextjs.json"),
     get redirectUri(): string {
-      // Same env var the akashic-server reads (config path
-      // oauth.sample_nextjs_redirect_uri → AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI).
-      // Single source of truth across the two services prevents
-      // redirect_uri_mismatch on the OAuth callback.
+      // Deployment-specific (depends on the public domain the sample
+      // is served at), so it stays an env var. Must match exactly
+      // what the operator passed to `akashic-cli clients create
+      // --redirect-uri ...` when registering this sample's client,
+      // or /authorize returns redirect_uri_mismatch.
       return requireEnv("AKASHIC_OAUTH_SAMPLE_NEXTJS_REDIRECT_URI");
     },
     scopes: optionalEnv("AKASHIC_PORTAL_OAUTH_SCOPES", "openid profile email"),
@@ -111,20 +85,16 @@ export const env = {
     baseUrl: optionalEnv("AKASHIC_PORTAL_API_BASE_URL", "https://api.akashic.example.com"),
   },
 
+  // Brand metadata is hardcoded — the sample is reference code that
+  // tenants fork and customize. Changing these literals is the
+  // intended workflow for rebranding; mixing them into runtime env
+  // would conflate akashic-server config with sample-product config.
   brand: {
-    name: optionalEnv("AKASHIC_PORTAL_BRAND_NAME", "Akashic"),
-    tagline: optionalEnv(
-      "AKASHIC_PORTAL_TAGLINE",
-      "Identity provider built on Akashic.",
-    ),
-    description: optionalEnv(
-      "AKASHIC_PORTAL_DESCRIPTION",
+    name: "Akashic",
+    tagline: "Identity provider built on Akashic.",
+    description:
       "Sign in or create an account to manage your identity and OAuth integrations.",
-    ),
-    // Operator-configured contact for the Phase 8 forgot-password
-    // informational page. Empty string means "not configured" — the
-    // /forgot page renders a generic fallback.
-    supportEmail: optionalEnv("AKASHIC_PORTAL_SUPPORT_EMAIL", ""),
+    supportEmail: "",
   },
 
   nodeEnv: optionalEnv("NODE_ENV", "development"),

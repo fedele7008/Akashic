@@ -36,7 +36,31 @@
   // different topology can edit this file.
   const authBase = apiBase.replace(/\/\/api\./, "//auth.");
 
-  const CLIENT_ID = "akashic-sample-static";
+  // CLIENT_ID is operator-issued (akashic-cli clients create ...) and
+  // dropped at .secrets/sample/static.json on the host, served by
+  // nginx at /akashic-config.json. Fetched lazily and cached in
+  // memory so a freshly-registered client takes effect with no
+  // container restart, but normal /authorize clicks don't pay the
+  // round-trip.
+  let _configCache = null;
+  async function getClientId() {
+    if (_configCache) return _configCache.client_id;
+    const res = await fetch("/akashic-config.json", { cache: "no-store" });
+    if (!res.ok) {
+      throw new Error(
+        "Sample not yet registered. Run: akashic-cli clients create " +
+        "--type SPA --name \"Static sample\" --redirect-uri " +
+        location.origin + "/callback --save-credentials-to " +
+        ".secrets/sample/static.json"
+      );
+    }
+    _configCache = await res.json();
+    if (!_configCache.client_id) {
+      throw new Error("akashic-config.json missing client_id field");
+    }
+    return _configCache.client_id;
+  }
+
   const SCOPE = "openid profile email";
   const STORAGE_TOKEN = "akashic.access_token";
   const STORAGE_EXPIRES_AT = "akashic.access_expires_at";
@@ -74,6 +98,7 @@
   // ---- public API -----------------------------------------------------
 
   async function signin() {
+    const clientId = await getClientId();
     const verifier = randomBase64(32);   // 256 bits of entropy
     const state = randomBase64(16);
     const challenge = base64url(await sha256(verifier));
@@ -82,7 +107,7 @@
     sessionStorage.setItem(STORAGE_PKCE_STATE, state);
 
     const params = new URLSearchParams({
-      client_id: CLIENT_ID,
+      client_id: clientId,
       redirect_uri: callbackUrl(),
       response_type: "code",
       scope: SCOPE,
@@ -94,6 +119,7 @@
   }
 
   async function handleCallback() {
+    const clientId = await getClientId();
     const params = new URLSearchParams(location.search);
     const code = params.get("code");
     const state = params.get("state");
@@ -109,7 +135,7 @@
       grant_type: "authorization_code",
       code: code,
       redirect_uri: callbackUrl(),
-      client_id: CLIENT_ID,
+      client_id: clientId,
       code_verifier: verifier,
     });
 
