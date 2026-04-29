@@ -52,6 +52,43 @@ func (s *Server) requireBootstrapMode(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// Middleware: Require bootstrap to be COMPLETE (the inverse of
+// requireBootstrapMode). Wrap any post-bootstrap-only endpoint —
+// most importantly /clients — with this so the operator can't
+// register OAuth clients before the deployment has a root user.
+//
+// 409 Conflict (not 403) because this is a lifecycle-state issue,
+// not an authorization failure: the operator's CLI cert is fine;
+// the system isn't yet ready for the requested action.
+func (s *Server) requireBootstrapComplete(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if s.bootstrapMgr == nil {
+			response.WriteJSON(w, response.StatusInternalServerError,
+				response.Fail(response.ErrInternalServer, "Bootstrap manager not initialized", nil))
+			return
+		}
+
+		needs, err := s.bootstrapMgr.NeedsBootstrap(r.Context())
+		if err != nil {
+			response.WriteJSON(w, response.StatusInternalServerError,
+				response.Fail(response.ErrInternalServer, "Failed to check bootstrap status", map[string]any{
+					"error": err.Error(),
+				}))
+			return
+		}
+
+		if needs {
+			response.WriteJSON(w, http.StatusConflict,
+				response.Fail("BOOTSTRAP_INCOMPLETE",
+					"Bootstrap is not yet complete. Run `akashic-cli bootstrap create-root` first.",
+					nil))
+			return
+		}
+
+		next(w, r)
+	}
+}
+
 // Middleware: Require client cert with one of the listed Common Names.
 // This replaces the prior requireCLI helper which trusted the User-Agent
 // header (trivially spoofable). Phase 4 made mTLS mandatory on the control

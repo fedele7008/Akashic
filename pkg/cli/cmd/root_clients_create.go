@@ -118,6 +118,13 @@ done via the portal's environment configuration.`,
 			if resp.StatusCode != http.StatusCreated {
 				if errCode, msg := extractServerErrorCode(body); errCode != "" {
 					switch errCode {
+					case "BOOTSTRAP_INCOMPLETE":
+						// The deployment hasn't been bootstrapped yet —
+						// registering clients now would dangle. Surface
+						// this loudly with the exact next-step command
+						// so the operator can recover in one read.
+						return cliErr(ExitValidation,
+							fmt.Errorf("bootstrap is not yet complete. Run this first:\n\n  akashic-cli bootstrap create-root --username <name> --email <email>\n\nThen retry your `clients create` command."))
 					case "VALIDATION_FAILED":
 						return cliErr(ExitValidation, fmt.Errorf("%s", msg))
 					case "DB_NOT_READY":

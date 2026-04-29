@@ -38,6 +38,8 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		requirePublic(s.handleRegisterUser))
 	mux.HandleFunc("/users/forgot-password-help",
 		requirePublic(s.handleForgotPasswordHelp))
+	mux.HandleFunc("/users/password-policy",
+		requirePublic(s.handlePasswordPolicy))
 
 	// Bearer-authenticated /users/me (method-dispatched).
 	mux.HandleFunc("/users/me",

@@ -371,6 +371,28 @@ func (s *Server) handleForgotPasswordHelp(w http.ResponseWriter, r *http.Request
 	}))
 }
 
+// handlePasswordPolicy returns the active password policy as JSON.
+// Public (no auth) so unauthenticated UIs (the <akashic-signup>
+// widget, the password-change widget, etc.) can fetch the rules
+// once and validate client-side as the user types — server-side
+// validation in /users/register and /users/me/password remains
+// authoritative.
+//
+// Mirrors the same `*PasswordPolicy` shape returned by
+// auth.DefaultPasswordPolicy() — the very policy /users/register
+// validates against today, so the UI's pre-flight check matches the
+// server's reject criteria one-to-one.
+func (s *Server) handlePasswordPolicy(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		response.WriteJSON(w, http.StatusMethodNotAllowed,
+			response.Fail(response.ErrMethodNotAllowed,
+				"only GET is allowed", nil))
+		return
+	}
+	policy := auth.DefaultPasswordPolicy()
+	response.WriteJSON(w, http.StatusOK, response.Success(policy))
+}
+
 // ─── helpers ───────────────────────────────────────────────────────
 
 func looksLikeEmail(s string) bool {

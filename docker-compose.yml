@@ -620,6 +620,12 @@ services:
       # covered by the default config-search list (/etc/akashic/) so the
       # server finds it without extra --config flags.
       - ./configs/config.yaml:/etc/akashic/config.yaml:ro
+      # Surface log files to the host. The container's WORKDIR is /app,
+      # so config.yaml's relative `./logs/app.log` (etc.) resolves to
+      # /app/logs/. Mounting host's ./logs there means the same files
+      # appear at ./logs/ on the host — operators can `tail -f` them
+      # alongside `docker compose logs akashic` for stdout streams.
+      - ./logs:/app/logs
     networks:
       default:
         aliases:

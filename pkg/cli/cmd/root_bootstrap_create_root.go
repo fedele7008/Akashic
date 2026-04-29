@@ -158,6 +158,29 @@ plane.`,
 					fmt.Printf("  %-10s %v\n", key+":", v)
 				}
 			}
+			// Post-bootstrap initialization hint. Bootstrap by itself
+			// only creates the root user; the deployment isn't usable
+			// until at least one OAuth client is registered (the
+			// tenant's primary portal). Print the exact command so
+			// the operator doesn't have to tab-discover the args.
+			fmt.Println()
+			fmt.Println("Next step: register your tenant portal as an OAuth client.")
+			fmt.Println()
+			fmt.Println("  WEB (server-side / BFF — gets a client_secret):")
+			fmt.Println("    akashic-cli clients create --type WEB \\")
+			fmt.Println("        --name \"My Portal\" \\")
+			fmt.Println("        --redirect-uri https://<your-portal-domain>/api/auth/callback")
+			fmt.Println()
+			fmt.Println("  SPA (browser/native — PKCE-only, no secret):")
+			fmt.Println("    akashic-cli clients create --type SPA \\")
+			fmt.Println("        --name \"My SPA\" \\")
+			fmt.Println("        --redirect-uri https://<your-spa-domain>/callback")
+			fmt.Println()
+			fmt.Println("  Or via the admin web console at https://admin.<your-domain>/")
+			fmt.Println()
+			fmt.Println("  Tip: pass --save-credentials-to <path> to drop the issued")
+			fmt.Println("  client_id+client_secret into a JSON file (used by in-stack")
+			fmt.Println("  samples to read credentials at runtime).")
 			return nil
 		},
 	}

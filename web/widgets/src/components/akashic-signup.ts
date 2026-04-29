@@ -13,7 +13,7 @@
  */
 
 import { LitElement, html, css } from "lit";
-import { customElement, property, state } from "lit/decorators.js";
+import { customElement, state } from "lit/decorators.js";
 
 import { apiCallPublic } from "../lib/api";
 
@@ -21,6 +21,7 @@ interface FieldErrors {
   username?: string;
   email?: string;
   password?: string;
+  password_confirm?: string;
   display_name?: string;
 }
 
@@ -33,19 +34,106 @@ interface SignupOk {
   };
 }
 
+/**
+ * Mirrors `auth.PasswordPolicy` (pkg/auth/password.go) returned by
+ * `GET /users/password-policy`. Used for client-side pre-validation;
+ * the server is still authoritative.
+ */
+interface PasswordPolicy {
+  min_length: number;
+  require_uppercase: boolean;
+  require_lowercase: boolean;
+  require_number: boolean;
+  require_special: boolean;
+}
+
+/**
+ * Sensible default that's shown immediately at widget mount, before
+ * the policy fetch lands. Matches the most-common production policy
+ * so the hint text doesn't flicker if the fetch is slow. Replaced
+ * with the server's actual policy as soon as the response arrives.
+ */
+const FALLBACK_POLICY: PasswordPolicy = {
+  min_length: 12,
+  require_uppercase: true,
+  require_lowercase: true,
+  require_number: true,
+  require_special: true,
+};
+
+/**
+ * Run the same character-class checks the server applies in
+ * `auth.PasswordPolicy.Validate`. Returns the FIRST policy violation
+ * (server returns one error at a time too); empty string means the
+ * password passes. Pre-flight only — the server re-validates and is
+ * authoritative on every /users/register POST.
+ */
+function checkPassword(pw: string, policy: PasswordPolicy): string {
+  if (pw.length < policy.min_length) {
+    return `Password must be at least ${policy.min_length} characters long.`;
+  }
+  if (policy.require_uppercase && !/[A-Z]/.test(pw)) {
+    return "Password must contain at least one uppercase letter.";
+  }
+  if (policy.require_lowercase && !/[a-z]/.test(pw)) {
+    return "Password must contain at least one lowercase letter.";
+  }
+  if (policy.require_number && !/\d/.test(pw)) {
+    return "Password must contain at least one number.";
+  }
+  if (policy.require_special && !/[^A-Za-z0-9]/.test(pw)) {
+    return "Password must contain at least one special character.";
+  }
+  return "";
+}
+
+/**
+ * Render the policy as a single-line hint shown under the password
+ * field. Reads naturally even when only some rules are enabled
+ * (e.g. min-length only would render "At least 8 characters.").
+ */
+function policyHint(policy: PasswordPolicy): string {
+  const parts: string[] = [`At least ${policy.min_length} characters`];
+  const required: string[] = [];
+  if (policy.require_uppercase) required.push("uppercase");
+  if (policy.require_lowercase) required.push("lowercase");
+  if (policy.require_number) required.push("number");
+  if (policy.require_special) required.push("special character");
+  if (required.length > 0) parts.push("with " + required.join(", "));
+  return parts.join(" ") + ".";
+}
+
 @customElement("akashic-signup")
 export class AkashicSignup extends LitElement {
-  /**
-   * Optional minimum password length hint shown to users. Server-side
-   * policy is authoritative; this is purely UX guidance.
-   */
-  @property({ type: Number, attribute: "min-password-length" })
-  minPasswordLength = 8;
-
   @state() private busy = false;
   @state() private topError: string | null = null;
   @state() private fieldErrors: FieldErrors = {};
   @state() private done = false;
+  /**
+   * Live policy from the server. Starts at FALLBACK_POLICY so the
+   * hint renders immediately; gets replaced once `connectedCallback`
+   * finishes the fetch. The displayed hint and `checkPassword`
+   * predicate both read from this state field, so the UI updates
+   * automatically when the fetch lands.
+   */
+  @state() private policy: PasswordPolicy = FALLBACK_POLICY;
+
+  override connectedCallback() {
+    super.connectedCallback();
+    // Fetch the server's password policy once when the widget mounts
+    // so the hint text + client-side validation match the server's
+    // accept criteria. Failure is non-fatal — we keep FALLBACK_POLICY
+    // and the server's /users/register response will surface any
+    // mismatch as a PASSWORD_POLICY_VIOLATION error.
+    void this.loadPasswordPolicy();
+  }
+
+  private async loadPasswordPolicy() {
+    const res = await apiCallPublic<PasswordPolicy>("/users/password-policy");
+    if (res.ok) {
+      this.policy = res.data;
+    }
+  }
 
   // Open shadow DOM by default — tenants style via `::part()` and
   // the `--akashic-*` CSS custom properties documented in
@@ -157,9 +245,19 @@ export class AkashicSignup extends LitElement {
           type: "password",
           autocomplete: "new-password",
           required: true,
-          minLength: this.minPasswordLength,
-          hint: `At least ${this.minPasswordLength} characters.`,
+          minLength: this.policy.min_length,
+          hint: policyHint(this.policy),
           error: this.fieldErrors.password,
+        })}
+
+        ${this.field({
+          name: "password_confirm",
+          label: "Confirm password",
+          type: "password",
+          autocomplete: "new-password",
+          required: true,
+          minLength: this.policy.min_length,
+          error: this.fieldErrors.password_confirm,
         })}
 
         ${this.field({
@@ -226,19 +324,32 @@ export class AkashicSignup extends LitElement {
       email: String(data.get("email") ?? "").trim(),
       password: String(data.get("password") ?? ""),
     };
+    const passwordConfirm = String(data.get("password_confirm") ?? "");
     const dn = String(data.get("display_name") ?? "").trim();
     if (dn) payload.display_name = dn;
 
-    // Light client-side validation — server is authoritative.
+    // Pre-flight: required-fields, password-policy, password-match.
+    // Server re-runs these and is authoritative; the early checks
+    // give the user fast feedback without a round-trip.
     if (!payload.username || !payload.email || !payload.password) {
       this.topError = "All required fields must be filled.";
       this.busy = false;
       return;
     }
-    if (payload.password.length < this.minPasswordLength) {
+    const policyError = checkPassword(payload.password, this.policy);
+    if (policyError) {
+      this.fieldErrors = { ...this.fieldErrors, password: policyError };
+      this.busy = false;
+      return;
+    }
+    if (payload.password !== passwordConfirm) {
+      // Match check runs AFTER the policy check so a user with a
+      // policy-failing password sees the policy error first (more
+      // actionable than "passwords don't match" when both fields
+      // hold the same too-short value).
       this.fieldErrors = {
         ...this.fieldErrors,
-        password: `Must be at least ${this.minPasswordLength} characters.`,
+        password_confirm: "Passwords do not match.",
       };
       this.busy = false;
       return;

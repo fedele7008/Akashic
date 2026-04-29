@@ -74,11 +74,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// endpoint serves both the CLI flow and the future admin-web
 	// flow.
 	//
+	// Also gated by requireBootstrapComplete: registering OAuth
+	// clients before the deployment has a root user makes no sense
+	// (no one to own them; the auth flows that consume them can't
+	// be exercised yet) and would create dangling rows. The gate
+	// returns 409 BOOTSTRAP_INCOMPLETE; the CLI maps that to a
+	// friendly "run bootstrap create-root first" message.
+	//
 	// The API-server's bearer-authenticated /clients surface
 	// (pkg/server/api/clients_handlers.go) is the parallel
 	// surface for tenant developers using the <akashic-clients>
 	// widget — different audience, same DB writes.
 	mux.HandleFunc("/clients",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
-			s.handleAdminCreateClient))
+			s.requireBootstrapComplete(s.handleAdminCreateClient)))
 }
