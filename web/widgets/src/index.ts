@@ -28,6 +28,7 @@ import "./components/akashic-signin";
 import "./components/akashic-forgot-help";
 import "./components/akashic-profile";
 import "./components/akashic-change-password";
+import "./components/akashic-clients";
 
 declare global {
   interface Window {
