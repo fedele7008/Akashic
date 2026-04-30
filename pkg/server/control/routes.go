@@ -108,4 +108,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/admin/setup-status",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
 			s.handleSetupStatus))
+
+	// Phase 8c.2: operator-side user management. Same gating as
+	// /clients (mTLS + bootstrap-complete) — managing users before
+	// bootstrap exists doesn't make sense.
+	//   GET /users               → list with filters + pagination
+	//   GET/PATCH/DELETE /users/ → per-id ops
+	mux.HandleFunc("/users",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.requireBootstrapComplete(s.handleAdminUsers)))
+	mux.HandleFunc("/users/",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.requireBootstrapComplete(s.handleAdminUserByID)))
 }

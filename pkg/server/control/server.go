@@ -7,6 +7,7 @@ import (
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/pki"
+	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/api"
 	"akashic/akashic/pkg/server/auth"
 	"context"
@@ -54,6 +55,12 @@ type Server struct {
 	// handler (Phase 8c.1) to surface "is LDAP reachable" on the
 	// admin banner. Optional: handlers nil-check before use.
 	ldapClient *ldap.Client
+
+	// userRepo is wired in by SetUserRepo() and used by the
+	// Phase 8c.2 user-management handlers (list / get / patch /
+	// delete). Optional: handlers nil-check before use so the
+	// control server still starts in degraded mode without it.
+	userRepo *repository.UserRepository
 }
 
 // SetDB wires the GORM handle into the control server. Called from
@@ -72,6 +79,13 @@ func (s *Server) SetDB(db *gorm.DB) {
 // deferred or omitted.
 func (s *Server) SetLDAP(client *ldap.Client) {
 	s.ldapClient = client
+}
+
+// SetUserRepo wires the user repository into the control server so
+// the Phase 8c.2 user-management handlers can list / patch / delete
+// users. Same nil-tolerant pattern as SetDB / SetLDAP.
+func (s *Server) SetUserRepo(repo *repository.UserRepository) {
+	s.userRepo = repo
 }
 
 // SetAPIServer wires the API server's state manager into the control

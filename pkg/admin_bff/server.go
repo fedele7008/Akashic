@@ -338,6 +338,20 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminTLSReload)))
 
+	// Phase 8c.2: user management. Session-gated to admin/root in
+	// the handlers; CSRF enforced on PATCH/DELETE; rate-limited via
+	// the looser bucket since these are operator-driven.
+	//   GET    /api/users        → list with filters
+	//   GET    /api/users/<id>   → fetch one
+	//   PATCH  /api/users/<id>   → update user_type / is_disabled
+	//   DELETE /api/users/<id>   → hard-delete (LDAP + PG)
+	mux.HandleFunc("GET /api/users",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleListUsers)))
+	mux.HandleFunc("/api/users/",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleUserByID)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).

@@ -5,6 +5,7 @@ import {
   KeyIcon,
   ServerIcon,
   ToolsIcon,
+  UsersIcon,
 } from './icons';
 
 /**
@@ -14,7 +15,7 @@ import {
  * extending the union, the `NAV_ITEMS` array below, and the
  * page-render switch in `AppShell`.
  */
-export type Page = 'overview' | 'clients' | 'server' | 'tools';
+export type Page = 'overview' | 'users' | 'clients' | 'server' | 'tools';
 
 interface NavEntry {
   page: Page;
@@ -24,6 +25,7 @@ interface NavEntry {
 
 const NAV_ITEMS: NavEntry[] = [
   { page: 'overview', label: 'Overview', icon: DashboardIcon },
+  { page: 'users', label: 'Users', icon: UsersIcon },
   { page: 'clients', label: 'OAuth clients', icon: KeyIcon },
   { page: 'server', label: 'Server', icon: ServerIcon },
   { page: 'tools', label: 'Tools', icon: ToolsIcon },

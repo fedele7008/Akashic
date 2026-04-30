@@ -1052,33 +1052,61 @@ LDAP healthy? Each incomplete item shows remediation copy.
   Dashboard mount; sufficient for an operator who navigates
   between pages.
 
-### 8c.2 — User management ⏳
+### 8c.2 — User management ✅
 
-The biggest gap. Today the admin-bff has zero user-management
-UI; operators bootstrap the root user via CLI and that's the
-entire story. This step adds full CRUD with the safety invariants
-user management actually needs.
+Operator-side CRUD over user accounts: list, view, role/disabled
+toggle, hard-delete. Cross-row invariants enforced at the domain
+layer; self-protection enforced at the BFF (the only layer with
+session context).
 
+**As-shipped scope:**
 - New shared package `pkg/usermanagement/` (mirrors
   `pkg/clientservice/`). Sentinel errors: `ErrLastRoot`,
-  `ErrSelfDemotion`, `ErrSelfDeletion`. Cross-row invariants
-  enforced at the domain layer:
-  - The last `root` user can't be demoted or deleted (would
-    permanently brick the deployment).
-  - A user can't demote or delete themselves through this surface
-    (forces an out-of-band confirmation path).
-- Endpoints (api-server, bearer-gated to `admin`/`root`):
+  `ErrSelfDemotion`, `ErrSelfDeletion`. Cross-row invariants:
+  - The last active `root` can't be demoted or deleted. The
+    "active" count subtracts disabled rows so "enable then
+    demote the only root" is also blocked unless a second
+    root exists.
+  - A user can't demote or delete themselves through this
+    surface (BFF-side check, with control-plane defense in
+    depth via `caller_user_id`). Disable-self stays allowed —
+    recoverable by another admin.
+- Repository additions: `DeleteUser`, `UpdateUserType`,
+  `CountByUserType`, `ListWithFilters` (which returns total
+  count alongside the page so pagination doesn't need a second
+  query).
+- LDAP addition: `DeleteUserByDN` — idempotent on `LDAPResultNoSuchObject`
+  so the operator-facing flow doesn't fail if the entry is
+  already gone.
+- Endpoints (control plane, mTLS-gated, `requireBootstrapComplete`):
   - `GET /users` — paginated, filterable by `user_type`,
-    `is_disabled`, `missing_identity`.
-  - `GET /users/:id`
-  - `PATCH /users/:id` — fields: `user_type`, `is_disabled`.
-  - `DELETE /users/:id` — semantics depend on Open Question 2.
-- LDAP plumbing: deletion needs to delete the LDAP entry too.
-  Today we soft-delete in PG and let the deprovisioning loop
-  catch up — fine for "user left the org" but wrong for
-  "operator wants this account gone now."
-- Frontend: list page with search + filters, detail/edit modal,
-  promote/demote buttons gated behind a confirm dialog.
+    `is_disabled`, `missing_identity`. Returns `{users, total}`.
+  - `GET /users/<id>`
+  - `PATCH /users/<id>` — body: `{user_type?, is_disabled?, caller_user_id?}`;
+    pointer fields preserve the "leave unchanged" / "set to false"
+    distinction.
+  - `DELETE /users/<id>?caller_user_id=<uuid>` — hard-deletes
+    LDAP entry **then** PG row (intentional order; reverse would
+    let JIT provisioning re-create the row).
+- Admin-bff: typed `UsersApi` + `handleListUsers`, `handleUserByID`
+  dispatcher (GET/PATCH/DELETE on `/api/users/<id>`). BFF
+  resolves `caller_user_id` from the session and overrides any
+  client-supplied value — the FE doesn't get to claim identity.
+- Frontend: `<UsersPage>` with role/status filters, paginated
+  table, edit modal (role + disabled), and a type-to-confirm
+  delete modal where the confirm phrase is the user's `uid` so
+  the operator has to look at the row they're deleting. "You"
+  badge on your own row + actions hidden; the empty state
+  reads "manage another admin to change you".
+- Audit: every PATCH and DELETE logs to the security channel
+  with `user_id`, `caller_user_id`, and the changed fields.
+
+**Resolved Open Question 2** (user-deletion semantics): hard
+delete (LDAP + PG removed immediately). Reasoning: soft-delete
+already exists as `is_disabled = true` (reversible, intent: "lock
+this account"). DELETE is the explicit "operator wants this gone
+now" action; the 90-day deprovisioning loop covers the orthogonal
+"user left silently" case.
 
 ### 8c.3 — Server control panel ✅
 
@@ -1224,10 +1252,12 @@ the schema-changing pieces.
    Leaning recommendation: DB-backed table populated from YAML
    on first run; subsequent edits go through the UI; YAML
    becomes bootstrap-only-defaults.
-2. **User-deletion semantics** — Hard delete (PG row + LDAP
-   entry gone immediately) or soft-delete with grace period
-   (mirrors the existing 90-day deprovisioning behavior)? Soft
-   is safer; hard matches operator intuition.
+2. **User-deletion semantics** ✅ **resolved** (Phase 8c.2
+   shipped with hard delete): DELETE removes the LDAP entry
+   then the PG row; soft-delete is the orthogonal `is_disabled`
+   flag. The 90-day deprovisioning loop is the reaper for the
+   "user left silently" case; manual delete is the operator's
+   explicit "gone now" action.
 3. **"Type to confirm" gating threshold** ✅ **resolved** (Phase
    8c.3 shipped using this rule): type-to-confirm for actions
    that affect *other users* (auth stop, api stop, server quit,

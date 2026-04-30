@@ -238,6 +238,98 @@ func (r *UserRepository) EnableUser(ctx context.Context, userID uuid.UUID) error
 	return nil
 }
 
+// DeleteUser removes a user's PG row by id. Phase 8c.2 hard-delete
+// path: callers are expected to remove the LDAP entry first via
+// pkg/ldap.Client.DeleteUserByDN, then call this to drop the
+// metadata row. The deprovisioning loop is the orthogonal reaper
+// for the "user disappeared from LDAP silently" case.
+//
+// gorm.ErrRecordNotFound on missing id is wrapped to
+// models.ErrUserNotFound so the upstream sentinel-error pattern
+// stays consistent across the repo surface.
+func (r *UserRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error {
+	res := r.db.WithContext(ctx).Where("id = ?", userID).Delete(&models.User{})
+	if res.Error != nil {
+		return fmt.Errorf("delete user: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return models.ErrUserNotFound
+	}
+	return nil
+}
+
+// UpdateUserType changes a user's role (root / admin / user). The
+// caller is responsible for any cross-row invariants (e.g., "don't
+// demote the last root") — the repo enforces only the per-row
+// validity of the new value via the UserType.IsValid check.
+func (r *UserRepository) UpdateUserType(ctx context.Context, userID uuid.UUID, newType models.UserType) error {
+	if !newType.IsValid() {
+		return fmt.Errorf("invalid user_type %q", newType)
+	}
+	res := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("user_type", string(newType))
+	if res.Error != nil {
+		return fmt.Errorf("update user_type: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return models.ErrUserNotFound
+	}
+	return nil
+}
+
+// CountByUserType returns the number of users with the given role.
+// Used by usermanagement to enforce the "last root" invariant
+// before demoting or deleting a root user.
+func (r *UserRepository) CountByUserType(ctx context.Context, userType models.UserType) (int64, error) {
+	var n int64
+	if err := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("user_type = ?", string(userType)).
+		Count(&n).Error; err != nil {
+		return 0, fmt.Errorf("count by user_type: %w", err)
+	}
+	return n, nil
+}
+
+// ListWithFilters returns a page of users matching optional filters
+// plus the total matching count (so a caller can render a pager
+// without a second round-trip). Filters are AND-combined when set.
+//
+// Phase 8c.2 (admin user-management). The simpler unfiltered
+// ListUsers stays in place for the deprovisioning loop, which has
+// no use for filters.
+func (r *UserRepository) ListWithFilters(
+	ctx context.Context,
+	limit, offset int,
+	userType models.UserType,
+	isDisabled *bool,
+	missingIdentity *bool,
+) ([]*models.User, int64, error) {
+	tx := r.db.WithContext(ctx).Model(&models.User{})
+	if userType != "" {
+		tx = tx.Where("user_type = ?", string(userType))
+	}
+	if isDisabled != nil {
+		tx = tx.Where("is_disabled = ?", *isDisabled)
+	}
+	if missingIdentity != nil {
+		tx = tx.Where("missing_identity = ?", *missingIdentity)
+	}
+
+	var total int64
+	if err := tx.Count(&total).Error; err != nil {
+		return nil, 0, fmt.Errorf("count users: %w", err)
+	}
+
+	var users []*models.User
+	if err := tx.Order("created_at DESC").
+		Limit(limit).Offset(offset).
+		Find(&users).Error; err != nil {
+		return nil, 0, fmt.Errorf("list users: %w", err)
+	}
+	return users, total, nil
+}
+
 // ListUsers lists all users (with pagination)
 func (r *UserRepository) ListUsers(ctx context.Context, limit, offset int) ([]*models.User, error) {
 	var users []*models.User

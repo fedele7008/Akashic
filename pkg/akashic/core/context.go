@@ -357,6 +357,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// auth's bind share the pool.
 	app.ControlServer.SetLDAP(app.LDAPClient)
 
+	// Phase 8c.2: user-management handlers reuse the api-server's
+	// userRepo so all writes go through the same audit-aware
+	// methods (DisableUser populates disabled_by, etc.).
+	app.ControlServer.SetUserRepo(userRepo)
+
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
 }

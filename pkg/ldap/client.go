@@ -764,6 +764,38 @@ func (c *Client) CreateUser(username, email, displayName, password string) (stri
 	return userDN, nil
 }
 
+// DeleteUserByDN removes a user entry from LDAP by Distinguished
+// Name. Returns nil on success, including the not-found case — the
+// idempotent semantic matches the operator-facing usermanagement
+// flow ("if it's not there, the goal is already met"). All other
+// errors propagate so the caller can decide whether to retry or
+// roll back.
+//
+// Phase 8c.2 (admin user-management). The deprovisioning loop in
+// pkg/ldap/deprovisioning.go does NOT call this — it only
+// observes LDAP state and reaps the PG row after the grace window.
+// Manual operator deletion is the explicit case this method serves.
+func (c *Client) DeleteUserByDN(dn string) error {
+	if c.conn == nil {
+		return fmt.Errorf("LDAP connection not established")
+	}
+	req := ldap.NewDelRequest(dn, nil)
+	if err := c.conn.Del(req); err != nil {
+		// LDAP NoSuchObject (32) → idempotent success. The user-
+		// management flow's contract is "make this DN gone"; if it's
+		// already gone, that contract is satisfied.
+		if ldap.IsErrorWithCode(err, ldap.LDAPResultNoSuchObject) {
+			c.logger.App.Info("DeleteUserByDN: entry already absent",
+				zap.String("dn", dn))
+			return nil
+		}
+		return fmt.Errorf("LDAP delete %s: %w", dn, err)
+	}
+	c.logger.App.Info("DeleteUserByDN: entry removed",
+		zap.String("dn", dn))
+	return nil
+}
+
 // ListUsers retrieves all users from LDAP (for deprovisioning reconciliation)
 // Returns a map of DN -> UserInfo
 func (c *Client) ListUsers() (map[string]*UserInfo, error) {

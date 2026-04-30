@@ -43,6 +43,117 @@ export interface SetupStatus {
   ldap_ok: boolean;
 }
 
+// ─── Phase 8c.2: user management ──────────────────────────────────
+
+export interface UserView {
+  id: string;
+  ldap_dn: string;
+  user_type: 'root' | 'admin' | 'user';
+  is_disabled: boolean;
+  disabled_at?: string;
+  disabled_by?: string;
+  missing_identity: boolean;
+  missing_identity_since?: string;
+  email_verified: boolean;
+  last_login_at?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ListUsersResponse {
+  users: UserView[];
+  total: number;
+}
+
+export interface UpdateUserRequest {
+  user_type?: 'root' | 'admin' | 'user';
+  is_disabled?: boolean;
+}
+
+export interface UserListParams {
+  limit?: number;
+  offset?: number;
+  user_type?: 'root' | 'admin' | 'user' | '';
+  is_disabled?: boolean;
+  missing_identity?: boolean;
+}
+
+export class UsersApi {
+  /** GET /api/users — list with filters + pagination. */
+  static async list(params: UserListParams = {}): Promise<ListUsersResponse> {
+    const q = new URLSearchParams();
+    if (params.limit !== undefined) q.set('limit', String(params.limit));
+    if (params.offset !== undefined) q.set('offset', String(params.offset));
+    if (params.user_type) q.set('user_type', params.user_type);
+    if (params.is_disabled !== undefined) q.set('is_disabled', String(params.is_disabled));
+    if (params.missing_identity !== undefined) q.set('missing_identity', String(params.missing_identity));
+    const url = '/api/users' + (q.toString() ? '?' + q.toString() : '');
+    const r = await fetch(url, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<ListUsersResponse> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `List failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data;
+  }
+
+  /** GET /api/users/<id>. */
+  static async get(id: string): Promise<UserView> {
+    const r = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ user: UserView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Get failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.user;
+  }
+
+  /** PATCH /api/users/<id> — update user_type and/or is_disabled. */
+  static async patch(id: string, req: UpdateUserRequest): Promise<UserView> {
+    const r = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify(req),
+    });
+    const body: ApiResponse<{ user: UserView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Update failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.user;
+  }
+
+  /** DELETE /api/users/<id> — hard-delete (LDAP + PG). */
+  static async remove(id: string): Promise<void> {
+    const r = await fetch(`/api/users/${encodeURIComponent(id)}`, {
+      method: 'DELETE',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ deleted: boolean }> = await r.json();
+    if (!r.ok || !body.success) {
+      const err = new Error(body.error?.message ?? `Delete failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+  }
+}
+
 /**
  * Snapshot of the akashic server's runtime state — Phase 8c.3.
  * Inner subsystem dicts are loose because the control plane composes

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"time"
 
 	"akashic/akashic/pkg/pki"
@@ -358,6 +360,144 @@ func (c *ControlClient) StatusGet(ctx context.Context) (*SystemStatus, error) {
 // state) to user-friendly messages.
 func (c *ControlClient) PostAction(ctx context.Context, path string) error {
 	resp, body, err := c.do(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return parseControlError(resp.StatusCode, body)
+	}
+	return nil
+}
+
+// ─── Phase 8c.2: user management ──────────────────────────────────
+
+// UserView mirrors the control-plane response shape for one user.
+type UserView struct {
+	ID                   string  `json:"id"`
+	LdapDN               string  `json:"ldap_dn"`
+	UserType             string  `json:"user_type"`
+	IsDisabled           bool    `json:"is_disabled"`
+	DisabledAt           string  `json:"disabled_at,omitempty"`
+	DisabledBy           string  `json:"disabled_by,omitempty"`
+	MissingIdentity      bool    `json:"missing_identity"`
+	MissingIdentitySince string  `json:"missing_identity_since,omitempty"`
+	EmailVerified        bool    `json:"email_verified"`
+	LastLoginAt          *string `json:"last_login_at,omitempty"`
+	CreatedAt            string  `json:"created_at"`
+	UpdatedAt            string  `json:"updated_at"`
+}
+
+type ListUsersResponse struct {
+	Users []UserView `json:"users"`
+	Total int64      `json:"total"`
+}
+
+// UpdateUserRequest mirrors the control-plane PATCH /users/<id> body.
+// Pointer fields distinguish "leave unchanged" from "set to false";
+// CallerUserID flows in from the BFF's session so the domain layer
+// can run self-protection invariants.
+type UpdateUserRequest struct {
+	UserType     *string `json:"user_type,omitempty"`
+	IsDisabled   *bool   `json:"is_disabled,omitempty"`
+	CallerUserID string  `json:"caller_user_id,omitempty"`
+}
+
+// UserListParams bundles pagination + filter params for UserList.
+type UserListParams struct {
+	Limit           int
+	Offset          int
+	UserType        string
+	IsDisabled      *bool
+	MissingIdentity *bool
+}
+
+func (c *ControlClient) UserList(ctx context.Context, p UserListParams) (*ListUsersResponse, error) {
+	q := url.Values{}
+	if p.Limit > 0 {
+		q.Set("limit", strconv.Itoa(p.Limit))
+	}
+	if p.Offset > 0 {
+		q.Set("offset", strconv.Itoa(p.Offset))
+	}
+	if p.UserType != "" {
+		q.Set("user_type", p.UserType)
+	}
+	if p.IsDisabled != nil {
+		q.Set("is_disabled", strconv.FormatBool(*p.IsDisabled))
+	}
+	if p.MissingIdentity != nil {
+		q.Set("missing_identity", strconv.FormatBool(*p.MissingIdentity))
+	}
+	path := "/users"
+	if encoded := q.Encode(); encoded != "" {
+		path += "?" + encoded
+	}
+	resp, body, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var out ListUsersResponse
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		return nil, fmt.Errorf("malformed list-users payload: %w", err)
+	}
+	return &out, nil
+}
+
+func (c *ControlClient) UserGet(ctx context.Context, userID string) (*UserView, error) {
+	resp, body, err := c.do(ctx, http.MethodGet, "/users/"+userID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		User UserView `json:"user"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed user payload: %w", err)
+	}
+	return &wrap.User, nil
+}
+
+func (c *ControlClient) UserPatch(ctx context.Context, userID string, req *UpdateUserRequest) (*UserView, error) {
+	resp, body, err := c.do(ctx, http.MethodPatch, "/users/"+userID, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		User UserView `json:"user"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed user payload: %w", err)
+	}
+	return &wrap.User, nil
+}
+
+func (c *ControlClient) UserDelete(ctx context.Context, userID, callerUserID string) error {
+	path := "/users/" + userID
+	if callerUserID != "" {
+		path += "?caller_user_id=" + callerUserID
+	}
+	resp, body, err := c.do(ctx, http.MethodDelete, path, nil)
 	if err != nil {
 		return err
 	}

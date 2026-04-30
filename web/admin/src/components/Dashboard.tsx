@@ -7,6 +7,7 @@ import { SetupStatusBanner } from './SetupStatusBanner';
 import { Sidebar, type Page } from './Sidebar';
 import { ToolsPage } from './ToolsPage';
 import { Topbar } from './Topbar';
+import { UsersPage } from './UsersPage';
 
 /**
  * Dashboard — the post-bootstrap, post-login app shell.
@@ -67,6 +68,7 @@ export function Dashboard({ session }: { session: SessionInfo }) {
           {page === 'overview' && (
             <OverviewPage session={session} onNavigate={handleNavigate} />
           )}
+          {page === 'users' && <UsersPage session={session} />}
           {page === 'clients' && <ClientsPage session={session} />}
           {page === 'server' && <ServerPage />}
           {page === 'tools' && <ToolsPage />}
@@ -80,6 +82,8 @@ function pageTitleFor(page: Page): string {
   switch (page) {
     case 'overview':
       return 'Overview';
+    case 'users':
+      return 'Users';
     case 'clients':
       return 'OAuth clients';
     case 'server':

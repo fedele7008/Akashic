@@ -4,8 +4,170 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 )
+
+// ─── Phase 8c.2: user management ──────────────────────────────────
+//
+// Pure proxies to the control plane's /users + /users/<id>, with
+// session-gating to admin/root and BFF-side self-protection
+// (the control plane has no concept of "the calling user" — only
+// the mTLS CN — so the BFF is the natural layer to enforce
+// "you can't demote/delete yourself").
+//
+// The control plane runs the *cross-row* invariants (last-root) on
+// its own; the BFF passes caller_user_id through so the control
+// plane's domain-layer self-protection can also fire (defense in
+// depth — we don't trust the BFF to be the only enforcement layer).
+
+func (s *Server) handleListUsers(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	q := r.URL.Query()
+	limit, _ := strconv.Atoi(q.Get("limit"))
+	offset, _ := strconv.Atoi(q.Get("offset"))
+	params := UserListParams{
+		Limit:           limit,
+		Offset:          offset,
+		UserType:        q.Get("user_type"),
+		IsDisabled:      parseTriBoolQuery(q.Get("is_disabled")),
+		MissingIdentity: parseTriBoolQuery(q.Get("missing_identity")),
+	}
+	resp, err := s.controlClient.UserList(r.Context(), params)
+	if err != nil {
+		s.writeControlError(w, err, "listing users")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"users": resp.Users, "total": resp.Total},
+	})
+}
+
+func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	id := strings.TrimPrefix(r.URL.Path, "/api/users/")
+	if id == "" || strings.Contains(id, "/") {
+		writeError(w, http.StatusNotFound, "NOT_FOUND",
+			"No route for this path.")
+		return
+	}
+	switch r.Method {
+	case http.MethodGet:
+		s.proxyGetUser(w, r, id)
+	case http.MethodPatch:
+		s.proxyPatchUser(w, r, id)
+	case http.MethodDelete:
+		s.proxyDeleteUser(w, r, id)
+	default:
+		writeError(w, http.StatusMethodNotAllowed,
+			"METHOD_NOT_ALLOWED", "Only GET / PATCH / DELETE on /api/users/<id>.")
+	}
+}
+
+func (s *Server) proxyGetUser(w http.ResponseWriter, r *http.Request, id string) {
+	user, err := s.controlClient.UserGet(r.Context(), id)
+	if err != nil {
+		s.writeControlError(w, err, "fetching user")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"user": user},
+	})
+}
+
+func (s *Server) proxyPatchUser(w http.ResponseWriter, r *http.Request, id string) {
+	var body UpdateUserRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"Could not parse request body.")
+		return
+	}
+	defer r.Body.Close()
+
+	// Resolve the caller from session — overrides any caller_user_id
+	// the FE may have set (don't trust client-supplied identity).
+	callerID := s.callerUserIDFromSession(r)
+	body.CallerUserID = callerID
+
+	// BFF-side self-protection. Belt-and-braces alongside the control
+	// plane's enforcement. Catches the case where someone calls the
+	// BFF with a forged path; the BFF rejects before the control
+	// plane ever sees it. Cheaper feedback for the FE.
+	if callerID != "" && callerID == id {
+		// Disabling self is allowed (recoverable by another admin);
+		// only block role changes that would lock you out.
+		if body.UserType != nil && *body.UserType != "" {
+			writeError(w, http.StatusConflict, "SELF_DEMOTION",
+				"You cannot change your own role from this surface. Ask another admin.")
+			return
+		}
+	}
+
+	user, err := s.controlClient.UserPatch(r.Context(), id, &body)
+	if err != nil {
+		s.writeControlError(w, err, "updating user")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"user": user},
+	})
+}
+
+func (s *Server) proxyDeleteUser(w http.ResponseWriter, r *http.Request, id string) {
+	callerID := s.callerUserIDFromSession(r)
+	if callerID != "" && callerID == id {
+		writeError(w, http.StatusConflict, "SELF_DELETION",
+			"You cannot delete your own account from this surface.")
+		return
+	}
+	if err := s.controlClient.UserDelete(r.Context(), id, callerID); err != nil {
+		s.writeControlError(w, err, "deleting user")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"deleted": true},
+	})
+}
+
+// callerUserIDFromSession extracts the operator's user_id from the
+// admin-bff session. Returns "" if no session — the caller has
+// already passed requireAdminSession at this point, so empty is
+// only possible during a race where the session expired between
+// the gate and here. Treated the same as "unknown" — the control
+// plane will run its own invariants regardless.
+func (s *Server) callerUserIDFromSession(r *http.Request) string {
+	sid := readCookie(r, sessionCookieName)
+	if sid == "" {
+		return ""
+	}
+	sess, err := s.sessions.Touch(r.Context(), sid)
+	if err != nil || sess == nil {
+		return ""
+	}
+	return sess.UserID
+}
+
+// parseTriBoolQuery is the BFF-side mirror of the control plane's
+// parseTriBool — kept here too so we can validate at the BFF
+// boundary without an extra round-trip for invalid filter values.
+func parseTriBoolQuery(s string) *bool {
+	t, f := true, false
+	switch strings.ToLower(s) {
+	case "true", "1", "yes":
+		return &t
+	case "false", "0", "no":
+		return &f
+	}
+	return nil
+}
 
 // ─── Phase 8c.3: server control panel ─────────────────────────────
 //
@@ -517,6 +679,14 @@ func (s *Server) writeControlError(w http.ResponseWriter, err error, context str
 			writeError(w, http.StatusConflict, ctlErr.Code, ctlErr.Message)
 		case "CONFIG_RELOAD_FAILED", "TLS_RELOAD_FAILED":
 			writeError(w, http.StatusInternalServerError, ctlErr.Code, ctlErr.Message)
+		// Phase 8c.2: user-management invariant errors. Pass the
+		// control-plane message through verbatim — it's already
+		// user-facing-grade ("operation would leave the deployment
+		// with no root users").
+		case "USER_NOT_FOUND":
+			writeError(w, http.StatusNotFound, ctlErr.Code, ctlErr.Message)
+		case "LAST_ROOT", "SELF_DEMOTION", "SELF_DELETION":
+			writeError(w, http.StatusConflict, ctlErr.Code, ctlErr.Message)
 		default:
 			// Any other 4xx → 400; 5xx → 502.
 			status := http.StatusBadGateway
