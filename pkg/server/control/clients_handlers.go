@@ -1,18 +1,16 @@
 package control
 
 import (
-	"crypto/rand"
-	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strings"
 
+	"akashic/akashic/pkg/clientservice"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/server/response"
 
 	"go.uber.org/zap"
-	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
 )
 
@@ -264,33 +262,20 @@ func (s *Server) handleAdminDeleteClient(w http.ResponseWriter, r *http.Request,
 // Rejected for built-ins (server-managed) and public/SPA clients
 // (have no shared secret — PKCE replaces it).
 func (s *Server) handleAdminRotateSecret(w http.ResponseWriter, r *http.Request, c *models.ClientService) {
-	if c.BuiltIn {
+	secret, err := clientservice.RotateSecret(r.Context(), s.db, c)
+	switch {
+	case errors.Is(err, clientservice.ErrBuiltInImmutable):
 		response.WriteJSON(w, http.StatusForbidden,
 			response.Fail("BUILTIN_IMMUTABLE",
 				"built-in clients' secrets are managed by the server itself", nil))
 		return
-	}
-	if c.Public {
+	case errors.Is(err, clientservice.ErrPublicClientNoSecret):
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("PUBLIC_CLIENT_NO_SECRET",
 				"public (SPA) clients have no client_secret; PKCE replaces it on every authorization", nil))
 		return
-	}
-	secret, err := generateAdminClientSecret()
-	if err != nil {
-		response.WriteJSON(w, http.StatusInternalServerError,
-			response.Fail("INTERNAL", "could not generate secret", nil))
-		return
-	}
-	hash, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
-	if err != nil {
-		response.WriteJSON(w, http.StatusInternalServerError,
-			response.Fail("INTERNAL", "could not hash secret", nil))
-		return
-	}
-	if err := s.db.WithContext(r.Context()).Model(c).
-		Update("client_secret_hash", string(hash)).Error; err != nil {
-		s.logger.App.Error("adminRotateSecret: db", zap.Error(err))
+	case err != nil:
+		s.logger.App.Error("adminRotateSecret", zap.Error(err))
 		response.WriteJSON(w, http.StatusInternalServerError,
 			response.Fail("INTERNAL", "could not rotate secret", nil))
 		return
@@ -366,93 +351,35 @@ func (s *Server) handleAdminCreateClient(w http.ResponseWriter, r *http.Request)
 		requirePKCE = *req.RequirePKCE
 	}
 
-	clientID, err := generateAdminClientID()
+	// OwnerUserID stays nil — operator-created clients have no
+	// per-user owner. The api-server's canManage() check (admin/root
+	// user_type can manage anything) still allows later UI-driven
+	// edits by an authenticated operator.
+	result, err := clientservice.Create(r.Context(), s.db, clientservice.CreateParams{
+		Name:          req.Name,
+		Description:   req.Description,
+		HomepageURL:   req.HomepageURL,
+		Public:        public,
+		RequirePKCE:   requirePKCE,
+		RedirectURIs:  req.RedirectURIs,
+		AllowedScopes: req.AllowedScopes,
+		OwnerUserID:   nil,
+	})
 	if err != nil {
-		response.WriteJSON(w, http.StatusInternalServerError,
-			response.Fail("INTERNAL", "could not generate client_id", nil))
-		return
-	}
-	var (
-		secret string
-		hash   string
-	)
-	if !public {
-		secret, err = generateAdminClientSecret()
-		if err != nil {
-			response.WriteJSON(w, http.StatusInternalServerError,
-				response.Fail("INTERNAL", "could not generate client secret", nil))
-			return
-		}
-		h, err := bcrypt.GenerateFromPassword([]byte(secret), bcrypt.DefaultCost)
-		if err != nil {
-			response.WriteJSON(w, http.StatusInternalServerError,
-				response.Fail("INTERNAL", "could not hash secret", nil))
-			return
-		}
-		hash = string(h)
-	}
-
-	row := models.ClientService{
-		ClientID:         clientID,
-		ClientSecretHash: hash,
-		Name:             req.Name,
-		Description:      req.Description,
-		HomepageURL:      req.HomepageURL,
-		RedirectURIs:     req.RedirectURIs,
-		AllowedScopes:    req.AllowedScopes,
-		AuthTypes:        string(models.AuthTypeAuthorizationCode),
-		BuiltIn:          false,
-		Public:           public,
-		RequirePKCE:      requirePKCE,
-		// OwnerUserID stays NULL — operator-created clients have no
-		// per-user owner. The /clients API-server canManage() check
-		// (admin/root user_type can manage anything) still allows
-		// later UI-driven edits by an authenticated operator.
-		OwnerUserID: nil,
-	}
-	if err := s.db.WithContext(r.Context()).Create(&row).Error; err != nil {
-		s.logger.App.Error("adminCreateClient: db insert", zap.Error(err))
+		s.logger.App.Error("adminCreateClient: clientservice.Create", zap.Error(err))
 		response.WriteJSON(w, http.StatusInternalServerError,
 			response.Fail("INTERNAL", "could not create client", nil))
 		return
 	}
 
 	s.logger.Security.Info("oauth client created via control plane",
-		zap.String("client_id", clientID),
+		zap.String("client_id", result.Client.ClientID),
 		zap.String("name", req.Name),
 		zap.String("client_type", req.ClientType),
 		zap.Bool("require_pkce", requirePKCE))
 
 	response.WriteJSON(w, http.StatusCreated, response.Success(adminCreateClientResponse{
-		Client:       toAdminClientView(&row),
-		ClientSecret: secret,
+		Client:       toAdminClientView(result.Client),
+		ClientSecret: result.Secret,
 	}))
-}
-
-// generateAdminClientID produces a `tc-` (tenant-client) prefixed
-// 10-hex-char ID. Mirrors the API-server's generateClientID — same
-// shape so operators reading the DB can't tell at a glance which
-// surface a row was created through.
-func generateAdminClientID() (string, error) {
-	buf := make([]byte, 5)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	const hex = "0123456789abcdef"
-	out := make([]byte, len(buf)*2)
-	for i, b := range buf {
-		out[i*2] = hex[b>>4]
-		out[i*2+1] = hex[b&0x0f]
-	}
-	return "tc-" + string(out), nil
-}
-
-// generateAdminClientSecret produces a 32-byte base64url secret.
-// Same entropy + format as the API-server side.
-func generateAdminClientSecret() (string, error) {
-	buf := make([]byte, 32)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }

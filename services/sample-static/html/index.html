@@ -61,6 +61,24 @@
       color: #4ade80;
       font-size: 0.875rem;
     }
+    .setup-banner {
+      padding: 1rem;
+      border-radius: 0.5rem;
+      border: 2px solid #f59e0b;
+      background: rgba(245, 158, 11, 0.08);
+      font-size: 0.875rem;
+    }
+    .setup-banner strong { display: block; margin-bottom: 0.5rem; }
+    .setup-banner pre {
+      margin: 0.5rem 0 0 0;
+      padding: 0.625rem;
+      background: rgba(0, 0, 0, 0.3);
+      border-radius: 0.25rem;
+      overflow-x: auto;
+      font-size: 0.8rem;
+      white-space: pre-wrap;
+      word-break: break-all;
+    }
   </style>
 </head>
 <body>
@@ -97,12 +115,43 @@
   </section>
 
   <script>
-    // Simple session UI — show "Sign in" button if no token,
-    // "Signed in / Sign out" if we have one. The widgets pick up
-    // the token automatically via AkashicOAuth.applyToWidgets()
-    // (called on DOMContentLoaded inside _oauth.js).
-    (function renderAuthState() {
+    // Simple session UI with three states:
+    //   1. Sample not yet registered → setup banner with the exact
+    //      `clients create` command (and the sign-in button is hidden,
+    //      because clicking it would just throw)
+    //   2. Registered + no token → "Sign in" button
+    //   3. Signed in → status + sign-out button
+    //
+    // checkConfigured() probes /akashic-config.json (nginx-served from
+    // .secrets/sample/static.json). Async because it has to fetch.
+    (async function renderAuthState() {
       const box = document.getElementById("auth-state");
+
+      const config = await AkashicOAuth.checkConfigured();
+      if (!config.ok && config.code === "NOT_CONFIGURED") {
+        box.innerHTML =
+          '<div class="setup-banner">' +
+          '<strong>⚠ This sample is not yet registered with Akashic.</strong>' +
+          'Run the following on the host that has akashic-cli configured ' +
+          'against your deployment:' +
+          '<pre id="fix-cmd"></pre>' +
+          'Then refresh this page.' +
+          '</div>';
+        // Use textContent for the command to avoid HTML-injecting the
+        // location.origin (which is operator-controlled but worth being
+        // hygienic about anyway).
+        document.getElementById("fix-cmd").textContent = config.fixCommand;
+        return;
+      }
+      if (!config.ok) {
+        box.innerHTML =
+          '<div class="setup-banner">' +
+          '<strong>Could not load sample configuration.</strong>' +
+          '<pre></pre></div>';
+        box.querySelector("pre").textContent = config.message;
+        return;
+      }
+
       const t = AkashicOAuth.getAccessToken();
       if (t) {
         box.innerHTML =

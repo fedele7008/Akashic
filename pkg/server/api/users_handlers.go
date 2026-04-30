@@ -106,7 +106,7 @@ func (s *Server) handleRegisterUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	policy := auth.DefaultPasswordPolicy()
+	policy := s.policyFromConfig()
 	if err := policy.Validate(req.Password); err != nil {
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("PASSWORD_POLICY_VIOLATION", err.Error(), nil))
@@ -316,7 +316,7 @@ func (s *Server) handleChangePassword(w http.ResponseWriter, r *http.Request, ui
 				"old_password and new_password are required", nil))
 		return
 	}
-	policy := auth.DefaultPasswordPolicy()
+	policy := s.policyFromConfig()
 	if err := policy.Validate(req.NewPassword); err != nil {
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("PASSWORD_POLICY_VIOLATION", err.Error(), nil))
@@ -378,10 +378,10 @@ func (s *Server) handleForgotPasswordHelp(w http.ResponseWriter, r *http.Request
 // validation in /users/register and /users/me/password remains
 // authoritative.
 //
-// Mirrors the same `*PasswordPolicy` shape returned by
-// auth.DefaultPasswordPolicy() — the very policy /users/register
-// validates against today, so the UI's pre-flight check matches the
-// server's reject criteria one-to-one.
+// Returns the same operator-configured policy that /users/register
+// and /users/me/password validate against — sourced from
+// `bootstrap.password.*` in the akashic-server config — so the UI's
+// pre-flight check matches the server's reject criteria one-to-one.
 func (s *Server) handlePasswordPolicy(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		response.WriteJSON(w, http.StatusMethodNotAllowed,
@@ -389,11 +389,32 @@ func (s *Server) handlePasswordPolicy(w http.ResponseWriter, r *http.Request) {
 				"only GET is allowed", nil))
 		return
 	}
-	policy := auth.DefaultPasswordPolicy()
+	policy := s.policyFromConfig()
 	response.WriteJSON(w, http.StatusOK, response.Success(policy))
 }
 
 // ─── helpers ───────────────────────────────────────────────────────
+
+// policyFromConfig builds an auth.PasswordPolicy from the operator's
+// `bootstrap.password.*` config block. Replaces the previous behavior
+// where /users/register, /users/me/password, and /users/password-policy
+// all used auth.DefaultPasswordPolicy() — silently ignoring whatever
+// the operator had set in config.
+//
+// `RequireLowercase` isn't operator-configurable today (the auth
+// package's defaults hard-code it to true on the principle that
+// allowing all-uppercase passwords is rarely intended); we preserve
+// that invariant here regardless of config shape.
+func (s *Server) policyFromConfig() *auth.PasswordPolicy {
+	cfg := s.config.GetConfig().Bootstrap.Password
+	return &auth.PasswordPolicy{
+		MinLength:        cfg.MinLength,
+		RequireUppercase: cfg.RequireUppercase,
+		RequireLowercase: true,
+		RequireNumber:    cfg.RequireNumber,
+		RequireSpecial:   cfg.RequireSpecial,
+	}
+}
 
 func looksLikeEmail(s string) bool {
 	at := strings.IndexByte(s, '@')

@@ -42,23 +42,76 @@
   // memory so a freshly-registered client takes effect with no
   // container restart, but normal /authorize clicks don't pay the
   // round-trip.
+  //
+  // Tagged error class so callers can distinguish "operator hasn't
+  // run `clients create` yet" (actionable, render a setup banner)
+  // from real errors (network blip, malformed JSON — propagate).
+  function ConfigurationError(message) {
+    const err = new Error(message);
+    err.name = "ConfigurationError";
+    err.code = "NOT_CONFIGURED";
+    err.fixCommand =
+      "akashic-cli clients create --type SPA --name \"Static sample\" " +
+      "--redirect-uri " + location.origin + "/callback " +
+      "--save-credentials-to .secrets/sample/static.json";
+    return err;
+  }
+
   let _configCache = null;
   async function getClientId() {
     if (_configCache) return _configCache.client_id;
     const res = await fetch("/akashic-config.json", { cache: "no-store" });
-    if (!res.ok) {
-      throw new Error(
-        "Sample not yet registered. Run: akashic-cli clients create " +
-        "--type SPA --name \"Static sample\" --redirect-uri " +
-        location.origin + "/callback --save-credentials-to " +
-        ".secrets/sample/static.json"
+    if (res.status === 404) {
+      throw ConfigurationError(
+        "Sample not yet registered with Akashic — credentials file missing."
       );
     }
-    _configCache = await res.json();
-    if (!_configCache.client_id) {
-      throw new Error("akashic-config.json missing client_id field");
+    if (!res.ok) {
+      throw new Error(
+        "Could not fetch /akashic-config.json (HTTP " + res.status + ")"
+      );
     }
+    let parsed;
+    try {
+      parsed = await res.json();
+    } catch (e) {
+      throw new Error("akashic-config.json is not valid JSON: " + e.message);
+    }
+    if (!parsed.client_id) {
+      throw ConfigurationError(
+        "akashic-config.json is present but missing the `client_id` field."
+      );
+    }
+    _configCache = parsed;
     return _configCache.client_id;
+  }
+
+  /**
+   * Probe whether the sample is registered. Returns a Promise that
+   * resolves to:
+   *   { ok: true,  client_id }
+   *   { ok: false, code: "NOT_CONFIGURED", message, fixCommand }
+   *   { ok: false, code: "ERROR",          message }
+   *
+   * Pages call this on load to render a setup banner when the
+   * operator hasn't run `clients create` yet, instead of letting
+   * the first Sign-in click throw an uncaught console error.
+   */
+  async function checkConfigured() {
+    try {
+      const id = await getClientId();
+      return { ok: true, client_id: id };
+    } catch (e) {
+      if (e.code === "NOT_CONFIGURED") {
+        return {
+          ok: false,
+          code: "NOT_CONFIGURED",
+          message: e.message,
+          fixCommand: e.fixCommand,
+        };
+      }
+      return { ok: false, code: "ERROR", message: e.message };
+    }
   }
 
   const SCOPE = "openid profile email";
@@ -235,6 +288,7 @@
     signout: signout,
     getAccessToken: getAccessToken,
     applyToWidgets: applyToWidgets,
+    checkConfigured: checkConfigured,
   };
 
   // Auto-apply on DOM ready so authenticated pages don't have to
