@@ -3,6 +3,7 @@ import {
   ChevronExpandIcon,
   DashboardIcon,
   KeyIcon,
+  ServerIcon,
   ToolsIcon,
 } from './icons';
 
@@ -13,7 +14,7 @@ import {
  * extending the union, the `NAV_ITEMS` array below, and the
  * page-render switch in `AppShell`.
  */
-export type Page = 'overview' | 'clients' | 'tools';
+export type Page = 'overview' | 'clients' | 'server' | 'tools';
 
 interface NavEntry {
   page: Page;
@@ -24,6 +25,7 @@ interface NavEntry {
 const NAV_ITEMS: NavEntry[] = [
   { page: 'overview', label: 'Overview', icon: DashboardIcon },
   { page: 'clients', label: 'OAuth clients', icon: KeyIcon },
+  { page: 'server', label: 'Server', icon: ServerIcon },
   { page: 'tools', label: 'Tools', icon: ToolsIcon },
 ];
 

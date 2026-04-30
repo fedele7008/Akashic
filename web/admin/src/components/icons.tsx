@@ -101,6 +101,18 @@ export function WarningIcon({ size = 18, className, style }: IconProps) {
   );
 }
 
+/** Server stack — sidebar entry for the Server control page. */
+export function ServerIcon({ size = 18, className, style }: IconProps) {
+  return (
+    <svg {...base(size)} className={className} style={style} aria-hidden="true">
+      <rect x="2" y="2" width="20" height="8" rx="2" ry="2" />
+      <rect x="2" y="14" width="20" height="8" rx="2" ry="2" />
+      <line x1="6" y1="6" x2="6.01" y2="6" />
+      <line x1="6" y1="18" x2="6.01" y2="18" />
+    </svg>
+  );
+}
+
 /** Wrench / tools — sidebar entry for the Tools page. */
 export function ToolsIcon({ size = 18, className, style }: IconProps) {
   return (

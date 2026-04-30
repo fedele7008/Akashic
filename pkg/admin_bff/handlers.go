@@ -7,6 +7,87 @@ import (
 	"strings"
 )
 
+// ─── Phase 8c.3: server control panel ─────────────────────────────
+//
+// Six routes, all session-gated to admin/root, all proxied to the
+// mTLS control plane via s.controlClient. The control plane already
+// owns the state-machine logic (auth-server lifecycle, api-server
+// lifecycle, graceful shutdown, config/TLS reload); these handlers
+// are pure pass-through with the BFF's standard envelope.
+//
+// Why not a single dispatcher: each route maps to a different
+// control-plane path and HTTP method, so a dispatcher would just
+// be a switch statement with the route names duplicated. Six
+// explicit handlers keep the routing table readable.
+
+// handleAdminServerStatus is GET /api/admin/server/status — the
+// snapshot the FE's Server page renders. Read-only, idempotent.
+func (s *Server) handleAdminServerStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	status, err := s.controlClient.StatusGet(r.Context())
+	if err != nil {
+		s.writeControlError(w, err, "fetching server status")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    status,
+	})
+}
+
+// proxyServerAction wraps the common "session-gate, post to
+// control plane, write empty success or upstream error" flow used
+// by every state-changing button on the Server page. `controlPath`
+// is the control-plane relative URL; `actionName` is a short human
+// phrase ("starting auth server") used in error messages.
+func (s *Server) proxyServerAction(w http.ResponseWriter, r *http.Request, controlPath, actionName string) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	if err := s.controlClient.PostAction(r.Context(), controlPath); err != nil {
+		s.writeControlError(w, err, actionName)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"ok": true},
+	})
+}
+
+func (s *Server) handleAdminAuthStart(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/auth/start", "starting auth server")
+}
+func (s *Server) handleAdminAuthStop(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/auth/stop", "stopping auth server")
+}
+func (s *Server) handleAdminAuthRestart(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/auth/restart", "restarting auth server")
+}
+
+func (s *Server) handleAdminAPIStart(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/api/start", "starting API server")
+}
+func (s *Server) handleAdminAPIStop(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/api/stop", "stopping API server")
+}
+func (s *Server) handleAdminAPIRestart(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/api/restart", "restarting API server")
+}
+
+func (s *Server) handleAdminServerQuit(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/server/quit", "shutting down akashic")
+}
+
+func (s *Server) handleAdminConfigReload(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/config/reload", "reloading config")
+}
+
+func (s *Server) handleAdminTLSReload(w http.ResponseWriter, r *http.Request) {
+	s.proxyServerAction(w, r, "/tls/reload", "reloading TLS certificates")
+}
+
 // adminTool is the wire shape for one row in the tools card grid.
 // Hardcoded label + icon-key; only URL is operator-supplied so the
 // FE renders a closed catalog of known tools rather than an
@@ -422,6 +503,20 @@ func (s *Server) writeControlError(w http.ResponseWriter, err error, context str
 		case "DB_NOT_READY":
 			writeError(w, http.StatusServiceUnavailable, "DB_NOT_READY",
 				"The akashic-server's database isn't fully wired yet. Retry shortly.")
+		// Phase 8c.3: state-machine errors from the auth/api lifecycle
+		// endpoints. The control plane's message ("Auth server is already
+		// running", "Cannot restart during transitional state", etc.) is
+		// already user-facing-grade, so pass it through verbatim with the
+		// upstream's 409 status preserved.
+		case "AUTH_SERVER_ALREADY_RUNNING", "AUTH_SERVER_NOT_RUNNING",
+			"AUTH_SERVER_STARTING", "AUTH_SERVER_STOPPING",
+			"AUTH_SERVER_ERROR":
+			writeError(w, http.StatusConflict, ctlErr.Code, ctlErr.Message)
+		case "API_NOT_WIRED", "API_START_FAILED", "API_STOP_FAILED",
+			"API_RESTART_FAILED":
+			writeError(w, http.StatusConflict, ctlErr.Code, ctlErr.Message)
+		case "CONFIG_RELOAD_FAILED", "TLS_RELOAD_FAILED":
+			writeError(w, http.StatusInternalServerError, ctlErr.Code, ctlErr.Message)
 		default:
 			// Any other 4xx → 400; 5xx → 502.
 			status := http.StatusBadGateway

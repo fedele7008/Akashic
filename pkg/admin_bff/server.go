@@ -299,6 +299,45 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminTools)))
 
+	// Phase 8c.3: server control panel. Read snapshot + state-changing
+	// lifecycle proxies. All session-gated to admin/root inside the
+	// handlers; CSRF enforced on POST routes via the standard
+	// middleware stack. Rate-limited via the looser bucket since
+	// these are operator-driven, not high-frequency.
+	mux.HandleFunc("GET /api/admin/server/status",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminServerStatus)))
+
+	mux.HandleFunc("POST /api/admin/server/auth/start",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminAuthStart)))
+	mux.HandleFunc("POST /api/admin/server/auth/stop",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminAuthStop)))
+	mux.HandleFunc("POST /api/admin/server/auth/restart",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminAuthRestart)))
+
+	mux.HandleFunc("POST /api/admin/server/api/start",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminAPIStart)))
+	mux.HandleFunc("POST /api/admin/server/api/stop",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminAPIStop)))
+	mux.HandleFunc("POST /api/admin/server/api/restart",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminAPIRestart)))
+
+	mux.HandleFunc("POST /api/admin/server/quit",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminServerQuit)))
+	mux.HandleFunc("POST /api/admin/server/config/reload",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminConfigReload)))
+	mux.HandleFunc("POST /api/admin/server/tls/reload",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminTLSReload)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).

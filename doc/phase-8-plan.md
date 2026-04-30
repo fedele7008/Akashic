@@ -1080,18 +1080,46 @@ user management actually needs.
 - Frontend: list page with search + filters, detail/edit modal,
   promote/demote buttons gated behind a confirm dialog.
 
-### 8c.3 — Server control panel ⏳
+### 8c.3 — Server control panel ✅
 
-Mostly proxy work — the control server already exposes
-`/auth/{start,stop,restart}`, `/server/quit`, `/status`, and
-`/config/reload`. Surface them in the admin UI.
+A "Server" sidebar entry surfacing the control plane's existing
+lifecycle / reload endpoints with appropriate confirm gating on
+state-changing actions.
 
-- Backend: thin admin-bff routes that proxy each control
-  endpoint. No new control-plane endpoints needed.
-- Frontend: a "Server" page with a status badge per subsystem and
-  action buttons. Destructive actions (`server quit`, `auth stop`)
-  gated behind a "type the deployment hostname to confirm" modal,
-  matching the AWS pattern for production deletions.
+**As-shipped scope:**
+- Pure proxy: no new control-plane endpoints. The BFF wraps the
+  ten existing routes (`GET /status`, `POST /{auth,api}/{start,stop,restart}`,
+  `POST /server/quit`, `POST /config/reload`, `POST /tls/reload`)
+  via a shared `proxyServerAction` helper.
+- Backend: typed `ServerApi` on the BFF + a single `PostAction`
+  helper on the control client. State-machine error codes
+  (`AUTH_SERVER_ALREADY_RUNNING`, `API_NOT_WIRED`, etc.) pass
+  through with their upstream message verbatim — the control
+  plane's wording is already user-facing-grade.
+- Frontend: `<ServerPage>` with three sections —
+  status snapshot (auth/control state badges, address, uptime,
+  PID), per-subsystem action rows (start / restart / stop), and
+  a card grid for reload-config / reload-TLS / shut-down.
+- New reusable `<ConfirmModal>` component with optional
+  type-to-confirm phrase input. Closes on Escape, backdrop
+  click, or Cancel; the parent decides when to close on a
+  successful Confirm. Supports a busy state so the modal stays
+  open with "Working…" while an action runs.
+- Confirm-gating policy:
+  - **Type-to-confirm** (`STOP AUTH SERVER`, `STOP API SERVER`,
+    `SHUTDOWN AKASHIC`): actions that affect *other users* — auth
+    stop breaks sign-in for everyone; api stop breaks bearer auth
+    for everyone; quit shuts the whole deployment down.
+  - **Yes/no confirm**: restart actions (brief outage but
+    self-recovering) and reload actions (non-disruptive when
+    successful, no-op when validation fails).
+  - **No confirm**: start actions (recovery; no-op if already
+    running, returns 409).
+- New `button.destructive` CSS class — same shape as `.primary`
+  but red — distinct from inline `.error` message styling.
+- New `.success` peer of `.error` for the action-completed banner;
+  auto-clears 5s after a success but stays until next-action on
+  errors.
 
 ### 8c.4 — Client services: detail + edit ⏳
 
@@ -1200,10 +1228,15 @@ the schema-changing pieces.
    entry gone immediately) or soft-delete with grace period
    (mirrors the existing 90-day deprovisioning behavior)? Soft
    is safer; hard matches operator intuition.
-3. **"Type to confirm" gating threshold** — Which actions
-   warrant it? Default proposal: anything affecting *other users*
-   (delete user, demote root) or *shared state* (server quit,
-   auth stop). Plain client edits and tool-link clicks don't.
+3. **"Type to confirm" gating threshold** ✅ **resolved** (Phase
+   8c.3 shipped using this rule): type-to-confirm for actions
+   that affect *other users* (auth stop, api stop, server quit,
+   delete user, demote root); simple yes/no confirm for restart
+   and reload actions; no confirm for start and pure-read
+   actions. Confirm phrase is the literal action name in caps
+   (`STOP AUTH SERVER`, `SHUTDOWN AKASHIC`) — AWS's pattern,
+   easier to implement correctly than "type the hostname" and
+   harder to do accidentally.
 4. **Tool-link configuration shape** ✅ **resolved**: individual
    env vars per tool (`AKASHIC_BFF_TOOLS_*_URL`). Reasoning: each
    tool needs a hardcoded label + icon on the FE anyway, so the

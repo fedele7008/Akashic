@@ -44,6 +44,73 @@ export interface SetupStatus {
 }
 
 /**
+ * Snapshot of the akashic server's runtime state — Phase 8c.3.
+ * Inner subsystem dicts are loose because the control plane composes
+ * them from state machines whose schema we don't pin here. The
+ * Server page renders them as key/value rows.
+ */
+export interface SystemStatus {
+  control_server: Record<string, unknown>;
+  auth_server: Record<string, unknown>;
+  uptime: string;
+  pid: number;
+}
+
+export class ServerApi {
+  /**
+   * GET /api/admin/server/status — snapshot used by the Server
+   * page header. Throws on any failure (the Server page surfaces
+   * the error inline so the operator knows the BFF is reachable
+   * even when the control plane isn't).
+   */
+  static async status(): Promise<SystemStatus> {
+    const r = await fetch('/api/admin/server/status', {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<SystemStatus> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Status fetch failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data;
+  }
+
+  /**
+   * Internal helper — POSTs to one of the lifecycle/reload routes.
+   * Each public method below names its target explicitly so the
+   * caller doesn't pass arbitrary paths through this surface.
+   * Rejects with the structured error so the FE can render the
+   * upstream message verbatim ("Auth server is already running").
+   */
+  private static async post(path: string): Promise<void> {
+    const r = await fetch(path, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ ok: boolean }> = await r.json();
+    if (!r.ok || !body.success) {
+      const err = new Error(body.error?.message ?? `Request failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+  }
+
+  static authStart()    { return ServerApi.post('/api/admin/server/auth/start'); }
+  static authStop()     { return ServerApi.post('/api/admin/server/auth/stop'); }
+  static authRestart()  { return ServerApi.post('/api/admin/server/auth/restart'); }
+  static apiStart()     { return ServerApi.post('/api/admin/server/api/start'); }
+  static apiStop()      { return ServerApi.post('/api/admin/server/api/stop'); }
+  static apiRestart()   { return ServerApi.post('/api/admin/server/api/restart'); }
+  static quit()         { return ServerApi.post('/api/admin/server/quit'); }
+  static configReload() { return ServerApi.post('/api/admin/server/config/reload'); }
+  static tlsReload()    { return ServerApi.post('/api/admin/server/tls/reload'); }
+}
+
+/**
  * One row in the tools card grid (Phase 8c.5). The `key` field
  * drives the icon lookup on the FE; `label` is the human-readable
  * card title; `url` is the operator-configured target.

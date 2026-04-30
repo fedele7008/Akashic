@@ -311,6 +311,62 @@ type RotateSecretResponse struct {
 	ClientSecret string `json:"client_secret"`
 }
 
+// SystemStatus is the shape of GET /status's response.data on the
+// control plane (Phase 8c.3). Inner subsystem dicts are kept loose
+// (`map[string]any`) because the control plane composes them from
+// state machines whose schema we don't want to lock down here —
+// the admin web's Server page renders them as JSON-ish key/value
+// rows, not strongly-typed fields.
+type SystemStatus struct {
+	ControlServer map[string]any `json:"control_server"`
+	AuthServer    map[string]any `json:"auth_server"`
+	Uptime        string         `json:"uptime"`
+	PID           int            `json:"pid"`
+}
+
+// StatusGet calls GET /status. Read-only snapshot used by the
+// admin web's Server page header.
+func (c *ControlClient) StatusGet(ctx context.Context) (*SystemStatus, error) {
+	resp, body, err := c.do(ctx, http.MethodGet, "/status", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var out SystemStatus
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		return nil, fmt.Errorf("malformed status payload: %w", err)
+	}
+	return &out, nil
+}
+
+// PostAction is the shared shape for state-changing control-plane
+// calls (auth/api lifecycle, shutdown, reload). The control plane
+// returns its own envelope; we don't unmarshal a typed result —
+// these are fire-and-then-refresh operations from the FE's view,
+// and the next StatusGet reflects the new state authoritatively.
+//
+// path is the control plane's relative path ("/auth/start",
+// "/server/quit", "/config/reload", etc.). Errors carry through
+// as ControlError with the upstream code, so the BFF handler can
+// map specific failures (already running, not running, transitional
+// state) to user-friendly messages.
+func (c *ControlClient) PostAction(ctx context.Context, path string) error {
+	resp, body, err := c.do(ctx, http.MethodPost, path, nil)
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return parseControlError(resp.StatusCode, body)
+	}
+	return nil
+}
+
 // SetupStatus is the shape of GET /admin/setup-status's response.data.
 // Mirrors pkg/server/control/setup_status_handlers.go's output. Each
 // field is a single boolean — the FE banner renders one row per false.
