@@ -623,16 +623,17 @@ URIs (multi-input), allowed scopes (multi-select),
 returns `client_id` + plaintext secret (shown ONCE, must be
 copied) for WEB; just the `client_id` for SPA.
 
-> **Updated by Phase 8b.3 Stage 1.** The original plan made
-> `require_pkce` always-on and read-only. The 8b roadmap split
-> clients into WEB (confidential / server-side) and SPA (public /
-> browser-only): SPA still forces PKCE (operator can't disable);
-> WEB makes `require_pkce` operator-configurable (defaults true,
-> recommended on, but checkable-off via the form). The
-> `<akashic-clients>` widget that implements this step (Step 6.2
-> = Phase 8b.3 Stage 3, ⏳ not started) MUST surface the
-> WEB/SPA radio toggle and the disambiguation copy mirrored from
-> the existing admin-web `ClientsCreate.tsx`.
+> **Updated by Phase 8b.3 Stage 1 + Stage 3.** The original plan
+> made `require_pkce` always-on and read-only. The 8b roadmap
+> split clients into WEB (confidential / server-side) and SPA
+> (public / browser-only): SPA still forces PKCE (operator can't
+> disable); WEB makes `require_pkce` operator-configurable
+> (defaults true, recommended on, but checkable-off via the form).
+> The `<akashic-clients>` widget that implements this step (Step
+> 6.2 = Phase 8b.3 Stage 3, ✅ shipped) surfaces the WEB/SPA radio
+> toggle and the disambiguation copy mirrored from the admin-web
+> `ClientsCreate.tsx`. Edit-form support depends on api-server
+> `PATCH /clients/:id`, which is Phase 8c.4.
 
 ### Step 6.3 — Client detail page
 
@@ -675,6 +676,15 @@ came back. Helps developers debug without writing code first.
 ---
 
 ## Chapter 7 — OAuth consent screen
+
+> **Execution gated on Phase 8c.** Chapter 7 work begins only
+> after the admin-console expansion (Phase 8c, defined below the
+> Phase 8b section) lands. Rationale: consent is public-facing
+> UX with a high polish budget; admin work is internal tooling
+> with a lower polish budget. Doing admin first exercises the
+> admin-bff harder before committing to the consent-screen polish
+> work, and the two share session/CSRF infrastructure so the
+> later phase rides on patterns proven in the earlier one.
 
 Separate from sign-in: the *consent* step where a user explicitly
 agrees to share their identity with a third-party OAuth client.
@@ -849,7 +859,7 @@ clients model. Four stages:
 - Post-bootstrap "next step" hint printed by `bootstrap create-root`
   on success.
 
-#### Stage 3 — `<akashic-clients>` developer widget ⏳
+#### Stage 3 — `<akashic-clients>` developer widget ✅
 
 The original Chapter 6 work, repurposed as a widget. Tenant
 developers (NOT operators) manage their own OAuth clients against
@@ -857,9 +867,10 @@ the bearer-authenticated `/clients/*` endpoints (already built in
 Stage 1). Owner-scoped via `/clients/mine` + `canManage()`.
 
 - Lit component at `web/widgets/src/components/akashic-clients.ts`.
-- List + create + edit + delete + rotate-secret in one widget.
+- List + create + delete + rotate-secret in one widget. Edit form
+  pending api-server `PATCH /clients/:id` (Phase 8c.4).
 - Mirrors the admin-web's `ClientsCreate.tsx` UX but uses bearer
-  tokens instead of mTLS-via-control-plane.
+  tokens (from `/session/token`) instead of mTLS-via-control-plane.
 
 #### Stage 4 — Sample adaptation ✅
 
@@ -909,17 +920,54 @@ labels with operator vocabulary:
 - **`.env` cleanup** — collapsed verbose comments, removed sample
   cosmetic envs (BRAND_NAME, TAGLINE, SESSION_SECRET, DESCRIPTION,
   SUPPORT_EMAIL — all hardcoded in sample source now).
+- **Auth-server-hosted self-service signup**
+  (`pkg/server/auth/signup_handlers.go`) — `/signup` and
+  `/signup/submit` mirror the existing /login pair using the same
+  CSRF/template infrastructure plus the shared `pkg/userregistration/`
+  domain package. Eliminates the chicken-and-egg of needing a
+  registered tenant portal before end-users can create accounts.
+  The `<akashic-signup>` widget remains the embeddable counterpart
+  for tenants who want signup inside their own product UI.
+- **`IsTenantPortal` flag on `client_services`** — purely a label
+  for visual distinction in admin UI / CLI list output, marking the
+  operator's own portal client apart from third-party developer
+  integrations. Cross-row constraint enforced at the domain layer
+  (`pkg/clientservice/`): at most one row may set it. An
+  earlier-considered companion `SignUpURL` operator-override was
+  added then removed once the auth-server-hosted /signup made it
+  redundant — see commit history around 2026-04-29 for the cleanup.
+- **`return_to` propagation through /login → /signup → /login** —
+  the /login page's "Create account" link carries `return_to`
+  forward; the /signup form preserves it; on success the user lands
+  back on /login with both their username pre-filled and the
+  OAuth `return_to` intact, so the original /authorize flow resumes
+  cleanly. Earlier bug: lost `return_to` caused a post-signup 404
+  at `/`. The fix uses a server-computed `SignUpHref` so the
+  template stays free of `?` vs `&` join logic.
+- **"Signed-in" landing on direct /login submits without a
+  return_to** — replaces the previous unsafe fallback redirect to
+  `/` (which 404'd, since the auth server has no GET / route) with
+  a friendly status page rendered through `error.html.tmpl`.
+- **Public surface pages shipped on the Next.js sample portal**
+  (commit 61b648c) — landing, sign-in, sign-up, and forgot-password
+  pages. The forgot page is the Phase-8 informational stub from
+  Step 4.6 (Phase 9 replaces it with a real flow).
 
-### 8b.6 — Open items
+### 8b.6 — Open items (now closed)
 
-| Item | Scope | Priority |
-|---|---|---|
-| CLI `clients list / show / delete / rotate-secret` | ~40 LOC each | High |
-| Admin web client list + edit + delete + rotate UI | ~300 LOC TS + control-plane endpoints | High |
-| Stage 3 widget (`<akashic-clients>`) | ~3-5 turns | Medium |
-| Server-side password policy from operator config (replace `DefaultPasswordPolicy()` with `cfg.Bootstrap.Password` in `users_handlers.go:109,319`) | 2 lines | Low (real bug) |
-| Refactor duplicated client-create logic into `pkg/clientservice/` | ~150 LOC Go | Low (cleanup) |
-| Static sample graceful 404 on `/akashic-config.json` | ~10 LOC JS | Low |
+All items closed during Phase 8b work. Admin-web client edit /
+detail page rolled into Phase 8c.4 to consolidate with the broader
+client-management UI work happening there.
+
+| Item | Status |
+|---|---|
+| CLI `clients list / show / delete / rotate-secret` | ✅ |
+| Admin web client list + delete + rotate UI | ✅ |
+| Admin web client edit + detail | → Phase 8c.4 |
+| Stage 3 widget (`<akashic-clients>`) | ✅ |
+| Server-side password policy from operator config | ✅ |
+| Refactor duplicated client-create logic into `pkg/clientservice/` | ✅ |
+| Static sample graceful 404 on `/akashic-config.json` | ✅ |
 
 ### 8b.7 — Phasing notes
 
@@ -940,6 +988,173 @@ Chapter 7-8 (consent + verification)  ← unchanged
 What this means in practice: someone reading the plan today should
 read Chapters 1–8 for the conceptual shape, then read Phase 8b for
 what was actually delivered and what remains.
+
+---
+
+## Phase 8c — Admin Console Expansion
+
+> **Status**: planned (added 2026-04-30). Inserts before Chapter
+> 7 in execution order. The original Chapter 7 (consent screen)
+> work begins once 8c lands.
+>
+> **Why this order**: consent is public-facing UX and demands a
+> high polish budget; admin work is internal tooling that tolerates
+> rougher edges. Building admin first exercises the admin-bff
+> harder before we spend the polish budget on the public consent
+> screen. Both surfaces share session + CSRF infrastructure, so
+> the later phase rides on top of patterns proven in the earlier
+> one.
+
+### 8c.1 — Setup-status banner ⏳
+
+A sticky banner across every admin page surfacing "what still
+needs doing" — bootstrap complete? tenant portal registered? LDAP
+healthy? Vault unsealed? Each item links to a one-click "go fix
+it" path.
+
+- Backend: `GET /admin/setup-status` returns
+  `{bootstrap_complete, tenant_portal_registered, ldap_ok, vault_ok}`.
+  Aggregator queries each subsystem; subsystem failures degrade
+  gracefully (the banner surfaces "unknown" rather than 500ing
+  the page).
+- Frontend: `<SetupStatusBanner>` rendered above the topbar,
+  hidden when all checks pass. Each incomplete item shows
+  remediation copy + a deep link to the matching admin action.
+
+Why first: several other 8c features depend on these gates (no
+user management before bootstrap; no scoped roles before a tenant
+portal exists). Building the visualization first makes the rest
+of 8c's UX coherent.
+
+### 8c.2 — User management ⏳
+
+The biggest gap. Today the admin-bff has zero user-management
+UI; operators bootstrap the root user via CLI and that's the
+entire story. This step adds full CRUD with the safety invariants
+user management actually needs.
+
+- New shared package `pkg/usermanagement/` (mirrors
+  `pkg/clientservice/`). Sentinel errors: `ErrLastRoot`,
+  `ErrSelfDemotion`, `ErrSelfDeletion`. Cross-row invariants
+  enforced at the domain layer:
+  - The last `root` user can't be demoted or deleted (would
+    permanently brick the deployment).
+  - A user can't demote or delete themselves through this surface
+    (forces an out-of-band confirmation path).
+- Endpoints (api-server, bearer-gated to `admin`/`root`):
+  - `GET /users` — paginated, filterable by `user_type`,
+    `is_disabled`, `missing_identity`.
+  - `GET /users/:id`
+  - `PATCH /users/:id` — fields: `user_type`, `is_disabled`.
+  - `DELETE /users/:id` — semantics depend on Open Question 2.
+- LDAP plumbing: deletion needs to delete the LDAP entry too.
+  Today we soft-delete in PG and let the deprovisioning loop
+  catch up — fine for "user left the org" but wrong for
+  "operator wants this account gone now."
+- Frontend: list page with search + filters, detail/edit modal,
+  promote/demote buttons gated behind a confirm dialog.
+
+### 8c.3 — Server control panel ⏳
+
+Mostly proxy work — the control server already exposes
+`/auth/{start,stop,restart}`, `/server/quit`, `/status`, and
+`/config/reload`. Surface them in the admin UI.
+
+- Backend: thin admin-bff routes that proxy each control
+  endpoint. No new control-plane endpoints needed.
+- Frontend: a "Server" page with a status badge per subsystem and
+  action buttons. Destructive actions (`server quit`, `auth stop`)
+  gated behind a "type the deployment hostname to confirm" modal,
+  matching the AWS pattern for production deletions.
+
+### 8c.4 — Client services: detail + edit ⏳
+
+Round out the client-management surface. Today: list + create +
+delete + rotate-secret. Missing: detail view, edit form, audit
+log of who-changed-what.
+
+- Backend: `GET /clients/:id` and `PATCH /clients/:id` on both
+  the api-server (owner-scoped) and control-plane (operator-
+  scoped). Editable fields: `name`, `description`, `homepage_url`,
+  `redirect_uris`, `allowed_scopes`, `role_allowlist`,
+  `require_pkce` (WEB only). Immutable: `client_id`,
+  `client_type`, `built_in`, `is_tenant_portal`, `owner_user_id`.
+- Domain: extend `pkg/clientservice/` with `Update()` — same
+  shape as `Create()`, same sentinel-error pattern. Enforces
+  the immutability rules above.
+- Frontend: replace the current "click-row → no-op" with a real
+  detail page; edit form with the same WEB/SPA disambiguation
+  copy used by the create form.
+- The `<akashic-clients>` widget (8b.3 Stage 3) gains its edit
+  surface for free once the api-server `PATCH` exists.
+
+### 8c.5 — External tool links ⏳
+
+Cheap and useful. A "Tools" section linking out to Grafana,
+Adminer, RedisInsight, Vault UI, phpLDAPadmin, Loki.
+
+- URLs **must** be operator-configurable — these run on
+  different hosts in production. New env vars (concrete shape
+  pending Open Question 4):
+  `AKASHIC_ADMIN_TOOL_GRAFANA_URL`, `AKASHIC_ADMIN_TOOL_ADMINER_URL`,
+  etc., or a single JSON map.
+- Frontend: link grid that only renders entries with a configured
+  URL — no broken cards in production where (e.g.) Adminer isn't
+  deployed.
+- v1 ships static cards. Health-ping coloring (green/yellow/red
+  dots) deferred.
+
+### 8c.6 — Policy management ⏳
+
+The architecturally weighty piece. Today policy lives in two
+places:
+- **Tenant-level** (password rules, session TTL, default scopes)
+  in YAML config, hot-reloadable via `/config/reload`.
+- **Per-client** (`redirect_uris`, `allowed_scopes`,
+  `role_allowlist`, `require_pkce`) in `client_services` rows.
+
+Per-client policy is mostly already there — the create form
+exposes most fields and 8c.4's edit form completes that surface.
+So 8c.6 is **predominantly tenant-level policy**: choose the
+storage model (Open Question 1), build the UI, and decide which
+config keys move into the editable surface.
+
+### 8c.7 — Phasing notes
+
+| Step | Size | Risk | Notes |
+|---|---|---|---|
+| 8c.1 banner | Small | Low | Pure aggregation; no schema work |
+| 8c.5 tool links | Small | Low | Mostly env wiring + a card grid |
+| 8c.3 server control | Small-Medium | Medium | Confirm-modal UX matters |
+| 8c.2 user management | Large | Medium | Schema-clean but invariants are subtle |
+| 8c.4 client edit/detail | Medium | Low | "More of the same shape" |
+| 8c.6 policy management | Large | High | Storage-model decision required first |
+
+**Suggested execution order**: 8c.1 → 8c.5 → 8c.3 → 8c.2 → 8c.4
+→ 8c.6. Front-loads visibility and small wins before tackling
+the schema-changing pieces.
+
+### 8c.8 — Open questions (must resolve before starting)
+
+1. **Tenant-policy storage** — DB-backed table, read-only-config,
+   or hybrid (DB overrides YAML)? Hybrid is most flexible but
+   historically painful (two sources of truth that drift).
+   Leaning recommendation: DB-backed table populated from YAML
+   on first run; subsequent edits go through the UI; YAML
+   becomes bootstrap-only-defaults.
+2. **User-deletion semantics** — Hard delete (PG row + LDAP
+   entry gone immediately) or soft-delete with grace period
+   (mirrors the existing 90-day deprovisioning behavior)? Soft
+   is safer; hard matches operator intuition.
+3. **"Type to confirm" gating threshold** — Which actions
+   warrant it? Default proposal: anything affecting *other users*
+   (delete user, demote root) or *shared state* (server quit,
+   auth stop). Plain client edits and tool-link clicks don't.
+4. **Tool-link configuration shape** — Individual env vars per
+   tool (`AKASHIC_ADMIN_TOOL_*_URL`) or a single JSON map
+   (`AKASHIC_ADMIN_TOOLS={"grafana":"...","adminer":"..."}`)?
+   Individual is simpler to set in compose; JSON is easier to
+   extend without code changes.
 
 ---
 
@@ -1044,6 +1259,10 @@ Chapter 5 (user profile) — depends on 4 (need to be logged in first)
     ↓
 Chapter 6 (developer surface) — depends on 5
     ↓
+Phase 8b (mid-plan pivot — already shipped)
+    ↓
+Phase 8c (admin console expansion — NEW, before consent)
+    ↓
 Chapter 7 (consent — if included)
     ↓
 Chapter 8 (verification + polish)
@@ -1051,7 +1270,8 @@ Chapter 8 (verification + polish)
 
 Recommended approach: build chapter 1 first (backend), then 2+3
 (frontend scaffold), then 4 (signup) end-to-end, then 5/6 in
-parallel, then 7 if scoped in, then 8. Keeps "always have a
+parallel, then 8b (already done), then 8c (admin console
+expansion), then 7 if scoped in, then 8. Keeps "always have a
 deployable thing at every milestone" — after chapter 4 you've got a
 working signup-and-login flow even if profile/clients aren't yet
 done.
@@ -1066,6 +1286,7 @@ Estimated complexity (rough):
 | 4 | — | ~1500 | Public pages + flows |
 | 5 | — | ~1000 | Authenticated profile |
 | 6 | — | ~1500 | Developer client management |
+| 8c | ~1200 | ~1500 | Admin console expansion (banner, users, server control, client edit, tool links, policy mgmt) |
 | 7 | ~400 | ~400 | Consent (optional) |
 | 8 | ~200 | ~200 | Tests + docs |
 
