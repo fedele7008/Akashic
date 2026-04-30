@@ -4,6 +4,7 @@ import { ClientsPage } from './ClientsPage';
 import { OverviewPage } from './OverviewPage';
 import { SetupStatusBanner } from './SetupStatusBanner';
 import { Sidebar, type Page } from './Sidebar';
+import { ToolsPage } from './ToolsPage';
 import { Topbar } from './Topbar';
 
 /**
@@ -66,6 +67,7 @@ export function Dashboard({ session }: { session: SessionInfo }) {
             <OverviewPage session={session} onNavigate={handleNavigate} />
           )}
           {page === 'clients' && <ClientsPage session={session} />}
+          {page === 'tools' && <ToolsPage />}
         </div>
       </main>
     </div>
@@ -78,5 +80,7 @@ function pageTitleFor(page: Page): string {
       return 'Overview';
     case 'clients':
       return 'OAuth clients';
+    case 'tools':
+      return 'Tools';
   }
 }

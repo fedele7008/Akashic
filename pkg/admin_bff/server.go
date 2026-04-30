@@ -291,6 +291,14 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleSetupStatus)))
 
+	// Phase 8c.5: external tool links. Returns {tools: [{key, label, url}]}
+	// for tools the operator has actually configured. Same session
+	// gate as setup-status; rate-limited via the looser bucket since
+	// it's read-only and called on Tools-page mount.
+	mux.HandleFunc("GET /api/admin/tools",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleAdminTools)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).

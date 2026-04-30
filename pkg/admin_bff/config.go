@@ -153,6 +153,23 @@ type Config struct {
 	// cert the akashic-server uses.
 	RedisTLSCAFile     string
 	RedisTLSServerName string // override SNI; default = host of RedisAddr
+
+	// ─── Phase 8c.5: external tool links ──────────────────────────
+	//
+	// Operator-configured URLs to internal admin / debugging tools
+	// (Grafana, Adminer, RedisInsight, Vault UI, phpLDAPadmin).
+	// Surfaced on the admin web's "Tools" page as a card grid.
+	//
+	// Empty = the corresponding card does NOT render — keeps the
+	// production case "no broken cards for tools we didn't deploy."
+	// Each tool has a hardcoded label + icon on the FE; only the
+	// URL is operator-set, since labels and icons aren't usefully
+	// configurable for a fixed catalog of well-known tools.
+	ToolsGrafanaURL      string
+	ToolsAdminerURL      string
+	ToolsRedisInsightURL string
+	ToolsVaultURL        string
+	ToolsPhpLDAPAdminURL string
 }
 
 const envPrefix = "AKASHIC_BFF"
@@ -235,6 +252,16 @@ func LoadConfig() (*Config, error) {
 		RedisDB:            v.GetInt("redis_db"),
 		RedisTLSCAFile:     v.GetString("redis_tls_ca_file"),
 		RedisTLSServerName: v.GetString("redis_tls_server_name"),
+
+		// Phase 8c.5: tool links. Defaults are empty by design —
+		// operators set only the tools they actually deployed, so
+		// production deployments don't render broken cards for
+		// missing services.
+		ToolsGrafanaURL:      v.GetString("tools_grafana_url"),
+		ToolsAdminerURL:      v.GetString("tools_adminer_url"),
+		ToolsRedisInsightURL: v.GetString("tools_redisinsight_url"),
+		ToolsVaultURL:        v.GetString("tools_vault_url"),
+		ToolsPhpLDAPAdminURL: v.GetString("tools_phpldapadmin_url"),
 	}
 
 	if cfg.ListenAddr == "" {

@@ -7,6 +7,53 @@ import (
 	"strings"
 )
 
+// adminTool is the wire shape for one row in the tools card grid.
+// Hardcoded label + icon-key; only URL is operator-supplied so the
+// FE renders a closed catalog of known tools rather than an
+// arbitrary "any URL becomes a card" surface.
+type adminTool struct {
+	Key   string `json:"key"`   // stable id used by the FE for icon lookup
+	Label string `json:"label"` // human-readable name shown on the card
+	URL   string `json:"url"`   // operator-configured target URL
+}
+
+// handleAdminTools is GET /api/admin/tools — Phase 8c.5. Returns the
+// configured external tool URLs (Grafana, Adminer, RedisInsight,
+// Vault, phpLDAPadmin) as a list of {key, label, url}. Tools whose
+// URL is empty in config are OMITTED from the response — the FE then
+// renders only configured tools, which is the right behavior for
+// production deployments that don't ship every tool.
+//
+// Session-gated to admin/root. The catalog is operator metadata, not
+// secret per se, but it's also not for end users; same gate as the
+// rest of /api/admin/*.
+func (s *Server) handleAdminTools(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	// Define the catalog inline rather than loop-driven — small fixed
+	// set, every entry has its own label, and adding a new tool is
+	// also a FE change (icon, possibly translated label) so the
+	// "shared list with FE" abstraction wouldn't pay off.
+	all := []adminTool{
+		{Key: "grafana", Label: "Grafana", URL: s.cfg.ToolsGrafanaURL},
+		{Key: "adminer", Label: "Adminer", URL: s.cfg.ToolsAdminerURL},
+		{Key: "redisinsight", Label: "RedisInsight", URL: s.cfg.ToolsRedisInsightURL},
+		{Key: "vault", Label: "Vault", URL: s.cfg.ToolsVaultURL},
+		{Key: "phpldapadmin", Label: "phpLDAPadmin", URL: s.cfg.ToolsPhpLDAPAdminURL},
+	}
+	out := make([]adminTool, 0, len(all))
+	for _, t := range all {
+		if strings.TrimSpace(t.URL) != "" {
+			out = append(out, t)
+		}
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"tools": out},
+	})
+}
+
 // handleSetupStatus is GET /api/admin/setup-status. Pass-through to
 // the control plane's aggregator (bootstrap done? portal registered?
 // LDAP healthy?). Used by the React FE's <SetupStatusBanner> on every

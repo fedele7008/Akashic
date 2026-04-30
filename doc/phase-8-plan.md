@@ -1114,21 +1114,49 @@ log of who-changed-what.
 - The `<akashic-clients>` widget (8b.3 Stage 3) gains its edit
   surface for free once the api-server `PATCH` exists.
 
-### 8c.5 — External tool links ⏳
+### 8c.5 — External tool links ✅
 
-Cheap and useful. A "Tools" section linking out to Grafana,
-Adminer, RedisInsight, Vault UI, phpLDAPadmin, Loki.
+A "Tools" sidebar entry linking out to Grafana, Adminer,
+RedisInsight, Vault UI, phpLDAPadmin. Card grid; cards render only
+for tools with a configured URL.
 
-- URLs **must** be operator-configurable — these run on
-  different hosts in production. New env vars (concrete shape
-  pending Open Question 4):
-  `AKASHIC_ADMIN_TOOL_GRAFANA_URL`, `AKASHIC_ADMIN_TOOL_ADMINER_URL`,
-  etc., or a single JSON map.
-- Frontend: link grid that only renders entries with a configured
-  URL — no broken cards in production where (e.g.) Adminer isn't
-  deployed.
-- v1 ships static cards. Health-ping coloring (green/yellow/red
-  dots) deferred.
+**As-shipped scope:**
+- Per-tool env vars on the admin-bff process (resolved Open
+  Question 4 toward individual env vars over a single JSON map):
+  `AKASHIC_BFF_TOOLS_GRAFANA_URL`, `…_ADMINER_URL`,
+  `…_REDISINSIGHT_URL`, `…_VAULT_URL`, `…_PHPLDAPADMIN_URL`.
+  Each defaults to empty.
+- Backend: `pkg/admin_bff/handlers.go::handleAdminTools` returns
+  `{tools: [{key, label, url}, ...]}` filtered to non-empty URLs.
+  Session-gated to admin/root.
+- Frontend: `<ToolsPage>` in `web/admin/src/components/`,
+  rendered from a new `'tools'` entry in the sidebar's `Page`
+  union. Hand-rolled SVG icons (Grafana bars, database cylinder,
+  cube, lock, directory tree); no vendor logo licensing involved.
+- Each card is an `<a target="_blank" rel="noopener">` styled
+  to match `.panel.interactive` for clickable affordance, with
+  an external-link glyph that brightens on hover.
+- `.env.example` carries commented-out localhost defaults so the
+  dev-mode experience works out of the box; `docker-compose.yml`
+  forwards each env var to the admin-bff service with `:-` empty
+  fallbacks so missing tools naturally elide.
+
+**Why individual env vars over JSON:** each tool already has a
+hardcoded label + icon on the FE (you can't render a meaningful
+card without those), so the "operator can add arbitrary tools"
+flexibility a JSON map would offer doesn't actually buy anything.
+Individual vars are also easier to set in compose, easier to
+template via Vault, and surface as discoverable keys in a
+`docker compose config` dump.
+
+**Deferred:**
+- Health-ping coloring (green/yellow/red dots per tool). The FE
+  can't reliably ping these directly (CORS), so it'd require a
+  BFF-side prober. Marginal value — operators already see "tool
+  down" the moment they click the link.
+- "Add custom tool" UX. Falls into "design for hypothetical
+  requirements" — every tool we'd want to surface is already in
+  the catalog.
 
 ### 8c.6 — Policy management ⏳
 
@@ -1176,11 +1204,13 @@ the schema-changing pieces.
    warrant it? Default proposal: anything affecting *other users*
    (delete user, demote root) or *shared state* (server quit,
    auth stop). Plain client edits and tool-link clicks don't.
-4. **Tool-link configuration shape** — Individual env vars per
-   tool (`AKASHIC_ADMIN_TOOL_*_URL`) or a single JSON map
-   (`AKASHIC_ADMIN_TOOLS={"grafana":"...","adminer":"..."}`)?
-   Individual is simpler to set in compose; JSON is easier to
-   extend without code changes.
+4. **Tool-link configuration shape** ✅ **resolved**: individual
+   env vars per tool (`AKASHIC_BFF_TOOLS_*_URL`). Reasoning: each
+   tool needs a hardcoded label + icon on the FE anyway, so the
+   "JSON map for arbitrary tools" flexibility doesn't buy
+   anything. Individual vars are also easier to set in compose
+   and surface as discoverable keys in a `docker compose config`
+   dump.
 
 ---
 

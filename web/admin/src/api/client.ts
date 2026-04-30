@@ -43,6 +43,46 @@ export interface SetupStatus {
   ldap_ok: boolean;
 }
 
+/**
+ * One row in the tools card grid (Phase 8c.5). The `key` field
+ * drives the icon lookup on the FE; `label` is the human-readable
+ * card title; `url` is the operator-configured target.
+ *
+ * The BFF only returns rows whose URL is configured, so the FE
+ * never has to render an empty/disabled card.
+ */
+export interface AdminTool {
+  key: 'grafana' | 'adminer' | 'redisinsight' | 'vault' | 'phpldapadmin';
+  label: string;
+  url: string;
+}
+
+export class AdminToolsApi {
+  /**
+   * GET /api/admin/tools — returns the configured external tool
+   * URLs (Grafana, Adminer, RedisInsight, Vault, phpLDAPadmin).
+   *
+   * Returns an empty array on any failure (network, 5xx, malformed
+   * body) so the calling page degrades gracefully — operators with
+   * a misconfigured BFF still see the rest of the page.
+   */
+  static async list(): Promise<AdminTool[]> {
+    try {
+      const r = await fetch('/api/admin/tools', {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+      });
+      if (!r.ok) return [];
+      const body: ApiResponse<{ tools: AdminTool[] }> = await r.json();
+      return body.data?.tools ?? [];
+    } catch (e) {
+      console.warn('AdminToolsApi.list failed:', e);
+      return [];
+    }
+  }
+}
+
 export class SetupStatusApi {
   /**
    * GET /api/admin/setup-status — snapshot of outstanding setup

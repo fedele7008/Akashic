@@ -683,3 +683,44 @@ details[open] summary {
   font-size: 0.8125rem;
   color: var(--text);
 }
+
+/* ─── Tools page (Phase 8c.5) ───
+   Each card is an <a> styled to match `.panel.interactive` so it
+   reads as a clickable surface; the new tool-card-* rules add the
+   icon-and-title row + the muted external-link cue. */
+.tool-card {
+  text-decoration: none;
+  color: inherit;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.tool-card-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.tool-card-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  flex-shrink: 0;
+}
+
+.tool-card-external {
+  margin-left: auto;
+  flex-shrink: 0;
+  opacity: 0.6;
+  transition: opacity 0.15s ease;
+}
+
+.tool-card:hover .tool-card-external {
+  opacity: 1;
+}

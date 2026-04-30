@@ -747,6 +747,16 @@ services:
       AKASHIC_BFF_REDIS_DB: "1"
       AKASHIC_BFF_REDIS_TLS_CA_FILE: /certs/redis/ca.crt
       AKASHIC_BFF_REDIS_TLS_SERVER_NAME: redis.akashic.local
+      # Phase 8c.5: external tool links surfaced on the admin web's
+      # "Tools" page. Forwarded from the host .env so operators can
+      # tweak per-deployment without editing this compose file. Empty
+      # values are passed through and the BFF correctly omits the
+      # corresponding card.
+      AKASHIC_BFF_TOOLS_GRAFANA_URL: ${AKASHIC_BFF_TOOLS_GRAFANA_URL:-}
+      AKASHIC_BFF_TOOLS_ADMINER_URL: ${AKASHIC_BFF_TOOLS_ADMINER_URL:-}
+      AKASHIC_BFF_TOOLS_REDISINSIGHT_URL: ${AKASHIC_BFF_TOOLS_REDISINSIGHT_URL:-}
+      AKASHIC_BFF_TOOLS_VAULT_URL: ${AKASHIC_BFF_TOOLS_VAULT_URL:-}
+      AKASHIC_BFF_TOOLS_PHPLDAPADMIN_URL: ${AKASHIC_BFF_TOOLS_PHPLDAPADMIN_URL:-}
       TZ: ${AKASHIC_TZ:-UTC}
     volumes:
       - certs:/certs:ro
