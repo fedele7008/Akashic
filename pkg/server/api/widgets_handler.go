@@ -37,6 +37,14 @@ import (
 const (
 	widgetsDirEnv     = "AKASHIC_WIDGETS_DIR"
 	widgetsDefaultDir = "/usr/local/share/akashic-widgets"
+	// widgetsDevFallback is the path checked when AKASHIC_WIDGETS_DIR
+	// is unset AND the container default doesn't exist — the typical
+	// "host-dev" case where someone runs `go run ./cmd/akashic` from
+	// the project root. Keeps `/widgets/akashic.js` working out of
+	// the box for contributors without forcing them to remember the
+	// env var. CWD-relative on purpose: the build/akashic binary
+	// also runs from the project root in dev.
+	widgetsDevFallback = "web/widgets/dist"
 )
 
 var (
@@ -44,15 +52,40 @@ var (
 	resolvedWidgetsDir string
 )
 
-// widgetsDir returns the absolute filesystem directory the bundle
-// is served from. Reads AKASHIC_WIDGETS_DIR if set, falls back to
-// the baked-in image path. Memoised — env doesn't change at runtime.
+// widgetsDir returns the filesystem directory the bundle is served
+// from. Resolution order:
+//
+//   1. AKASHIC_WIDGETS_DIR env var, if set (explicit operator/dev override).
+//   2. /usr/local/share/akashic-widgets/ (the path baked into the
+//      docker image — production default).
+//   3. ./web/widgets/dist/ relative to CWD (host-dev fallback so
+//      `go run ./cmd/akashic` from the project root just works).
+//
+// Memoised — env doesn't change at runtime.
 func widgetsDir() string {
 	widgetsResolveOnce.Do(func() {
 		if v := os.Getenv(widgetsDirEnv); v != "" {
 			resolvedWidgetsDir = v
 			return
 		}
+		// Container path takes precedence over the host-dev fallback
+		// when both happen to exist (operator running a hybrid
+		// container/host setup).
+		if st, err := os.Stat(widgetsDefaultDir); err == nil && st.IsDir() {
+			resolvedWidgetsDir = widgetsDefaultDir
+			return
+		}
+		// Host-dev fallback. Resolve to absolute so error messages
+		// don't surprise contributors when their CWD shifts.
+		if abs, err := filepath.Abs(widgetsDevFallback); err == nil {
+			if st, err := os.Stat(abs); err == nil && st.IsDir() {
+				resolvedWidgetsDir = abs
+				return
+			}
+		}
+		// No bundle anywhere — set to the container default so error
+		// messages remain stable. Requests will 404 (handler stat()s
+		// the file, sees ENOENT, returns NotFound).
 		resolvedWidgetsDir = widgetsDefaultDir
 	})
 	return resolvedWidgetsDir
