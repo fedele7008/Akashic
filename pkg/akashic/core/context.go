@@ -351,6 +351,12 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// /clients writes to — single source of truth.
 	app.ControlServer.SetDB(app.DB.DB)
 
+	// Phase 8c.1: setup-status banner needs to probe LDAP health,
+	// so wire the same client the auth path uses. Single LDAP
+	// connection across the deployment — control's probe and
+	// auth's bind share the pool.
+	app.ControlServer.SetLDAP(app.LDAPClient)
+
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
 }

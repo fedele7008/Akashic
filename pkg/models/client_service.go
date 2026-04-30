@@ -238,12 +238,22 @@ type ClientService struct {
 	// the toggle. The bearer-authenticated api-server endpoint
 	// (used by tenant developers via the <akashic-clients> widget)
 	// does NOT accept this field; developers can't self-promote
-	// one of their integrations to "the tenant's primary portal."
+	// one of their integrations to "first-party / operator-owned."
 	//
-	// Today the flag is purely a label: it lets the admin UI / CLI /
-	// widget render a "primary" badge so operators can tell their
-	// own tenant portal apart from third-party developer
-	// integrations at a glance.
+	// **Any number of rows may carry the flag** — a deployment
+	// that ships multiple first-party apps (mail, calendar, drive,
+	// account-management) is expected to flag each one. The
+	// "primary singularity" rule that originally constrained this
+	// to at-most-one was tied to the now-removed SignUpURL
+	// override; with that gone, the flag is purely a trust-
+	// boundary marker (first-party vs third-party).
+	//
+	// Today the flag drives a "first-party" badge in the admin UI
+	// / CLI / widget so operators can tell their own apps apart
+	// from third-party developer integrations at a glance. Phase
+	// 7 (consent screen) will consume the flag as one input to
+	// the consent policy — exact rule (skip-first-party vs
+	// remember-on-first-grant) is a Chapter 7 design decision.
 	IsTenantPortal bool `gorm:"not null;default:false;index" json:"is_tenant_portal"`
 
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`

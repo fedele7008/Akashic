@@ -7,6 +7,31 @@ import (
 	"strings"
 )
 
+// handleSetupStatus is GET /api/admin/setup-status. Pass-through to
+// the control plane's aggregator (bootstrap done? portal registered?
+// LDAP healthy?). Used by the React FE's <SetupStatusBanner> on every
+// page render so the operator always sees outstanding setup steps
+// without having to dig through logs.
+//
+// Session-gated to admin/root: the banner is operator UI, not a
+// public health probe. Pre-bootstrap there's no session yet, so this
+// returns 401 — but pre-bootstrap the FE shows the bootstrap form,
+// not the banner-bearing dashboard, so that's fine.
+func (s *Server) handleSetupStatus(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	status, err := s.controlClient.SetupStatusGet(r.Context())
+	if err != nil {
+		s.writeControlError(w, err, "fetching setup status")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    status,
+	})
+}
+
 // handleBootstrapStatus is GET /api/bootstrap/status. Pass-through to
 // the control plane. Used by the React FE on page load to decide
 // which view to render (form vs. "already complete").
@@ -347,12 +372,6 @@ func (s *Server) writeControlError(w http.ResponseWriter, err error, context str
 			// it clearly so the operator knows what to do.
 			writeError(w, http.StatusConflict, "BOOTSTRAP_INCOMPLETE",
 				"Bootstrap is not yet complete. Run `akashic-cli bootstrap create-root` first.")
-		case "TENANT_PORTAL_ALREADY_SET":
-			// Pass through the server's message — it includes the
-			// existing primary's client_id so the operator knows
-			// what to clear or which row to edit instead.
-			writeError(w, http.StatusConflict, "TENANT_PORTAL_ALREADY_SET",
-				ctlErr.Message)
 		case "DB_NOT_READY":
 			writeError(w, http.StatusServiceUnavailable, "DB_NOT_READY",
 				"The akashic-server's database isn't fully wired yet. Retry shortly.")

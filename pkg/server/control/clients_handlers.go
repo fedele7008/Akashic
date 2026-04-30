@@ -57,12 +57,12 @@ type adminCreateClientRequest struct {
 	// (→ default true) from "operator explicitly set false". Forced
 	// true for SPA regardless.
 	RequirePKCE *bool `json:"require_pkce,omitempty"`
-	// IsTenantPortal marks this client as the deployment's primary
-	// tenant portal. Server-side check rejects with
-	// TENANT_PORTAL_ALREADY_SET when another row already holds the
-	// flag. Operator-only (this is the control-plane / mTLS-gated
-	// surface); the api-server's bearer-auth /clients endpoint
-	// ignores any value sent here.
+	// IsTenantPortal flags this client as operator-owned (first-
+	// party). Any number of rows may carry the flag — a deployment
+	// that ships multiple first-party apps (mail, calendar, drive)
+	// will flag each one. Operator-only on this control-plane
+	// surface; the api-server's bearer-auth /clients endpoint
+	// ignores it on input.
 	IsTenantPortal bool `json:"is_tenant_portal,omitempty"`
 }
 
@@ -375,15 +375,6 @@ func (s *Server) handleAdminCreateClient(w http.ResponseWriter, r *http.Request)
 		OwnerUserID:    nil,
 		IsTenantPortal: req.IsTenantPortal,
 	})
-	if errors.Is(err, clientservice.ErrTenantPortalAlreadySet) {
-		// Surface the existing primary's ID in the error message so
-		// the operator can `clients delete <id>` it before re-trying.
-		// err.Error() already includes "(current: tc-…)" via the
-		// wrapped fmt.Errorf.
-		response.WriteJSON(w, http.StatusConflict,
-			response.Fail("TENANT_PORTAL_ALREADY_SET", err.Error(), nil))
-		return
-	}
 	if err != nil {
 		s.logger.App.Error("adminCreateClient: clientservice.Create", zap.Error(err))
 		response.WriteJSON(w, http.StatusInternalServerError,

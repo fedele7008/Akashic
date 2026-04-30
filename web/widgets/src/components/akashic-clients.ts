@@ -450,7 +450,7 @@ export class AkashicClients extends LitElement {
           ${c.name}${c.built_in
             ? html`<span part="badge-builtin">built-in</span>`
             : ""}${c.is_tenant_portal
-            ? html`<span part="badge-primary">primary</span>`
+            ? html`<span part="badge-primary">first-party</span>`
             : ""}
         </td>
         <td part="cell"><code>${c.client_id}</code></td>

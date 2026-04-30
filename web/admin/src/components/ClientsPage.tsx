@@ -71,7 +71,9 @@ export function ClientsPage({ session }: { session: SessionInfo }) {
         <div>
           <h2 className="page-header-title">OAuth clients</h2>
           <p className="page-header-sub">
-            Register your tenant's primary portal or sub-services here.
+            Register your tenant's first-party apps and any third-party
+            integrations here. Flag your own apps with "first-party" so
+            they're distinguishable from developer-registered ones.
             Built-ins are server-managed; tenant rows can be rotated or
             deleted.
           </p>

@@ -928,14 +928,20 @@ labels with operator vocabulary:
   registered tenant portal before end-users can create accounts.
   The `<akashic-signup>` widget remains the embeddable counterpart
   for tenants who want signup inside their own product UI.
-- **`IsTenantPortal` flag on `client_services`** — purely a label
-  for visual distinction in admin UI / CLI list output, marking the
-  operator's own portal client apart from third-party developer
-  integrations. Cross-row constraint enforced at the domain layer
-  (`pkg/clientservice/`): at most one row may set it. An
-  earlier-considered companion `SignUpURL` operator-override was
-  added then removed once the auth-server-hosted /signup made it
-  redundant — see commit history around 2026-04-29 for the cleanup.
+- **`IsTenantPortal` flag on `client_services`** — operator-set
+  marker for "this client is first-party (operator-owned)" rather
+  than developer-registered (third-party). Drives the admin UI's
+  "first-party" badge today and feeds Chapter 7's "skip consent"
+  predicate (the tenant trusts itself). **Any number of rows may
+  carry the flag** — a deployment that ships multiple first-party
+  apps (mail, calendar, drive, account-management) flags each
+  one. The original "at most one" rule was tied to an earlier
+  `SignUpURL` operator-override which has since been removed; the
+  rule was relaxed on 2026-04-30 to match the multi-product
+  reality (Google's analogy: Gmail/Maps/Drive are all separate
+  OAuth clients, all first-party). The api-server's bearer-
+  authenticated /clients endpoint refuses the field on input, so
+  developers can't self-promote through that surface.
 - **`return_to` propagation through /login → /signup → /login** —
   the /login page's "Create account" link carries `return_to`
   forward; the /signup form preserves it; on success the user lands
@@ -1005,26 +1011,46 @@ what was actually delivered and what remains.
 > the later phase rides on top of patterns proven in the earlier
 > one.
 
-### 8c.1 — Setup-status banner ⏳
+### 8c.1 — Setup-status banner ✅
 
-A sticky banner across every admin page surfacing "what still
-needs doing" — bootstrap complete? tenant portal registered? LDAP
-healthy? Vault unsealed? Each item links to a one-click "go fix
-it" path.
+A banner at the top of every admin page surfacing "what still
+needs doing" — bootstrap complete? tenant portal registered?
+LDAP healthy? Each incomplete item shows remediation copy.
 
-- Backend: `GET /admin/setup-status` returns
-  `{bootstrap_complete, tenant_portal_registered, ldap_ok, vault_ok}`.
-  Aggregator queries each subsystem; subsystem failures degrade
-  gracefully (the banner surfaces "unknown" rather than 500ing
-  the page).
-- Frontend: `<SetupStatusBanner>` rendered above the topbar,
-  hidden when all checks pass. Each incomplete item shows
-  remediation copy + a deep link to the matching admin action.
+**As-shipped scope:**
+- Control-plane handler `GET /admin/setup-status`
+  (`pkg/server/control/setup_status_handlers.go`). mTLS-gated to
+  `bff.akashic.local` + `cli.akashic.local`. NOT gated by
+  `requireBootstrapComplete` — the banner is what tells the
+  operator bootstrap is incomplete; gating it would hide it
+  exactly when it's most useful.
+- Each subsystem probe is independent and nil-tolerant: a failed
+  probe sets that field to `false` (with a server-side warning
+  log) rather than 500ing the whole call. Status pages must
+  never break the page they're on.
+- Wiring: new `Server.ldapClient` field + `SetLDAP()` method
+  mirroring the existing `SetDB()` pattern;
+  `pkg/akashic/core/context.go` calls it during init.
+- Admin-bff proxy at `GET /api/admin/setup-status`, session-
+  gated to admin/root.
+- React `<SetupStatusBanner>` (`web/admin/src/components/`)
+  renders only when at least one gate fails. Bootstrap is
+  surfaced exclusively when it's the failing gate (downstream
+  noise like "LDAP not OK" would swamp the actionable signal
+  "you haven't run bootstrap yet"). Failure of the status fetch
+  itself silently renders nothing — a status check that errors
+  shouldn't be more disruptive than what it surfaces.
+- Amber/warn palette + warning-triangle icon, distinct from
+  `.error` red so the operator reads "fixable, not broken."
 
-Why first: several other 8c features depend on these gates (no
-user management before bootstrap; no scoped roles before a tenant
-portal exists). Building the visualization first makes the rest
-of 8c's UX coherent.
+**Deferred to follow-up:**
+- Vault sealed/unsealed probe. The akashic server has no
+  Vault-HTTP touchpoints (Vault Agent writes certs to disk;
+  akashic just reads them), so adding a Vault probe would mean
+  a new client + auth plumbing. Out of scope for the banner v1.
+- Health-ping refresh / live update. v1 fetches once per
+  Dashboard mount; sufficient for an operator who navigates
+  between pages.
 
 ### 8c.2 — User management ⏳
 

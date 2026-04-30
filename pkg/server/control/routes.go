@@ -98,4 +98,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/clients/",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
 			s.requireBootstrapComplete(s.handleAdminClientByID)))
+
+	// Phase 8c.1: setup-status aggregator. Powers the admin web's
+	// "what still needs doing" banner. Intentionally NOT gated by
+	// requireBootstrapComplete — the banner is the very thing that
+	// tells the operator bootstrap is incomplete; gating it would
+	// make the banner invisible exactly when it's most useful.
+	// mTLS-only (operator-side), same allowlist as /clients.
+	mux.HandleFunc("/admin/setup-status",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.handleSetupStatus))
 }

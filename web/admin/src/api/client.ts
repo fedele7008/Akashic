@@ -27,6 +27,51 @@ export interface BootstrapStatus {
   token_ttl_seconds?: number;
 }
 
+/**
+ * Setup-status snapshot — Phase 8c.1.
+ *
+ * Each field is a single boolean for "this setup gate has been
+ * cleared." The banner renders one row per `false` field, in the
+ * order an operator would naturally fix them (bootstrap before
+ * portal-registration before LDAP-anything else). A field set to
+ * `false` may also mean "subsystem unreachable; check logs" — the
+ * server logs a warning in those cases.
+ */
+export interface SetupStatus {
+  bootstrap_complete: boolean;
+  tenant_portal_registered: boolean;
+  ldap_ok: boolean;
+}
+
+export class SetupStatusApi {
+  /**
+   * GET /api/admin/setup-status — snapshot of outstanding setup
+   * gates. Session-gated server-side (admin/root only).
+   *
+   * Returns null on any failure (network, 5xx, malformed body) so
+   * the calling banner can degrade gracefully — a status check
+   * that errors out should never block the page itself from
+   * rendering. The error is logged to the console for operator
+   * diagnostics but not surfaced as a UI blocker.
+   */
+  static async get(): Promise<SetupStatus | null> {
+    try {
+      const r = await fetch('/api/admin/setup-status', {
+        method: 'GET',
+        credentials: 'same-origin',
+        headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+      });
+      if (!r.ok) return null;
+      const body: ApiResponse<SetupStatus> = await r.json();
+      if (!body.success || !body.data) return null;
+      return body.data;
+    } catch (e) {
+      console.warn('SetupStatusApi.get failed:', e);
+      return null;
+    }
+  }
+}
+
 export interface CreateRootRequest {
   token: string;
   username: string;
@@ -142,10 +187,10 @@ export interface CreateClientRequest {
    */
   require_pkce?: boolean;
   /**
-   * Mark this client as the deployment's primary tenant portal.
-   * At most one row may have this set; the server rejects with
-   * `TENANT_PORTAL_ALREADY_SET` (HTTP 409) when another client
-   * already holds the flag.
+   * Mark this client as first-party (operator-owned). Any number
+   * of clients may carry the flag — flag each operator-owned app
+   * you register so the admin UI can distinguish them from
+   * third-party developer integrations.
    */
   is_tenant_portal?: boolean;
 }

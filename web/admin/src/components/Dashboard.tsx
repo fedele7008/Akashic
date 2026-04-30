@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { SessionInfo } from '../api/client';
 import { ClientsPage } from './ClientsPage';
 import { OverviewPage } from './OverviewPage';
+import { SetupStatusBanner } from './SetupStatusBanner';
 import { Sidebar, type Page } from './Sidebar';
 import { Topbar } from './Topbar';
 
@@ -35,6 +36,17 @@ import { Topbar } from './Topbar';
 export function Dashboard({ session }: { session: SessionInfo }) {
   const [page, setPage] = useState<Page>('overview');
   const [collapsed, setCollapsed] = useState(false);
+  // Monotonic counter the SetupStatusBanner uses as a refetch
+  // trigger. Bumped on page navigation (a likely moment for
+  // setup-state to have changed — e.g., user just registered
+  // a tenant-portal client on the Clients page and is now
+  // returning to Overview).
+  const [bannerRefreshKey, setBannerRefreshKey] = useState(0);
+
+  const handleNavigate = (next: Page) => {
+    setPage(next);
+    setBannerRefreshKey((k) => k + 1);
+  };
 
   const pageTitle = pageTitleFor(page);
 
@@ -42,15 +54,16 @@ export function Dashboard({ session }: { session: SessionInfo }) {
     <div className={`app-shell${collapsed ? ' collapsed' : ''}`}>
       <Sidebar
         currentPage={page}
-        onNavigate={setPage}
+        onNavigate={handleNavigate}
         collapsed={collapsed}
         onToggleCollapsed={() => setCollapsed((c) => !c)}
       />
       <Topbar pageTitle={pageTitle} session={session} />
       <main className="content">
         <div className="content-inner">
+          <SetupStatusBanner refreshKey={bannerRefreshKey} />
           {page === 'overview' && (
-            <OverviewPage session={session} onNavigate={setPage} />
+            <OverviewPage session={session} onNavigate={handleNavigate} />
           )}
           {page === 'clients' && <ClientsPage session={session} />}
         </div>

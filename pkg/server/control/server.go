@@ -3,6 +3,7 @@ package control
 import (
 	"akashic/akashic/pkg/bootstrap"
 	"akashic/akashic/pkg/config"
+	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/pki"
@@ -47,6 +48,12 @@ type Server struct {
 	// per requester. A thin handler that calls the DB directly is
 	// clearer than a wrapped manager that adds no value.
 	db *gorm.DB
+
+	// ldapClient is the same LDAP client the auth path uses, wired in
+	// by SetLDAP() after initialization. Used by the setup-status
+	// handler (Phase 8c.1) to surface "is LDAP reachable" on the
+	// admin banner. Optional: handlers nil-check before use.
+	ldapClient *ldap.Client
 }
 
 // SetDB wires the GORM handle into the control server. Called from
@@ -56,6 +63,15 @@ type Server struct {
 // degraded mode without it.
 func (s *Server) SetDB(db *gorm.DB) {
 	s.db = db
+}
+
+// SetLDAP wires the LDAP client into the control server so the
+// setup-status handler (Phase 8c.1) can probe "is LDAP reachable."
+// Mirrors SetDB's nil-tolerant pattern: handlers nil-check before
+// use so the control server still starts even if LDAP wiring is
+// deferred or omitted.
+func (s *Server) SetLDAP(client *ldap.Client) {
+	s.ldapClient = client
 }
 
 // SetAPIServer wires the API server's state manager into the control

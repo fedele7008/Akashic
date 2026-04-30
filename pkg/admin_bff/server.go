@@ -284,6 +284,13 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleClientByID)))
 
+	// Phase 8c.1: setup-status banner. Read-only, session-gated to
+	// admin/root inside the handler. The FE polls this on every
+	// dashboard mount so outstanding setup steps stay visible.
+	mux.HandleFunc("GET /api/admin/setup-status",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleSetupStatus)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).

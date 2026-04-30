@@ -181,6 +181,12 @@ func (c *ControlClient) BootstrapCreateRoot(ctx context.Context, req *CreateRoot
 // adminCreateClientRequest shape (pkg/server/control/clients_handlers.go).
 // Field names match the JSON the control plane expects so this struct
 // can be forwarded as-is.
+//
+// Keep this in sync with the control-plane struct: Go's default
+// json.Decoder silently drops unknown fields, so a missing field
+// here means the FE's value is dropped on the way through with no
+// error — the very bug that hid IsTenantPortal not propagating
+// when the admin-UI checkbox was ticked.
 type CreateClientRequest struct {
 	Name         string `json:"name"`
 	ClientType   string `json:"client_type"` // "WEB" or "SPA"
@@ -192,24 +198,34 @@ type CreateClientRequest struct {
 	// (→ default true) from "operator explicitly set false". Forced
 	// true for SPA regardless.
 	RequirePKCE *bool `json:"require_pkce,omitempty"`
+	// IsTenantPortal marks this client as first-party (operator-
+	// owned). Any number of rows may carry the flag — operators
+	// flag each first-party app they register. Operator-only (the
+	// admin-bff is mTLS-trusted to the control plane on a CN
+	// that's allowed to set this); the api-server's bearer-
+	// authenticated /clients endpoint ignores this field on input,
+	// so developers using the <akashic-clients> widget can't
+	// self-promote.
+	IsTenantPortal bool `json:"is_tenant_portal,omitempty"`
 }
 
 // ClientView mirrors the control-plane response shape for a single
 // registered client.
 type ClientView struct {
-	ClientID      string `json:"client_id"`
-	Name          string `json:"name"`
-	Description   string `json:"description,omitempty"`
-	HomepageURL   string `json:"homepage_url,omitempty"`
-	ClientType    string `json:"client_type"`
-	Public        bool   `json:"public"`
-	RedirectURIs  string `json:"redirect_uris"`
-	AllowedScopes string `json:"allowed_scopes"`
-	AuthTypes     string `json:"auth_types"`
-	BuiltIn       bool   `json:"built_in"`
-	RequirePKCE   bool   `json:"require_pkce"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	ClientID       string `json:"client_id"`
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	HomepageURL    string `json:"homepage_url,omitempty"`
+	ClientType     string `json:"client_type"`
+	Public         bool   `json:"public"`
+	RedirectURIs   string `json:"redirect_uris"`
+	AllowedScopes  string `json:"allowed_scopes"`
+	AuthTypes      string `json:"auth_types"`
+	BuiltIn        bool   `json:"built_in"`
+	RequirePKCE    bool   `json:"require_pkce"`
+	IsTenantPortal bool   `json:"is_tenant_portal"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 // CreateClientResponse is what the control plane returns on a
@@ -293,6 +309,38 @@ func (c *ControlClient) ClientDelete(ctx context.Context, clientID string) error
 type RotateSecretResponse struct {
 	ClientID     string `json:"client_id"`
 	ClientSecret string `json:"client_secret"`
+}
+
+// SetupStatus is the shape of GET /admin/setup-status's response.data.
+// Mirrors pkg/server/control/setup_status_handlers.go's output. Each
+// field is a single boolean — the FE banner renders one row per false.
+type SetupStatus struct {
+	BootstrapComplete      bool `json:"bootstrap_complete"`
+	TenantPortalRegistered bool `json:"tenant_portal_registered"`
+	LDAPOK                 bool `json:"ldap_ok"`
+}
+
+// SetupStatusGet calls GET /admin/setup-status. Reachable in both
+// bootstrap and post-bootstrap modes (the endpoint itself reports
+// bootstrap state, so gating it on bootstrap completion would hide
+// it exactly when it's most useful).
+func (c *ControlClient) SetupStatusGet(ctx context.Context) (*SetupStatus, error) {
+	resp, body, err := c.do(ctx, http.MethodGet, "/admin/setup-status", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var out SetupStatus
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		return nil, fmt.Errorf("malformed setup-status payload: %w", err)
+	}
+	return &out, nil
 }
 
 // ClientRotateSecret calls POST /clients/<id>/rotate-secret. Rejected

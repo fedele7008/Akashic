@@ -95,7 +95,7 @@ export function ClientsList({
     return (
       <p className="hint" style={{ marginTop: '1rem' }}>
         No clients registered yet. Click "Register a new client" above to
-        register your tenant's primary portal.
+        register your tenant's first-party apps.
       </p>
     );
   }
@@ -145,7 +145,7 @@ export function ClientsList({
                       color: '#16a34a',
                       fontWeight: 500,
                       verticalAlign: 'middle',
-                    }}>primary</span>
+                    }}>first-party</span>
                   )}
                 </Td>
                 <Td><code style={{ fontSize: '0.8125rem' }}>{c.client_id}</code></Td>

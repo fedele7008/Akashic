@@ -618,3 +618,68 @@ details[open] summary {
   color: var(--text-muted);
   margin: 4px 0 0 0;
 }
+
+/* ─── Setup-status banner (Phase 8c.1) ───
+   Amber/warn palette, distinct from .error so the operator reads
+   "this is fixable, not broken." Sits at top of .content-inner so
+   it spans the full content column above the page-specific
+   header. */
+.setup-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 14px 18px;
+  margin-bottom: 24px;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 8px;
+  box-shadow: var(--shadow-sm);
+}
+
+.setup-banner-icon {
+  color: #f59e0b;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  margin-top: 2px;
+}
+
+.setup-banner-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.setup-banner-title {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+
+.setup-banner-items {
+  list-style: disc;
+  padding-left: 1.25rem;
+  margin: 6px 0 0 0;
+  color: var(--text-muted);
+  font-size: 0.875rem;
+  line-height: 1.5;
+}
+
+.setup-banner-items li + li {
+  margin-top: 6px;
+}
+
+.setup-banner-items strong {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.setup-banner-items code {
+  background: var(--surface);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.8125rem;
+  color: var(--text);
+}

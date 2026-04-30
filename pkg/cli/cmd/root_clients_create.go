@@ -122,9 +122,6 @@ done via the portal's environment configuration.`,
 			if resp.StatusCode != http.StatusCreated {
 				if errCode, msg := extractServerErrorCode(body); errCode != "" {
 					switch errCode {
-					case "TENANT_PORTAL_ALREADY_SET":
-						return cliErr(ExitValidation,
-							fmt.Errorf("a tenant portal is already registered. The server reported:\n  %s\n\nClear the existing one first with `akashic-cli clients delete <id>`,\nor omit --tenant-portal on this registration.", msg))
 					case "BOOTSTRAP_INCOMPLETE":
 						// The deployment hasn't been bootstrapped yet —
 						// registering clients now would dangle. Surface
@@ -223,7 +220,7 @@ done via the portal's environment configuration.`,
 	cmd.Flags().StringVar(&saveCredentialsTo, "save-credentials-to", "",
 		"path to write the client_id+client_secret as JSON (mode 0600). Used by in-stack samples that read credentials at runtime; real-tenant deployments typically hardcode the printed secret into .env instead.")
 	cmd.Flags().BoolVar(&tenantPortal, "tenant-portal", false,
-		"mark this client as the deployment's primary tenant portal. At most one row may have this; rejected if another already does. Operator-only.")
+		"mark this client as first-party (operator-owned). Any number of clients may carry the flag — flag every operator-owned app you register so the admin UI can distinguish them from third-party developer integrations. Operator-only.")
 	return cmd
 }
 

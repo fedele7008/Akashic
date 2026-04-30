@@ -59,6 +59,15 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
       }
       const resp = await ClientsApi.create(req);
       setResult(resp);
+      // Notify any listeners that setup-relevant state may have
+      // changed — most notably the SetupStatusBanner, which
+      // surfaces "no tenant portal registered" until a flagged
+      // client exists. Loose-coupled via a custom DOM event so
+      // we don't have to thread a callback through ClientsPage
+      // and Dashboard purely for this side-effect.
+      if (isTenantPortal) {
+        window.dispatchEvent(new CustomEvent('akashic:setup-changed'));
+      }
     } catch (e) {
       const err = e as Error & { apiError?: ApiError };
       setError(err.apiError?.message ?? err.message);
@@ -286,12 +295,14 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
               style={{ marginTop: '0.25rem' }}
             />
             <span style={{ flex: 1 }}>
-              Mark as the tenant's primary portal.{' '}
+              Mark as first-party (operator-owned).{' '}
               <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
-                Only one client may hold this flag — registration fails
-                with TENANT_PORTAL_ALREADY_SET if another already does.
-                The flag is purely a label so this row is visually
-                distinguishable from third-party developer integrations.
+                Flag this when you (the operator) own the app you're
+                registering — your tenant portal, mail/calendar/drive
+                apps, account-management page. Multiple clients can
+                carry the flag. The "first-party" badge in the list
+                view distinguishes these rows from third-party
+                developer integrations.
               </span>
             </span>
           </label>
