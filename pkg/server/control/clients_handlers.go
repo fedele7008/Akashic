@@ -57,22 +57,30 @@ type adminCreateClientRequest struct {
 	// (→ default true) from "operator explicitly set false". Forced
 	// true for SPA regardless.
 	RequirePKCE *bool `json:"require_pkce,omitempty"`
+	// IsTenantPortal marks this client as the deployment's primary
+	// tenant portal. Server-side check rejects with
+	// TENANT_PORTAL_ALREADY_SET when another row already holds the
+	// flag. Operator-only (this is the control-plane / mTLS-gated
+	// surface); the api-server's bearer-auth /clients endpoint
+	// ignores any value sent here.
+	IsTenantPortal bool `json:"is_tenant_portal,omitempty"`
 }
 
 type adminClientView struct {
-	ClientID      string `json:"client_id"`
-	Name          string `json:"name"`
-	Description   string `json:"description,omitempty"`
-	HomepageURL   string `json:"homepage_url,omitempty"`
-	ClientType    string `json:"client_type"`
-	Public        bool   `json:"public"`
-	RedirectURIs  string `json:"redirect_uris"`
-	AllowedScopes string `json:"allowed_scopes"`
-	AuthTypes     string `json:"auth_types"`
-	BuiltIn       bool   `json:"built_in"`
-	RequirePKCE   bool   `json:"require_pkce"`
-	CreatedAt     string `json:"created_at"`
-	UpdatedAt     string `json:"updated_at"`
+	ClientID       string `json:"client_id"`
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	HomepageURL    string `json:"homepage_url,omitempty"`
+	ClientType     string `json:"client_type"`
+	Public         bool   `json:"public"`
+	RedirectURIs   string `json:"redirect_uris"`
+	AllowedScopes  string `json:"allowed_scopes"`
+	AuthTypes      string `json:"auth_types"`
+	BuiltIn        bool   `json:"built_in"`
+	RequirePKCE    bool   `json:"require_pkce"`
+	IsTenantPortal bool   `json:"is_tenant_portal"`
+	CreatedAt      string `json:"created_at"`
+	UpdatedAt      string `json:"updated_at"`
 }
 
 type adminCreateClientResponse struct {
@@ -89,19 +97,20 @@ func toAdminClientView(c *models.ClientService) adminClientView {
 		label = adminClientTypeSPA
 	}
 	return adminClientView{
-		ClientID:      c.ClientID,
-		Name:          c.Name,
-		Description:   c.Description,
-		HomepageURL:   c.HomepageURL,
-		ClientType:    label,
-		Public:        c.Public,
-		RedirectURIs:  c.RedirectURIs,
-		AllowedScopes: c.AllowedScopes,
-		AuthTypes:     c.AuthTypes,
-		BuiltIn:       c.BuiltIn,
-		RequirePKCE:   c.RequirePKCE,
-		CreatedAt:     c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:     c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ClientID:       c.ClientID,
+		Name:           c.Name,
+		Description:    c.Description,
+		HomepageURL:    c.HomepageURL,
+		ClientType:     label,
+		Public:         c.Public,
+		RedirectURIs:   c.RedirectURIs,
+		AllowedScopes:  c.AllowedScopes,
+		AuthTypes:      c.AuthTypes,
+		BuiltIn:        c.BuiltIn,
+		RequirePKCE:    c.RequirePKCE,
+		IsTenantPortal: c.IsTenantPortal,
+		CreatedAt:      c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:      c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 
@@ -356,15 +365,25 @@ func (s *Server) handleAdminCreateClient(w http.ResponseWriter, r *http.Request)
 	// user_type can manage anything) still allows later UI-driven
 	// edits by an authenticated operator.
 	result, err := clientservice.Create(r.Context(), s.db, clientservice.CreateParams{
-		Name:          req.Name,
-		Description:   req.Description,
-		HomepageURL:   req.HomepageURL,
-		Public:        public,
-		RequirePKCE:   requirePKCE,
-		RedirectURIs:  req.RedirectURIs,
-		AllowedScopes: req.AllowedScopes,
-		OwnerUserID:   nil,
+		Name:           req.Name,
+		Description:    req.Description,
+		HomepageURL:    req.HomepageURL,
+		Public:         public,
+		RequirePKCE:    requirePKCE,
+		RedirectURIs:   req.RedirectURIs,
+		AllowedScopes:  req.AllowedScopes,
+		OwnerUserID:    nil,
+		IsTenantPortal: req.IsTenantPortal,
 	})
+	if errors.Is(err, clientservice.ErrTenantPortalAlreadySet) {
+		// Surface the existing primary's ID in the error message so
+		// the operator can `clients delete <id>` it before re-trying.
+		// err.Error() already includes "(current: tc-…)" via the
+		// wrapped fmt.Errorf.
+		response.WriteJSON(w, http.StatusConflict,
+			response.Fail("TENANT_PORTAL_ALREADY_SET", err.Error(), nil))
+		return
+	}
 	if err != nil {
 		s.logger.App.Error("adminCreateClient: clientservice.Create", zap.Error(err))
 		response.WriteJSON(w, http.StatusInternalServerError,

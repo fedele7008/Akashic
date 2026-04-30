@@ -20,6 +20,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/login/submit", s.handleLoginSubmit)
 	mux.HandleFunc("/logout", s.handleLogout)
 
+	// Self-service signup UI. Hosted on the auth server so signup
+	// works out of the box — no operator-side configuration required
+	// to enable the flow.
+	mux.HandleFunc("/signup", s.handleSignupPage)
+	mux.HandleFunc("/signup/submit", s.handleSignupSubmit)
+
 	// OAuth flow endpoints (Phase 7 Steps 5-7).
 	//
 	// /authorize is a top-level browser navigation (the SPA / portal

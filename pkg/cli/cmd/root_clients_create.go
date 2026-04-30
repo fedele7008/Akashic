@@ -32,6 +32,7 @@ func NewClientsCreateCmd(ctx *core.CliContext) *cobra.Command {
 		homepageURL       string
 		noPKCE            bool
 		saveCredentialsTo string
+		tenantPortal      bool
 	)
 
 	cmd := &cobra.Command{
@@ -102,6 +103,9 @@ done via the portal's environment configuration.`,
 			if homepageURL != "" {
 				payload["homepage_url"] = homepageURL
 			}
+			if tenantPortal {
+				payload["is_tenant_portal"] = true
+			}
 			// Only send require_pkce when WEB + operator explicitly
 			// disabled it. SPA always-true is enforced server-side
 			// regardless of what we send; omitting keeps the request
@@ -118,6 +122,9 @@ done via the portal's environment configuration.`,
 			if resp.StatusCode != http.StatusCreated {
 				if errCode, msg := extractServerErrorCode(body); errCode != "" {
 					switch errCode {
+					case "TENANT_PORTAL_ALREADY_SET":
+						return cliErr(ExitValidation,
+							fmt.Errorf("a tenant portal is already registered. The server reported:\n  %s\n\nClear the existing one first with `akashic-cli clients delete <id>`,\nor omit --tenant-portal on this registration.", msg))
 					case "BOOTSTRAP_INCOMPLETE":
 						// The deployment hasn't been bootstrapped yet —
 						// registering clients now would dangle. Surface
@@ -151,7 +158,7 @@ done via the portal's environment configuration.`,
 			}
 
 			fmt.Println("✓ OAuth client registered successfully")
-			for _, key := range []string{"client_id", "name", "client_type", "redirect_uris", "require_pkce", "public", "created_at"} {
+			for _, key := range []string{"client_id", "name", "client_type", "redirect_uris", "require_pkce", "public", "is_tenant_portal", "created_at"} {
 				if v, ok := env.Data.Client[key]; ok {
 					fmt.Printf("  %-15s %v\n", key+":", v)
 				}
@@ -215,6 +222,8 @@ done via the portal's environment configuration.`,
 		"WEB clients only: disable the PKCE requirement (default: required). Rejected for SPA.")
 	cmd.Flags().StringVar(&saveCredentialsTo, "save-credentials-to", "",
 		"path to write the client_id+client_secret as JSON (mode 0600). Used by in-stack samples that read credentials at runtime; real-tenant deployments typically hardcode the printed secret into .env instead.")
+	cmd.Flags().BoolVar(&tenantPortal, "tenant-portal", false,
+		"mark this client as the deployment's primary tenant portal. At most one row may have this; rejected if another already does. Operator-only.")
 	return cmd
 }
 

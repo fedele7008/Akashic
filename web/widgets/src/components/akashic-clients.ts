@@ -41,6 +41,7 @@ interface ClientView {
   auth_types: string;
   built_in: boolean;
   require_pkce: boolean;
+  is_tenant_portal: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -195,6 +196,16 @@ export class AkashicClients extends LitElement {
       border-radius: 0.25rem;
       background: var(--akashic-accent-soft, rgba(79, 140, 255, 0.15));
       color: var(--akashic-accent, #4f8cff);
+    }
+    [part="badge-primary"] {
+      display: inline-block;
+      margin-left: 0.5rem;
+      padding: 0.125rem 0.375rem;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      border-radius: 0.25rem;
+      background: var(--akashic-success-soft, rgba(22, 163, 74, 0.18));
+      color: var(--akashic-success, #16a34a);
     }
     [part="row-actions"] {
       text-align: right;
@@ -438,6 +449,8 @@ export class AkashicClients extends LitElement {
         <td part="cell">
           ${c.name}${c.built_in
             ? html`<span part="badge-builtin">built-in</span>`
+            : ""}${c.is_tenant_portal
+            ? html`<span part="badge-primary">primary</span>`
             : ""}
         </td>
         <td part="cell"><code>${c.client_id}</code></td>

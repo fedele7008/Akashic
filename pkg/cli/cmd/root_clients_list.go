@@ -96,7 +96,7 @@ clients (everything created via this CLI or the admin web).`,
 			// Compute column widths for alignment. Plain text is
 			// fine here — operators pipe to less/grep more often
 			// than they parse it; --json exists for structured.
-			cols := []string{"client_id", "client_type", "name", "built_in", "redirect_uris"}
+			cols := []string{"client_id", "client_type", "name", "built_in", "is_tenant_portal", "redirect_uris"}
 			widths := make(map[string]int, len(cols))
 			for _, c := range cols {
 				widths[c] = len(c)

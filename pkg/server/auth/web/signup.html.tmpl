@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Create an account — Akashic</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="card">
+    <h1>Create an account</h1>
+    <p class="subtitle">Akashic Identity Provider</p>
+
+    {{if .Error}}
+    <div class="error" role="alert">{{.Error}}</div>
+    {{end}}
+
+    {{if .PolicyHint}}
+    <p class="policy-hint">{{.PolicyHint}}</p>
+    {{end}}
+
+    <form method="POST" action="/signup/submit" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="return_to" value="{{.ReturnTo}}">
+
+      <label>
+        <span>Username</span>
+        <input type="text" name="username" required autofocus
+               spellcheck="false" autocapitalize="off"
+               autocomplete="username"
+               value="{{.Username}}">
+      </label>
+
+      <label>
+        <span>Email</span>
+        <input type="email" name="email" required
+               spellcheck="false" autocapitalize="off"
+               autocomplete="email"
+               value="{{.Email}}">
+      </label>
+
+      <label>
+        <span>Display name <em>(optional)</em></span>
+        <input type="text" name="display_name"
+               autocomplete="name"
+               value="{{.DisplayName}}">
+      </label>
+
+      <label>
+        <span>Password</span>
+        <input type="password" name="password" required
+               autocomplete="new-password">
+      </label>
+
+      <label>
+        <span>Confirm password</span>
+        <input type="password" name="password_confirm" required
+               autocomplete="new-password">
+      </label>
+
+      <button type="submit">Create account</button>
+    </form>
+
+    <p class="signup-prompt">
+      Already have an account?
+      <a href="/login{{if .ReturnTo}}?return_to={{.ReturnTo}}{{end}}">Sign in</a>
+    </p>
+  </main>
+</body>
+</html>

@@ -141,6 +141,13 @@ export interface CreateClientRequest {
    * for SPA (always-true is enforced server-side regardless).
    */
   require_pkce?: boolean;
+  /**
+   * Mark this client as the deployment's primary tenant portal.
+   * At most one row may have this set; the server rejects with
+   * `TENANT_PORTAL_ALREADY_SET` (HTTP 409) when another client
+   * already holds the flag.
+   */
+  is_tenant_portal?: boolean;
 }
 
 export interface ClientView {
@@ -155,6 +162,7 @@ export interface ClientView {
   auth_types: string;
   built_in: boolean;
   require_pkce: boolean;
+  is_tenant_portal: boolean;
   created_at: string;
   updated_at: string;
 }

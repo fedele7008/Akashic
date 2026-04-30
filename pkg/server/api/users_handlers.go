@@ -11,6 +11,7 @@ import (
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/server/response"
+	"akashic/akashic/pkg/userregistration"
 
 	"github.com/go-ldap/ldap/v3"
 	"github.com/google/uuid"
@@ -93,51 +94,41 @@ func (s *Server) handleRegisterUser(w http.ResponseWriter, r *http.Request) {
 	req.Email = strings.TrimSpace(req.Email)
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
 
-	if req.Username == "" || req.Email == "" || req.Password == "" {
+	user, err := userregistration.Register(r.Context(), userregistration.Deps{
+		LDAP:     s.ldapClient,
+		UserRepo: s.userRepo,
+		Policy:   s.policyFromConfig(),
+	}, userregistration.Params{
+		Username:    req.Username,
+		Email:       req.Email,
+		Password:    req.Password,
+		DisplayName: req.DisplayName,
+	})
+	switch {
+	case errors.Is(err, userregistration.ErrFieldRequired):
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("VALIDATION_FAILED",
 				"username, email, and password are required", nil))
 		return
-	}
-	if !looksLikeEmail(req.Email) {
+	case errors.Is(err, userregistration.ErrEmailInvalid):
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("VALIDATION_FAILED",
 				"email is not a valid email address", nil))
 		return
-	}
-
-	policy := s.policyFromConfig()
-	if err := policy.Validate(req.Password); err != nil {
+	case errors.Is(err, userregistration.ErrPasswordPolicyViolated):
+		// Surface the wrapped detail (which rule failed) so the
+		// widget's inline error matches what the policy says.
 		response.WriteJSON(w, http.StatusBadRequest,
-			response.Fail("PASSWORD_POLICY_VIOLATION", err.Error(), nil))
+			response.Fail("PASSWORD_POLICY_VIOLATION",
+				strings.TrimPrefix(err.Error(), "password does not satisfy the policy: "), nil))
 		return
-	}
-
-	exists, err := s.ldapClient.UserExists(req.Username)
-	if err != nil {
-		s.logger.App.Error("register: LDAP UserExists failed",
-			zap.String("username", req.Username), zap.Error(err))
-		response.WriteJSON(w, http.StatusInternalServerError,
-			response.Fail("INTERNAL", "could not check username availability", nil))
-		return
-	}
-	if exists {
+	case errors.Is(err, userregistration.ErrUsernameTaken):
 		response.WriteJSON(w, http.StatusConflict,
 			response.Fail("USERNAME_TAKEN",
 				"that username is already in use", nil))
 		return
-	}
-
-	createReq := &models.CreateUserRequest{
-		Username:    req.Username,
-		Email:       req.Email,
-		Password:    req.Password,
-		UserType:    models.UserTypeUser,
-		DisplayName: req.DisplayName,
-	}
-	user, err := s.userRepo.CreateUser(r.Context(), createReq, req.Password)
-	if err != nil {
-		s.logger.App.Error("register: CreateUser failed",
+	case err != nil:
+		s.logger.App.Error("register: userregistration.Register",
 			zap.String("username", req.Username), zap.Error(err))
 		response.WriteJSON(w, http.StatusInternalServerError,
 			response.Fail("INTERNAL", "could not create user", nil))

@@ -347,6 +347,12 @@ func (s *Server) writeControlError(w http.ResponseWriter, err error, context str
 			// it clearly so the operator knows what to do.
 			writeError(w, http.StatusConflict, "BOOTSTRAP_INCOMPLETE",
 				"Bootstrap is not yet complete. Run `akashic-cli bootstrap create-root` first.")
+		case "TENANT_PORTAL_ALREADY_SET":
+			// Pass through the server's message — it includes the
+			// existing primary's client_id so the operator knows
+			// what to clear or which row to edit instead.
+			writeError(w, http.StatusConflict, "TENANT_PORTAL_ALREADY_SET",
+				ctlErr.Message)
 		case "DB_NOT_READY":
 			writeError(w, http.StatusServiceUnavailable, "DB_NOT_READY",
 				"The akashic-server's database isn't fully wired yet. Retry shortly.")

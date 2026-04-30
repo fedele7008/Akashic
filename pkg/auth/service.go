@@ -35,6 +35,21 @@ func NewService(
 	}
 }
 
+// LDAPClient returns the LDAP client this service holds. Exposed
+// so callers (currently the auth-server's /signup handler) can
+// build a userregistration.Deps without re-injecting ldap config
+// from scratch.
+func (s *Service) LDAPClient() *ldap.Client {
+	return s.ldapClient
+}
+
+// UserRepository returns the user repository this service holds.
+// Exposed for the same reason as LDAPClient — letting handlers
+// build domain-package Deps without parallel injection paths.
+func (s *Service) UserRepository() *repository.UserRepository {
+	return s.userRepository
+}
+
 // AuthenticateResult contains the result of authentication
 type AuthenticateResult struct {
 	User        *models.User

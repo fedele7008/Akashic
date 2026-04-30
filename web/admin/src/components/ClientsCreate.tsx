@@ -30,6 +30,7 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
   const [redirectURI, setRedirectURI] = useState('');
   const [description, setDescription] = useState('');
   const [requirePKCE, setRequirePKCE] = useState(true);
+  const [isTenantPortal, setIsTenantPortal] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,6 +53,9 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
       // omitting keeps the request honest about operator intent.
       if (clientType === 'WEB' && !requirePKCE) {
         req.require_pkce = false;
+      }
+      if (isTenantPortal) {
+        req.is_tenant_portal = true;
       }
       const resp = await ClientsApi.create(req);
       setResult(resp);
@@ -272,6 +276,25 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
               </span>
             </label>
           )}
+
+          <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '0.5rem' }}>
+            <input
+              type="checkbox"
+              checked={isTenantPortal}
+              onChange={(e) => setIsTenantPortal(e.target.checked)}
+              disabled={submitting}
+              style={{ marginTop: '0.25rem' }}
+            />
+            <span style={{ flex: 1 }}>
+              Mark as the tenant's primary portal.{' '}
+              <span style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                Only one client may hold this flag — registration fails
+                with TENANT_PORTAL_ALREADY_SET if another already does.
+                The flag is purely a label so this row is visually
+                distinguishable from third-party developer integrations.
+              </span>
+            </span>
+          </label>
         </div>
 
         {error && (

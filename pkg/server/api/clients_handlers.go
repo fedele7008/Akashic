@@ -46,17 +46,18 @@ type clientView struct {
 	//
 	// Surfaced alongside the protocol-correct `public` bool so UI
 	// code (admin-bff, <akashic-clients> widget) can render either.
-	ClientType    string  `json:"client_type"`
-	Public        bool    `json:"public"`
-	RedirectURIs  string  `json:"redirect_uris"`
-	AllowedScopes string  `json:"allowed_scopes"`
-	AuthTypes     string  `json:"auth_types"`
-	BuiltIn       bool    `json:"built_in"`
-	RoleAllowlist string  `json:"role_allowlist,omitempty"`
-	RequirePKCE   bool    `json:"require_pkce"`
-	OwnerUserID   *string `json:"owner_user_id,omitempty"`
-	CreatedAt     string  `json:"created_at"`
-	UpdatedAt     string  `json:"updated_at"`
+	ClientType     string  `json:"client_type"`
+	Public         bool    `json:"public"`
+	RedirectURIs   string  `json:"redirect_uris"`
+	AllowedScopes  string  `json:"allowed_scopes"`
+	AuthTypes      string  `json:"auth_types"`
+	BuiltIn        bool    `json:"built_in"`
+	RoleAllowlist  string  `json:"role_allowlist,omitempty"`
+	RequirePKCE    bool    `json:"require_pkce"`
+	IsTenantPortal bool    `json:"is_tenant_portal"`
+	OwnerUserID    *string `json:"owner_user_id,omitempty"`
+	CreatedAt      string  `json:"created_at"`
+	UpdatedAt      string  `json:"updated_at"`
 }
 
 // Canonical wire labels for client_type. Always uppercase on the
@@ -75,20 +76,21 @@ func clientTypeLabel(public bool) string {
 
 func toClientView(c *models.ClientService) clientView {
 	v := clientView{
-		ClientID:      c.ClientID,
-		Name:          c.Name,
-		Description:   c.Description,
-		HomepageURL:   c.HomepageURL,
-		ClientType:    clientTypeLabel(c.Public),
-		Public:        c.Public,
-		RedirectURIs:  c.RedirectURIs,
-		AllowedScopes: c.AllowedScopes,
-		AuthTypes:     c.AuthTypes,
-		BuiltIn:       c.BuiltIn,
-		RoleAllowlist: c.RoleAllowlist,
-		RequirePKCE:   c.RequirePKCE,
-		CreatedAt:     c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:     c.UpdatedAt.UTC().Format(time.RFC3339),
+		ClientID:       c.ClientID,
+		Name:           c.Name,
+		Description:    c.Description,
+		HomepageURL:    c.HomepageURL,
+		ClientType:     clientTypeLabel(c.Public),
+		Public:         c.Public,
+		RedirectURIs:   c.RedirectURIs,
+		AllowedScopes:  c.AllowedScopes,
+		AuthTypes:      c.AuthTypes,
+		BuiltIn:        c.BuiltIn,
+		RoleAllowlist:  c.RoleAllowlist,
+		RequirePKCE:    c.RequirePKCE,
+		IsTenantPortal: c.IsTenantPortal,
+		CreatedAt:      c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:      c.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if c.OwnerUserID != nil {
 		s := c.OwnerUserID.String()

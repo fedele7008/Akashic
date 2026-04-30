@@ -36,6 +36,13 @@
       <button type="submit">Sign in</button>
     </form>
 
+    {{if .SignUpHref}}
+    <p class="signup-prompt">
+      Don't have an account?
+      <a href="{{.SignUpHref}}">Create one</a>
+    </p>
+    {{end}}
+
     {{if .CancelURL}}
     <p class="cancel">
       <a href="{{.CancelURL}}">← Back</a>

@@ -66,14 +66,48 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	csrf := s.ensureLoginCSRF(w, r)
 	returnTo := safeReturnTo(r.URL.Query().Get("return_to"))
 	cancelTo := cancelTargetFromReturnTo(returnTo)
+	// Pre-fill the username field from a `?username=` query param —
+	// set by the /signup/submit redirect after successful sign-up so
+	// the user only has to type their password to finish the flow.
+	prefillUsername := strings.TrimSpace(r.URL.Query().Get("username"))
 
-	renderTemplate(w, "login.html.tmpl", http.StatusOK, map[string]any{
+	renderTemplate(w, "login.html.tmpl", http.StatusOK, s.loginTemplateData(returnTo, map[string]any{
 		"CSRFToken": csrf,
 		"ReturnTo":  returnTo,
 		"CancelURL": cancelTo,
-		"Username":  "",
+		"Username":  prefillUsername,
 		"Error":     "",
-	})
+	}))
+}
+
+// loginTemplateData augments the per-call template data with the
+// shared, dynamically-derived fields that every render of
+// login.html.tmpl needs.
+//
+// returnTo (caller-validated via safeReturnTo) is woven into the
+// "Create account" link so the /login → /signup → /login round-trip
+// preserves OAuth context.
+func (s *Server) loginTemplateData(returnTo string, extra map[string]any) map[string]any {
+	extra["SignUpHref"] = signUpHref(returnTo)
+	return extra
+}
+
+// signUpHref returns the URL the /login page's "Create account"
+// link points at — always the auth-server-hosted /signup, with
+// `return_to` (when present) appended so a successful sign-up can
+// resume the OAuth flow that brought the user here.
+//
+// returnTo is expected to be a safe (relative, same-origin) value
+// from safeReturnTo. The receiving /signup handler validates it
+// again on its own form submit.
+func signUpHref(returnTo string) string {
+	const path = "/signup"
+	if returnTo == "" {
+		return path
+	}
+	q := url.Values{}
+	q.Set("return_to", returnTo)
+	return path + "?" + q.Encode()
 }
 
 // renderBootstrapPending renders a friendly 503 explaining that the
@@ -112,11 +146,8 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// CSRF check
-	cookieVal := readCookie(r, loginCSRFCookie)
-	formVal := r.PostForm.Get("csrf_token")
-	if cookieVal == "" || formVal == "" ||
-		subtle.ConstantTimeCompare([]byte(cookieVal), []byte(formVal)) != 1 {
+	// CSRF check (shared with /signup/submit)
+	if !s.verifyLoginCSRF(r) {
 		s.logger.Security.Warn("login CSRF check failed",
 			zap.String("remote_ip", clientIP(r)))
 		s.renderLoginError(w, r, "Session expired. Please reload and try again.", "")
@@ -218,10 +249,37 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		zap.String("user_type", sess.UserType),
 		zap.String("ip", ip))
 
+	// returnTo is empty when the user landed on /login directly
+	// (typed the URL, used a saved bookmark, etc.) rather than via
+	// an OAuth /authorize redirect. The auth server is purely an
+	// IdP — it has no first-class home page to send them to — so
+	// render a minimal "you're signed in" landing instead of
+	// redirecting to "/" (which would 404, since no GET / route is
+	// registered).
 	if returnTo == "" {
-		returnTo = "/"
+		s.renderSignedInLanding(w, sess.Username)
+		return
 	}
 	http.Redirect(w, r, returnTo, http.StatusSeeOther)
+}
+
+// renderSignedInLanding shows the user a small confirmation page
+// after a direct /login that wasn't part of an OAuth flow. Reuses
+// error.html.tmpl's fields (Title/Message/Detail) — semantically
+// it's an info screen, not an error, but the template's structure
+// (a card with title + body) is fine for both, and avoiding a new
+// template keeps the surface small. The 200 status reflects that
+// this is a normal, successful landing.
+func (s *Server) renderSignedInLanding(w http.ResponseWriter, username string) {
+	greeting := "You're signed in."
+	if username != "" {
+		greeting = "Signed in as " + username + "."
+	}
+	renderTemplate(w, "error.html.tmpl", http.StatusOK, map[string]any{
+		"Title":   "Signed in",
+		"Message": greeting,
+		"Detail":  "Open the app you wanted to use, or close this tab. Your session stays active for single sign-on.",
+	})
 }
 
 // handleLogout clears the session cookie and removes the session
@@ -321,16 +379,33 @@ func (s *Server) renderLoginError(w http.ResponseWriter, r *http.Request, msg, u
 	if r.PostForm != nil {
 		returnTo = safeReturnTo(r.PostForm.Get("return_to"))
 	}
-	renderTemplate(w, "login.html.tmpl", http.StatusOK, map[string]any{
+	renderTemplate(w, "login.html.tmpl", http.StatusOK, s.loginTemplateData(returnTo, map[string]any{
 		"CSRFToken": csrf,
 		"ReturnTo":  returnTo,
 		"CancelURL": cancelTargetFromReturnTo(returnTo),
 		"Username":  username,
 		"Error":     msg,
-	})
+	}))
 }
 
 // ─── CSRF cookie helpers ───────────────────────────────────────────
+
+// verifyLoginCSRF runs the double-submit-cookie check on a POST
+// request. Returns true when the cookie value matches the form
+// field value (constant-time compare); false on any mismatch or
+// missing value. Shared by /login/submit and /signup/submit.
+//
+// On false the caller is expected to log a security warning AND
+// re-render the originating form with a "session expired" error
+// (renderLoginError / renderSignupError handle the second part).
+func (s *Server) verifyLoginCSRF(r *http.Request) bool {
+	cookieVal := readCookie(r, loginCSRFCookie)
+	formVal := r.PostForm.Get("csrf_token")
+	if cookieVal == "" || formVal == "" {
+		return false
+	}
+	return subtle.ConstantTimeCompare([]byte(cookieVal), []byte(formVal)) == 1
+}
 
 // ensureLoginCSRF returns the current CSRF token, setting a fresh
 // cookie if none exists. Same double-submit-cookie pattern admin-bff

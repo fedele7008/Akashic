@@ -55,6 +55,12 @@ type CreateParams struct {
 	// no per-user owner). The model's `canManage()` check honours this
 	// distinction at edit/delete time.
 	OwnerUserID *uuid.UUID
+
+	// IsTenantPortal marks this row as the deployment's primary
+	// portal — at most one row may have this set. Operator-only;
+	// the api-server's bearer-authenticated /clients endpoint does
+	// NOT thread this through to clientservice (passes false).
+	IsTenantPortal bool
 }
 
 // CreateResult is what Create returns on success.
@@ -72,7 +78,27 @@ type CreateResult struct {
 //
 // Built-in clients are NOT created via this function — they live in
 // pkg/oauth/builtin.go's EnsureBuiltInClients reconcile loop.
+//
+// Cross-row constraint: at most one row may have IsTenantPortal=true.
+// When p.IsTenantPortal is true and another row already holds the
+// flag, returns ErrTenantPortalAlreadySet — caller maps this to the
+// surface-appropriate error code (CLI exit, 409, etc.) and is
+// expected to surface the existing primary's client_id so the
+// operator can decide whether to clear it first.
 func Create(ctx context.Context, db *gorm.DB, p CreateParams) (*CreateResult, error) {
+	if p.IsTenantPortal {
+		var existing models.ClientService
+		err := db.WithContext(ctx).
+			Where("is_tenant_portal = ?", true).
+			Limit(1).Find(&existing).Error
+		if err != nil {
+			return nil, fmt.Errorf("check existing tenant portal: %w", err)
+		}
+		if existing.ClientID != "" {
+			return nil, fmt.Errorf("%w (current: %s)", ErrTenantPortalAlreadySet, existing.ClientID)
+		}
+	}
+
 	clientID, err := generateClientID()
 	if err != nil {
 		return nil, fmt.Errorf("generate client_id: %w", err)
@@ -112,6 +138,7 @@ func Create(ctx context.Context, db *gorm.DB, p CreateParams) (*CreateResult, er
 		Public:           p.Public,
 		RequirePKCE:      p.RequirePKCE,
 		OwnerUserID:      p.OwnerUserID,
+		IsTenantPortal:   p.IsTenantPortal,
 	}
 	if err := db.WithContext(ctx).Create(&row).Error; err != nil {
 		return nil, fmt.Errorf("db insert: %w", err)
@@ -119,12 +146,13 @@ func Create(ctx context.Context, db *gorm.DB, p CreateParams) (*CreateResult, er
 	return &CreateResult{Client: &row, Secret: secret}, nil
 }
 
-// Sentinel errors returned by RotateSecret. Handlers errors.Is()-check
-// to map them to specific HTTP error codes (BUILTIN_IMMUTABLE,
-// PUBLIC_CLIENT_NO_SECRET).
+// Sentinel errors. Handlers errors.Is()-check to map them to specific
+// HTTP error codes (BUILTIN_IMMUTABLE, PUBLIC_CLIENT_NO_SECRET,
+// TENANT_PORTAL_ALREADY_SET).
 var (
-	ErrBuiltInImmutable     = errors.New("built-in client secrets are server-managed")
-	ErrPublicClientNoSecret = errors.New("public clients have no shared secret to rotate")
+	ErrBuiltInImmutable       = errors.New("built-in client secrets are server-managed")
+	ErrPublicClientNoSecret   = errors.New("public clients have no shared secret to rotate")
+	ErrTenantPortalAlreadySet = errors.New("a tenant portal is already registered")
 )
 
 // RotateSecret issues a fresh client_secret for an existing

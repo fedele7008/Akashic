@@ -134,6 +134,19 @@ export function ClientsList({
                       verticalAlign: 'middle',
                     }}>built-in</span>
                   )}
+                  {c.is_tenant_portal && (
+                    <span style={{
+                      display: 'inline-block',
+                      marginLeft: '0.5rem',
+                      padding: '0.125rem 0.375rem',
+                      fontSize: '0.6875rem',
+                      borderRadius: '0.25rem',
+                      background: 'rgba(22, 163, 74, 0.18)',
+                      color: '#16a34a',
+                      fontWeight: 500,
+                      verticalAlign: 'middle',
+                    }}>primary</span>
+                  )}
                 </Td>
                 <Td><code style={{ fontSize: '0.8125rem' }}>{c.client_id}</code></Td>
                 <Td>{c.client_type}</Td>

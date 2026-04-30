@@ -224,6 +224,28 @@ type ClientService struct {
 	Description string     `gorm:"type:text" json:"description,omitempty"`
 	HomepageURL string     `gorm:"type:text" json:"homepage_url,omitempty"`
 
+	// IsTenantPortal marks this client as the tenant's primary
+	// portal — the deployment's main consumer of Akashic, where
+	// end users land for sign-up / sign-in. At most one row in
+	// client_services may have this flag set; the constraint is
+	// enforced by the clientservice package's create/update path
+	// (pkg/clientservice) rather than via SQL, so the rejection
+	// surfaces as a typed Go error with a clear message instead
+	// of a generic constraint violation.
+	//
+	// Operator-set only — the akashic-cli `clients create
+	// --tenant-portal` flag and the admin-bff create form expose
+	// the toggle. The bearer-authenticated api-server endpoint
+	// (used by tenant developers via the <akashic-clients> widget)
+	// does NOT accept this field; developers can't self-promote
+	// one of their integrations to "the tenant's primary portal."
+	//
+	// Today the flag is purely a label: it lets the admin UI / CLI /
+	// widget render a "primary" badge so operators can tell their
+	// own tenant portal apart from third-party developer
+	// integrations at a glance.
+	IsTenantPortal bool `gorm:"not null;default:false;index" json:"is_tenant_portal"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }
