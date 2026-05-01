@@ -528,12 +528,18 @@ func (s *Server) handleClientByID(w http.ResponseWriter, r *http.Request) {
 	}
 	switch action {
 	case "":
-		if r.Method != http.MethodDelete {
+		switch r.Method {
+		case http.MethodGet:
+			s.getClient(w, r, id)
+		case http.MethodPatch:
+			s.patchClient(w, r, id)
+		case http.MethodDelete:
+			s.deleteClient(w, r, id)
+		default:
 			writeError(w, http.StatusMethodNotAllowed,
-				"METHOD_NOT_ALLOWED", "Only DELETE is allowed on this path.")
-			return
+				"METHOD_NOT_ALLOWED",
+				"Only GET, PATCH, DELETE on this path.")
 		}
-		s.deleteClient(w, r, id)
 	case "rotate-secret":
 		if r.Method != http.MethodPost {
 			writeError(w, http.StatusMethodNotAllowed,
@@ -564,6 +570,47 @@ func splitAdminClientPath(path string) (id, action string) {
 		action = parts[1]
 	}
 	return id, action
+}
+
+// getClient is GET /api/clients/<id> — Phase 8c.4. Read-only,
+// returns the same wire shape the list endpoint emits so the FE
+// can hydrate an edit form from a single response.
+func (s *Server) getClient(w http.ResponseWriter, r *http.Request, id string) {
+	client, err := s.controlClient.ClientGet(r.Context(), id)
+	if err != nil {
+		s.writeControlError(w, err, "fetching client")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"client": client},
+	})
+}
+
+// patchClient is PATCH /api/clients/<id> — Phase 8c.4. Pure proxy
+// to the control plane's PATCH; the operator-only fields
+// (role_allowlist, require_pkce, is_tenant_portal) flow through
+// when the FE form supplies them. Built-in rejection,
+// VALIDATION_FAILED messages, etc. are mapped by the existing
+// writeControlError table.
+func (s *Server) patchClient(w http.ResponseWriter, r *http.Request, id string) {
+	var body UpdateClientRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"Could not parse request body.")
+		return
+	}
+	defer r.Body.Close()
+
+	client, err := s.controlClient.ClientUpdate(r.Context(), id, &body)
+	if err != nil {
+		s.writeControlError(w, err, "updating client")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"client": client},
+	})
 }
 
 func (s *Server) deleteClient(w http.ResponseWriter, r *http.Request, id string) {

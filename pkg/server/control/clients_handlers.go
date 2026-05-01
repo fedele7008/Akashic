@@ -200,12 +200,16 @@ func (s *Server) handleAdminClientByID(w http.ResponseWriter, r *http.Request) {
 	switch action {
 	case "":
 		switch r.Method {
+		case http.MethodGet:
+			s.handleAdminGetClient(w, r, &existing)
+		case http.MethodPatch:
+			s.handleAdminPatchClient(w, r, &existing)
 		case http.MethodDelete:
 			s.handleAdminDeleteClient(w, r, &existing)
 		default:
 			response.WriteJSON(w, http.StatusMethodNotAllowed,
 				response.Fail(response.ErrMethodNotAllowed,
-					"only DELETE is allowed on this path", nil))
+					"only GET, PATCH, DELETE are allowed on this path", nil))
 		}
 	case "rotate-secret":
 		if r.Method != http.MethodPost {
@@ -246,6 +250,171 @@ func splitClientPath(path string) (id, action string) {
 // are rejected — they're server-managed via EnsureBuiltInClients;
 // deleting them here would leave the spec list disagreeing with the
 // DB until the next boot. Tenant-registered clients are removed.
+// handleAdminGetClient implements GET /clients/<id>. Read-only;
+// returns the same view shape the list endpoint emits.
+func (s *Server) handleAdminGetClient(w http.ResponseWriter, _ *http.Request, c *models.ClientService) {
+	response.WriteJSON(w, http.StatusOK,
+		response.Success(map[string]any{"client": toAdminClientView(c)}))
+}
+
+// adminPatchClientRequest is the body for PATCH /clients/<id>.
+// Pointer fields preserve "leave unchanged" (omitted) vs. "set to
+// empty/false" (explicit). Operator-only fields (role_allowlist,
+// require_pkce, is_tenant_portal) live here that the api-server's
+// bearer-auth PATCH refuses on input.
+type adminPatchClientRequest struct {
+	Name           *string `json:"name,omitempty"`
+	Description    *string `json:"description,omitempty"`
+	HomepageURL    *string `json:"homepage_url,omitempty"`
+	RedirectURIs   *string `json:"redirect_uris,omitempty"`
+	AllowedScopes  *string `json:"allowed_scopes,omitempty"`
+	RoleAllowlist  *string `json:"role_allowlist,omitempty"`
+	RequirePKCE    *bool   `json:"require_pkce,omitempty"`
+	IsTenantPortal *bool   `json:"is_tenant_portal,omitempty"`
+}
+
+// handleAdminPatchClient implements PATCH /clients/<id>. Operator-
+// scoped (mTLS); editable superset includes the three operator-only
+// fields the api-server refuses (role_allowlist, require_pkce,
+// is_tenant_portal). Built-ins reject all PATCH the same way they
+// reject delete and rotate.
+//
+// SPA + require_pkce=false is rejected with VALIDATION_FAILED —
+// public clients have no shared secret, so disabling PKCE removes
+// their only credential mechanism. Same invariant the create path
+// enforces.
+func (s *Server) handleAdminPatchClient(w http.ResponseWriter, r *http.Request, c *models.ClientService) {
+	if c.BuiltIn {
+		response.WriteJSON(w, http.StatusForbidden,
+			response.Fail("BUILTIN_IMMUTABLE",
+				"built-in clients are server-managed and cannot be edited", nil))
+		return
+	}
+	var req adminPatchClientRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("INVALID_REQUEST",
+				"could not parse request body", nil))
+		return
+	}
+	defer r.Body.Close()
+
+	updates := map[string]any{}
+	if req.Name != nil {
+		trimmed := strings.TrimSpace(*req.Name)
+		if trimmed == "" {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED",
+					"name cannot be empty", nil))
+			return
+		}
+		updates["name"] = trimmed
+	}
+	if req.Description != nil {
+		updates["description"] = *req.Description
+	}
+	if req.HomepageURL != nil {
+		updates["homepage_url"] = strings.TrimSpace(*req.HomepageURL)
+	}
+	if req.RedirectURIs != nil {
+		trimmed := strings.TrimSpace(*req.RedirectURIs)
+		if trimmed == "" {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED",
+					"redirect_uris cannot be empty", nil))
+			return
+		}
+		updates["redirect_uris"] = trimmed
+	}
+	if req.AllowedScopes != nil {
+		updates["allowed_scopes"] = strings.TrimSpace(*req.AllowedScopes)
+	}
+	if req.RoleAllowlist != nil {
+		updates["role_allowlist"] = strings.TrimSpace(*req.RoleAllowlist)
+	}
+	if req.RequirePKCE != nil {
+		// SPA must keep PKCE on — disabling it removes the only
+		// credential mechanism a public client has. Reject sharply
+		// rather than silently accepting and breaking the next
+		// authorization flow.
+		if c.Public && !*req.RequirePKCE {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED",
+					"PKCE cannot be disabled for SPA / public clients", nil))
+			return
+		}
+		updates["require_pkce"] = *req.RequirePKCE
+	}
+	if req.IsTenantPortal != nil {
+		updates["is_tenant_portal"] = *req.IsTenantPortal
+	}
+	if len(updates) == 0 {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED",
+				"at least one editable field must be provided", nil))
+		return
+	}
+
+	if err := s.db.WithContext(r.Context()).Model(c).Updates(updates).Error; err != nil {
+		s.logger.App.Error("adminPatchClient: db",
+			zap.String("client_id", c.ClientID), zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not update client", nil))
+		return
+	}
+
+	// Reload to capture server-side normalization (TrimSpace,
+	// updated_at, etc.) so the view we return matches what's now
+	// in the DB rather than the request shape.
+	var fresh models.ClientService
+	if err := s.db.WithContext(r.Context()).
+		Where("client_id = ?", c.ClientID).First(&fresh).Error; err != nil {
+		s.logger.App.Warn("adminPatchClient: reload after update",
+			zap.String("client_id", c.ClientID), zap.Error(err))
+		response.WriteJSON(w, http.StatusOK,
+			response.Success(map[string]any{"updated": true}))
+		return
+	}
+
+	s.logger.Security.Info("oauth client updated via control plane",
+		zap.String("client_id", c.ClientID),
+		zap.Any("changed_fields", changedClientFields(req)))
+
+	response.WriteJSON(w, http.StatusOK,
+		response.Success(map[string]any{"client": toAdminClientView(&fresh)}))
+}
+
+// changedClientFields summarises the PATCH for the security log —
+// keeps the audit line precise without dumping the whole struct.
+func changedClientFields(req adminPatchClientRequest) []string {
+	out := []string{}
+	if req.Name != nil {
+		out = append(out, "name")
+	}
+	if req.Description != nil {
+		out = append(out, "description")
+	}
+	if req.HomepageURL != nil {
+		out = append(out, "homepage_url")
+	}
+	if req.RedirectURIs != nil {
+		out = append(out, "redirect_uris")
+	}
+	if req.AllowedScopes != nil {
+		out = append(out, "allowed_scopes")
+	}
+	if req.RoleAllowlist != nil {
+		out = append(out, "role_allowlist")
+	}
+	if req.RequirePKCE != nil {
+		out = append(out, "require_pkce")
+	}
+	if req.IsTenantPortal != nil {
+		out = append(out, "is_tenant_portal")
+	}
+	return out
+}
+
 func (s *Server) handleAdminDeleteClient(w http.ResponseWriter, r *http.Request, c *models.ClientService) {
 	if c.BuiltIn {
 		response.WriteJSON(w, http.StatusForbidden,

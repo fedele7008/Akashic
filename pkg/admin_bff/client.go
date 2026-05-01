@@ -290,6 +290,69 @@ func (c *ControlClient) ClientList(ctx context.Context) (*ListClientsResponse, e
 	return &out, nil
 }
 
+// ClientGet calls GET /clients/<id> on the control plane.
+func (c *ControlClient) ClientGet(ctx context.Context, clientID string) (*ClientView, error) {
+	resp, body, err := c.do(ctx, http.MethodGet, "/clients/"+clientID, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		Client ClientView `json:"client"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed client payload: %w", err)
+	}
+	return &wrap.Client, nil
+}
+
+// UpdateClientRequest mirrors the control-plane PATCH /clients/<id>
+// body. Pointer fields preserve "leave unchanged" vs "set to
+// empty/false". Operator-only fields (RoleAllowlist, RequirePKCE,
+// IsTenantPortal) live here only — the FE form gates them by
+// caller role.
+type UpdateClientRequest struct {
+	Name           *string `json:"name,omitempty"`
+	Description    *string `json:"description,omitempty"`
+	HomepageURL    *string `json:"homepage_url,omitempty"`
+	RedirectURIs   *string `json:"redirect_uris,omitempty"`
+	AllowedScopes  *string `json:"allowed_scopes,omitempty"`
+	RoleAllowlist  *string `json:"role_allowlist,omitempty"`
+	RequirePKCE    *bool   `json:"require_pkce,omitempty"`
+	IsTenantPortal *bool   `json:"is_tenant_portal,omitempty"`
+}
+
+// ClientUpdate calls PATCH /clients/<id> on the control plane.
+// Returns the freshly-loaded view so the FE can re-render with
+// the post-update state (including server-side normalisations
+// like trimmed strings and bumped updated_at).
+func (c *ControlClient) ClientUpdate(ctx context.Context, clientID string, req *UpdateClientRequest) (*ClientView, error) {
+	resp, body, err := c.do(ctx, http.MethodPatch, "/clients/"+clientID, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		Client ClientView `json:"client"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed client payload: %w", err)
+	}
+	return &wrap.Client, nil
+}
+
 // ClientDelete calls DELETE /clients/<id> on the control plane.
 // Built-ins and not-found are returned as ControlError with the
 // appropriate code so the handler can map them to user-friendly

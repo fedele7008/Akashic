@@ -390,6 +390,23 @@ export class SessionApi {
 }
 
 /**
+ * Request body for PATCH /api/clients/<id> — Phase 8c.4. Pointer
+ * fields preserve "leave unchanged" (omitted) vs "set to empty/false".
+ * Operator-only fields (role_allowlist, require_pkce,
+ * is_tenant_portal) are accepted only via this admin-bff path.
+ */
+export interface UpdateClientRequest {
+  name?: string;
+  description?: string;
+  homepage_url?: string;
+  redirect_uris?: string;
+  allowed_scopes?: string;
+  role_allowlist?: string;
+  require_pkce?: boolean;
+  is_tenant_portal?: boolean;
+}
+
+/**
  * Request body for POST /api/clients. Matches the server-side shape
  * (pkg/admin_bff/client.go:CreateClientRequest).
  */
@@ -479,6 +496,50 @@ export class ClientsApi {
       throw err;
     }
     return body.data!;
+  }
+
+  /**
+   * GET /api/clients/<id> — Phase 8c.4. Single-client fetch used
+   * by the edit form to hydrate from current server state (rather
+   * than relying on possibly-stale data from the list page).
+   */
+  static async get(clientID: string): Promise<ClientView> {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientID)}`, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ client: ClientView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Get failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.client;
+  }
+
+  /**
+   * PATCH /api/clients/<id> — Phase 8c.4. Returns the freshly-
+   * loaded view so the FE can re-render with server-side
+   * normalisations (trimmed strings, bumped updated_at).
+   */
+  static async update(clientID: string, req: UpdateClientRequest): Promise<ClientView> {
+    const r = await fetch(`/api/clients/${encodeURIComponent(clientID)}`, {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify(req),
+    });
+    const body: ApiResponse<{ client: ClientView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Update failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.client;
   }
 
   /**

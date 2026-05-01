@@ -1149,26 +1149,44 @@ state-changing actions.
   auto-clears 5s after a success but stays until next-action on
   errors.
 
-### 8c.4 — Client services: detail + edit ⏳
+### 8c.4 — Client services: detail + edit ✅
 
-Round out the client-management surface. Today: list + create +
-delete + rotate-secret. Missing: detail view, edit form, audit
-log of who-changed-what.
+Operator-side `GET` / `PATCH` for OAuth client rows. Edit form
+mirrors the create form's structure with immutable fields shown
+read-only.
 
-- Backend: `GET /clients/:id` and `PATCH /clients/:id` on both
-  the api-server (owner-scoped) and control-plane (operator-
-  scoped). Editable fields: `name`, `description`, `homepage_url`,
-  `redirect_uris`, `allowed_scopes`, `role_allowlist`,
-  `require_pkce` (WEB only). Immutable: `client_id`,
-  `client_type`, `built_in`, `is_tenant_portal`, `owner_user_id`.
-- Domain: extend `pkg/clientservice/` with `Update()` — same
-  shape as `Create()`, same sentinel-error pattern. Enforces
-  the immutability rules above.
-- Frontend: replace the current "click-row → no-op" with a real
-  detail page; edit form with the same WEB/SPA disambiguation
-  copy used by the create form.
-- The `<akashic-clients>` widget (8b.3 Stage 3) gains its edit
-  surface for free once the api-server `PATCH` exists.
+**As-shipped scope:**
+- Control plane: extended `handleAdminClientByID` dispatcher to
+  handle GET + PATCH (alongside the existing DELETE and
+  rotate-secret). New `handleAdminGetClient` returns the same
+  view shape the list endpoint emits; `handleAdminPatchClient`
+  accepts the operator-superset (`name`, `description`,
+  `homepage_url`, `redirect_uris`, `allowed_scopes`,
+  `role_allowlist`, `require_pkce`, `is_tenant_portal`).
+- Built-ins reject all PATCH with `BUILTIN_IMMUTABLE` (mirrors
+  delete and rotate). SPA + `require_pkce=false` is sharply
+  rejected with `VALIDATION_FAILED` — public clients have no
+  secret, so disabling PKCE removes their only credential
+  mechanism.
+- `is_tenant_portal` is mutable post-relaxation (multiple
+  flagged rows allowed). The SetupStatusBanner copy explicitly
+  promised this in-place toggle would land here; it now does.
+- Api-server side already had GET + PATCH from earlier work
+  (owner-scoped, refuses operator-only fields on input). The
+  `<akashic-clients>` widget can wire its edit form against it
+  whenever someone implements the UI.
+- BFF: typed `ClientGet`, `ClientUpdate` + `getClient`,
+  `patchClient` handlers. Per-id dispatcher now branches on
+  GET / PATCH / DELETE inside `case ""`.
+- Admin web: new `ClientsEdit` component matching the
+  `ClientsCreate` shape; immutable fields surfaced in a "Immutable"
+  panel at the top so operators don't think they're missing.
+  Only-changed-fields PATCH semantics — sending the diff matches
+  the server's pointer-field "leave unchanged" contract and
+  avoids re-bumping `updated_at` for no-op saves.
+- Domain-layer `Update()` deferred — both surfaces use inline
+  updates today; refactoring both to a shared method is a
+  separate cleanup task.
 
 ### 8c.5 — External tool links ✅
 

@@ -23,10 +23,13 @@ import {
  */
 export function ClientsList({
   onRotate,
+  onEdit,
   refreshKey,
 }: {
   /** Parent-handled callback to show the rotation takeover. */
   onRotate: (client: ClientView) => void;
+  /** Phase 8c.4: parent-handled callback to show the edit takeover. */
+  onEdit: (client: ClientView) => void;
   /** Bumping this re-runs the fetch (parent flips it after create). */
   refreshKey: number;
 }) {
@@ -181,6 +184,14 @@ export function ClientsList({
                     />
                   ) : (
                     <>
+                      <button
+                        type="button"
+                        onClick={() => onEdit(c)}
+                        className="secondary"
+                        style={{ marginRight: '0.5rem', fontSize: '0.8125rem' }}
+                      >
+                        Edit
+                      </button>
                       {!c.public && (
                         <button
                           type="button"

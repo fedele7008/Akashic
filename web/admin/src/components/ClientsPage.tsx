@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import type { ClientView, SessionInfo } from '../api/client';
 import { ClientsCreate } from './ClientsCreate';
+import { ClientsEdit } from './ClientsEdit';
 import { ClientsList } from './ClientsList';
 import { ClientsRotate } from './ClientsRotate';
 
@@ -23,6 +24,7 @@ import { ClientsRotate } from './ClientsRotate';
 type View =
   | { kind: 'list' }
   | { kind: 'create' }
+  | { kind: 'edit'; target: ClientView }
   | { kind: 'rotate'; target: ClientView };
 
 export function ClientsPage({ session }: { session: SessionInfo }) {
@@ -46,6 +48,17 @@ export function ClientsPage({ session }: { session: SessionInfo }) {
   if (view.kind === 'create') {
     return (
       <ClientsCreate
+        onClose={() => {
+          setRefreshKey((k) => k + 1);
+          setView({ kind: 'list' });
+        }}
+      />
+    );
+  }
+  if (view.kind === 'edit') {
+    return (
+      <ClientsEdit
+        client={view.target}
         onClose={() => {
           setRefreshKey((k) => k + 1);
           setView({ kind: 'list' });
@@ -91,6 +104,7 @@ export function ClientsPage({ session }: { session: SessionInfo }) {
       <div className="panel" style={{ padding: 0 }}>
         <ClientsList
           refreshKey={refreshKey}
+          onEdit={(c) => setView({ kind: 'edit', target: c })}
           onRotate={(c) => setView({ kind: 'rotate', target: c })}
         />
       </div>
