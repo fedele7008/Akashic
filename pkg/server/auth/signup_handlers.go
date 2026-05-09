@@ -54,6 +54,7 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 		"CSRFToken":   csrf,
 		"ReturnTo":    returnTo,
 		"Username":    "",
+		"Tag":         "",
 		"Email":       "",
 		"DisplayName": "",
 		"Error":       "",
@@ -175,15 +176,16 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	username := strings.TrimSpace(r.PostForm.Get("username"))
 	email := strings.TrimSpace(r.PostForm.Get("email"))
 	displayName := strings.TrimSpace(r.PostForm.Get("display_name"))
+	wantedID := strings.TrimSpace(r.PostForm.Get("username"))
+	wantedTag := strings.TrimSpace(r.PostForm.Get("tag"))
 	password := r.PostForm.Get("password")
 	passwordConfirm := r.PostForm.Get("password_confirm")
 	returnTo := safeReturnTo(r.PostForm.Get("return_to"))
 
 	if password != passwordConfirm {
-		s.renderSignupError(w, r, "Passwords don't match.", username, email, displayName)
+		s.renderSignupError(w, r, "Passwords don't match.", wantedID, email, displayName)
 		return
 	}
 
@@ -192,54 +194,79 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 		UserRepo: s.authService.UserRepository(),
 		Policy:   s.passwordPolicy(r.Context()),
 	}, userregistration.Params{
-		Username:    username,
 		Email:       email,
 		Password:    password,
 		DisplayName: displayName,
+		Username:    wantedID,
+		Tag:         wantedTag,
 	})
 	switch {
 	case errors.Is(err, userregistration.ErrFieldRequired):
 		s.renderSignupError(w, r,
-			"Username, email, and password are all required.",
-			username, email, displayName)
+			"Email and password are required.",
+			wantedID, email, displayName)
 		return
 	case errors.Is(err, userregistration.ErrEmailInvalid):
 		s.renderSignupError(w, r,
 			"That doesn't look like a valid email address.",
-			username, email, displayName)
+			wantedID, email, displayName)
 		return
 	case errors.Is(err, userregistration.ErrPasswordPolicyViolated):
 		// Pull the policy detail out of the wrapped error for a
 		// specific message. Wrap layout: "<sentinel>: <detail>".
 		detail := strings.TrimPrefix(err.Error(),
 			"password does not satisfy the policy: ")
-		s.renderSignupError(w, r, detail, username, email, displayName)
+		s.renderSignupError(w, r, detail, wantedID, email, displayName)
 		return
-	case errors.Is(err, userregistration.ErrUsernameTaken):
+	case errors.Is(err, userregistration.ErrEmailTaken):
 		s.renderSignupError(w, r,
-			"That username is already taken. Try another.",
+			"An account with that email already exists. Sign in instead, or use a different email.",
+			wantedID, "", displayName)
+		return
+	case errors.Is(err, userregistration.ErrIDInvalid):
+		s.renderSignupError(w, r,
+			"ID must be 2–32 characters of letters, digits, dots, hyphens or underscores.",
 			"", email, displayName)
+		return
+	case errors.Is(err, userregistration.ErrTagInvalid):
+		s.renderSignupError(w, r,
+			"Tag must be exactly 4 characters using 0–9 and a–z.",
+			wantedID, email, displayName)
+		return
+	case errors.Is(err, userregistration.ErrUIDTaken):
+		s.renderSignupError(w, r,
+			"That ID + tag combination is already taken. Try a different tag, or leave it blank to auto-pick.",
+			wantedID, email, displayName)
+		return
+	case errors.Is(err, userregistration.ErrUsernameUnavailable):
+		s.renderSignupError(w, r,
+			"Could not generate a unique account ID. Please try again or pick an explicit tag.",
+			wantedID, email, displayName)
 		return
 	case err != nil:
 		s.logger.App.Error("signup: userregistration.Register",
-			zap.String("username", username), zap.Error(err))
+			zap.String("email", email), zap.Error(err))
 		s.renderSignupError(w, r,
 			"Something went wrong creating your account. Please try again.",
-			username, email, displayName)
+			wantedID, email, displayName)
 		return
 	}
 
+	// Derive the actual stored uid from the LDAP DN's leftmost RDN.
+	// Auto-generated uids use the `<id>#<tag>` form; we pre-fill
+	// the login form with the email since that's the user-facing
+	// identity post-Phase-7.5.
 	s.logger.Security.Info("user registered (auth-server self-service)",
 		zap.String("user_id", user.ID.String()),
-		zap.String("username", username),
-		zap.String("ldap_dn", user.LdapDN))
+		zap.String("ldap_dn", user.LdapDN),
+		zap.String("email", email))
 
-	// Success: redirect to /login with the username pre-filled and
-	// the original return_to preserved. The user's next action
-	// (typing password + clicking Sign in) finishes the OAuth flow.
+	// Success: redirect to /login with email pre-filled and the
+	// original return_to preserved. UserLoginFilter accepts email
+	// or uid, so the user types the email they just registered.
 	loginURL := "/login"
 	q := url.Values{}
-	q.Set("username", username)
+	q.Set("username", email) // form field is named "username" but accepts email too
 	if returnTo != "" {
 		q.Set("return_to", returnTo)
 	}
@@ -253,13 +280,18 @@ func (s *Server) renderSignupError(w http.ResponseWriter, r *http.Request,
 	msg, username, email, displayName string) {
 	csrf := s.ensureLoginCSRF(w, r)
 	returnTo := ""
+	tag := ""
 	if r.PostForm != nil {
 		returnTo = safeReturnTo(r.PostForm.Get("return_to"))
+		// Preserve the tag the user typed so they don't have to
+		// re-enter it after fixing another field's error.
+		tag = strings.TrimSpace(r.PostForm.Get("tag"))
 	}
 	renderTemplate(w, "signup.html.tmpl", http.StatusOK, s.signupTemplateData(r.Context(), map[string]any{
 		"CSRFToken":   csrf,
 		"ReturnTo":    returnTo,
 		"Username":    username,
+		"Tag":         tag,
 		"Email":       email,
 		"DisplayName": displayName,
 		"Error":       msg,

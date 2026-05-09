@@ -438,6 +438,7 @@ func (c *ControlClient) PostAction(ctx context.Context, path string) error {
 type UserView struct {
 	ID                   string  `json:"id"`
 	LdapDN               string  `json:"ldap_dn"`
+	Email                string  `json:"email,omitempty"`
 	UserType             string  `json:"user_type"`
 	IsDisabled           bool    `json:"is_disabled"`
 	DisabledAt           string  `json:"disabled_at,omitempty"`

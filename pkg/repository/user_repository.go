@@ -6,6 +6,7 @@ import (
 	"akashic/akashic/pkg/models"
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -76,9 +77,17 @@ func (r *UserRepository) CreateUser(ctx context.Context, req *models.CreateUserR
 
 	displayName := req.DisplayName
 	if displayName == "" {
-		// LDAP requires `cn` on inetOrgPerson; default to username
-		// when the caller hasn't supplied a friendlier name.
+		// LDAP requires `cn` on inetOrgPerson. Default to the
+		// id-base of the uid — everything before the `#` tag —
+		// so a tagged uid like `alice#a8f3` produces the readable
+		// display name `alice` rather than the full
+		// `alice#a8f3`. For untagged uids (the bootstrap "admin",
+		// any pre-tag-design rows) the strip is a no-op since
+		// there's no `#` to find.
 		displayName = req.Username
+		if at := strings.IndexByte(displayName, '#'); at >= 0 {
+			displayName = displayName[:at]
+		}
 	}
 	ldapDN, err := r.ldapClient.CreateUser(req.Username, req.Email, displayName, password)
 	if err != nil {

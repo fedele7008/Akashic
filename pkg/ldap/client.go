@@ -716,6 +716,51 @@ func (c *Client) searchSingleDN(filter string) (string, error) {
 	return sr.Entries[0].DN, nil
 }
 
+// EmailExists reports whether any directory entry has the given
+// email address as its `mail` attribute. Phase-9 prerequisite:
+// email becomes the primary identity for password-reset + email
+// verification flows, so registration MUST reject duplicates.
+//
+// Search scope: the configured user-search base (same as the rest
+// of the lookup methods). Returns false on "no match", true on
+// any non-zero hit, and an error on real LDAP failure. Empty
+// email is treated as "not found" — callers should validate
+// non-empty before calling, but the defensive check keeps a
+// stray empty value from matching rows where `mail` is unset.
+//
+// Race-window note: two concurrent /signup/submit calls for the
+// same email could both pass this check and both succeed at
+// CreateUser. App-level enforcement is good enough in practice
+// (the window is sub-millisecond and duplicates can be cleaned
+// up post-hoc), but a future hardening pass should enable the
+// OpenLDAP `slapo-unique` overlay on `mail` for defense-in-depth.
+func (c *Client) EmailExists(email string) (bool, error) {
+	if c.conn == nil {
+		return false, fmt.Errorf("LDAP connection not established")
+	}
+	if email == "" {
+		return false, nil
+	}
+	filter := fmt.Sprintf("(%s=%s)",
+		c.config.EmailAttr, ldap.EscapeFilter(email))
+	searchRequest := ldap.NewSearchRequest(
+		c.config.UserSearchBase,
+		ldap.ScopeWholeSubtree,
+		ldap.NeverDerefAliases,
+		1, // size limit — we only need to know "does any match exist?"
+		0,
+		false,
+		filter,
+		[]string{"dn"},
+		nil,
+	)
+	sr, err := c.conn.Search(searchRequest)
+	if err != nil {
+		return false, fmt.Errorf("email-exists search: %w", err)
+	}
+	return len(sr.Entries) > 0, nil
+}
+
 // CreateUser creates a new user in LDAP
 // This is used during bootstrap to create the root user
 func (c *Client) CreateUser(username, email, displayName, password string) (string, error) {

@@ -743,6 +743,107 @@ redirects there with `?error=access_denied` per RFC 6749
 `code → description` table; unknown scopes still show with their
 code so a custom scope isn't silently hidden.
 
+### Pre-Phase-9: email-as-identity foundation ✅
+
+A bug fix shipped between Phase 7 and Phase 9: the registration
+flow allowed two different users to claim the same email address.
+LDAP's `mail` attribute is not unique by default in the
+`inetOrgPerson` schema, and `pkg/userregistration/Register`
+checked username uniqueness but never email. This block all of
+Phase 9's email-driven flows (verification, password reset,
+email change confirmation), all of which assume 1:1 email→user
+mapping.
+
+**As-shipped:**
+- New `LDAPClient.EmailExists(email)` (`pkg/ldap/client.go`) —
+  search for `(mail=<email>)`, returns bool. Idempotent
+  read-only check.
+- New sentinel `userregistration.ErrEmailTaken`. `Register`
+  now performs the email-uniqueness check before persisting.
+- New sentinel `userregistration.ErrUsernameUnavailable` for
+  the pathological case where tag-collision retry exhausts.
+- **Optional user-supplied ID + tag at signup**:
+  `userregistration.Params` accepts both `Username` and `Tag`
+  as optional fields. The combinations are:
+  - **Neither** → both auto-generated (`<derived-id>#<random-tag>`)
+  - **ID only** → tag auto-generated, retried on collision
+  - **Tag only** → id derived from email, exact `<id>#<tag>`
+    must be free or 409 `UID_TAKEN`
+  - **Both** → both validated, exact combo must be free
+  - The retry-budget vs. exact-must-be-unique distinction
+    matters: when the caller supplies a specific tag, they
+    want THAT tag — regenerating to "fix" a collision would
+    silently produce a uid they didn't ask for.
+- The Discord-style **`<id>#<tag>`** format applies regardless:
+  - `<id>` = lowercase alphanumeric + `.`, `_`, `-`. Sanitised
+    from email's local part if not supplied; validated to 2–32
+    chars after sanitisation if supplied.
+  - `<tag>` = exactly 4 chars base36 stored as **UPPERCASE**
+    (`0-9A-Z`). Case-insensitive on input — `a8f3`, `A8F3`,
+    `A8f3` all normalise to `A8F3`. Visual contrast with the
+    lowercase id-base makes tagged uids read cleanly: `alice#A8F3`.
+    Auto-generated from `crypto/rand` if not supplied.
+  - **Login-input normalisation**: when a user types a uid-style
+    login like `alice#a8f3` at the auth-server's
+    `/login/submit`, `userregistration.NormalizeUIDInput`
+    uppercases the tag portion before the LDAP search runs.
+    No-op for emails or untagged legacy uids. Defense-in-depth
+    on top of LDAP's `caseIgnoreMatch` — keeps logs / audit /
+    displays uniform on the canonical form.
+  - Universal tagging — every uid gets a tag, even the first
+    user with a given id-base. Avoids the "first user is
+    special" feeling of `-N` suffixing.
+  - Collision retry on auto-generated tags: 8 attempts (36⁴ ≈
+    1.7M tags per id-base, birthday collision at ~180 same-base
+    users).
+- Verified `#` is RFC-4514 mid-RDN safe, RFC-4515 filter-safe,
+  and percent-encodes correctly in URL query strings. No code
+  paths put the LDAP uid in URL paths today; future ones must
+  use `url.PathEscape`.
+- Auth-server `web/signup.html.tmpl` and `<akashic-signup>` widget
+  drop the username field entirely. Email is the only user-
+  visible identity input.
+- Both registration handlers gained the `EMAIL_TAKEN` +
+  `USERNAME_UNAVAILABLE` error code mappings; widget translates
+  to inline errors.
+- API-server response reports the actual stored uid (extracted
+  from the LDAP DN's leftmost RDN) so clients can log it for
+  diagnostics, but email is the user-facing identity going
+  forward.
+- **Login form unchanged**: still labels the field "Username
+  or email" since `UserLoginFilter` ORs uid + mail. Legacy
+  users with custom uids (the bootstrap root) continue to work;
+  new users sign in by email.
+- **Defense-in-depth deferred**: a future hardening pass should
+  enable OpenLDAP's `slapo-unique` overlay on `mail` for race-
+  window protection. App-level catches >99% of cases; the
+  overlay closes a sub-millisecond window between two
+  simultaneous registrations of the same email.
+
+**Admin Users page now displays email.** Backend
+`pkg/server/control/users_handlers.go` adds an `email` field
+to `userView`, populated via per-row LDAP fetch
+(`s.lookupEmail(ldap_dn)` — bounded by page size, max 200
+queries per render, acceptable for an operator UI). Frontend
+`UsersPage.tsx` shows the email as the primary identity line
+with the uid as a smaller muted second line. When LDAP is
+unreachable mid-render, falls back to uid-only display so the
+row stays legible. Edit-dialog title and delete-confirm body
+both use email (with uid in parentheses); the type-to-confirm
+phrase stays as the uid since it's shorter and stable.
+
+**Default display name uses id-base (no tag).** When a user
+registers without specifying a `display_name`, the LDAP `cn`
+falls back to the uid's id-base — everything before the `#`.
+For tagged uids like `alice#a8f3`, this produces the readable
+display name `alice` rather than the full `alice#a8f3`.
+Untagged uids (the bootstrap "admin", any pre-tag-design
+rows) get a no-op strip since there's no `#` to find.
+
+Login-by-email already worked at the LDAP filter layer
+(`UserLoginFilter` defaults to `(|(uid={login})(mail={login}))`);
+the email-uniqueness fix is what makes it actually disambiguate.
+
 ### Step 7.5 — Revoke-consent UI ✅
 
 End-user surface for managing OAuth grants:

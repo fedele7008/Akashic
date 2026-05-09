@@ -31,10 +31,15 @@ import (
 // "self" tied to a row.
 
 // userView is the wire shape one user. Mirrors models.User but
-// with stable JSON keys + a deterministic timestamp format.
+// with stable JSON keys, a deterministic timestamp format, and an
+// email field joined in from LDAP. Email is the primary identity
+// post-Phase-7.5 (the email-uniqueness fix), so the admin Users
+// page renders it as the column-1 identity rather than the LDAP
+// uid.
 type userView struct {
 	ID                   string  `json:"id"`
 	LdapDN               string  `json:"ldap_dn"`
+	Email                string  `json:"email,omitempty"`
 	UserType             string  `json:"user_type"`
 	IsDisabled           bool    `json:"is_disabled"`
 	DisabledAt           string  `json:"disabled_at,omitempty"`
@@ -47,10 +52,16 @@ type userView struct {
 	UpdatedAt            string  `json:"updated_at"`
 }
 
-func toUserView(u *models.User) userView {
+// toUserView converts the PG row to the wire shape. `email` is
+// supplied by the caller — typically from a per-row LDAP lookup —
+// because the PG row alone doesn't carry email (LDAP is the source
+// of truth). Pass "" when LDAP is unreachable or the entry is
+// missing; the FE falls back to the uid extracted from the DN.
+func toUserView(u *models.User, email string) userView {
 	v := userView{
 		ID:              u.ID.String(),
 		LdapDN:          u.LdapDN,
+		Email:           email,
 		UserType:        string(u.UserType),
 		IsDisabled:      u.IsDisabled,
 		MissingIdentity: u.MissingIdentity,
@@ -72,6 +83,22 @@ func toUserView(u *models.User) userView {
 		v.LastLoginAt = &s
 	}
 	return v
+}
+
+// lookupEmail returns the LDAP `mail` attribute for a user's DN,
+// or "" on any failure (LDAP unreachable, entry missing, attribute
+// unset). Doesn't propagate errors because the calling code path
+// (admin Users list/get) shouldn't fail just because email join
+// missed — the row stays renderable with extracted-uid fallback.
+func (s *Server) lookupEmail(dn string) string {
+	if s.ldapClient == nil || dn == "" {
+		return ""
+	}
+	info, err := s.ldapClient.GetUserByDN(dn)
+	if err != nil || info == nil {
+		return ""
+	}
+	return info.Email
 }
 
 // handleAdminUsers dispatches `/users` (collection-level):
@@ -110,9 +137,13 @@ func (s *Server) handleAdminUsers(w http.ResponseWriter, r *http.Request) {
 			response.Fail("INTERNAL", "could not list users", nil))
 		return
 	}
+	// Per-row LDAP fetch for email. Bounded by the page size (50
+	// default, max 200) so this is at most 200 LDAP queries per
+	// page render — acceptable for an operator UI. If we ever
+	// outgrow that, swap in a single ListUsers + map-by-DN.
 	views := make([]userView, 0, len(res.Users))
 	for _, u := range res.Users {
-		views = append(views, toUserView(u))
+		views = append(views, toUserView(u, s.lookupEmail(u.LdapDN)))
 	}
 	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
 		"users": views,
@@ -169,7 +200,7 @@ func (s *Server) adminGetUser(w http.ResponseWriter, r *http.Request, id uuid.UU
 		return
 	}
 	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
-		"user": toUserView(user),
+		"user": toUserView(user, s.lookupEmail(user.LdapDN)),
 	}))
 }
 
@@ -243,7 +274,7 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request, id uuid.
 		zap.Any("changed_fields", changedFields(req)))
 
 	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
-		"user": toUserView(user),
+		"user": toUserView(user, s.lookupEmail(user.LdapDN)),
 	}))
 }
 

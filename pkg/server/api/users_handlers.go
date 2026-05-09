@@ -38,10 +38,20 @@ import (
 // ─── POST /users/register ──────────────────────────────────────────
 
 type registerUserRequest struct {
-	Username    string `json:"username"`
 	Email       string `json:"email"`
 	Password    string `json:"password"`
 	DisplayName string `json:"display_name,omitempty"`
+
+	// Username and Tag are both optional. The combinations are:
+	//   neither → both auto-generated (`<derived-id>#<random-tag>`)
+	//   id only → tag auto-generated, retried on collision
+	//   tag only → id derived from email, exact <id>#<tag> must
+	//              be free or 409 EMAIL+TAG-TAKEN
+	//   both    → both validated, exact combo must be free
+	// See pkg/userregistration.Register's resolveUID for the full
+	// shape table.
+	Username string `json:"username,omitempty"`
+	Tag      string `json:"tag,omitempty"`
 }
 
 type registerUserResponse struct {
@@ -99,25 +109,27 @@ func (s *Server) handleRegisterUser(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	req.Username = strings.TrimSpace(req.Username)
 	req.Email = strings.TrimSpace(req.Email)
 	req.DisplayName = strings.TrimSpace(req.DisplayName)
+	req.Username = strings.TrimSpace(req.Username)
+	req.Tag = strings.TrimSpace(req.Tag)
 
 	user, err := userregistration.Register(r.Context(), userregistration.Deps{
 		LDAP:     s.ldapClient,
 		UserRepo: s.userRepo,
 		Policy:   s.policyFromConfig(),
 	}, userregistration.Params{
-		Username:    req.Username,
 		Email:       req.Email,
 		Password:    req.Password,
 		DisplayName: req.DisplayName,
+		Username:    req.Username,
+		Tag:         req.Tag,
 	})
 	switch {
 	case errors.Is(err, userregistration.ErrFieldRequired):
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("VALIDATION_FAILED",
-				"username, email, and password are required", nil))
+				"email and password are required", nil))
 		return
 	case errors.Is(err, userregistration.ErrEmailInvalid):
 		response.WriteJSON(w, http.StatusBadRequest,
@@ -131,30 +143,67 @@ func (s *Server) handleRegisterUser(w http.ResponseWriter, r *http.Request) {
 			response.Fail("PASSWORD_POLICY_VIOLATION",
 				strings.TrimPrefix(err.Error(), "password does not satisfy the policy: "), nil))
 		return
-	case errors.Is(err, userregistration.ErrUsernameTaken):
+	case errors.Is(err, userregistration.ErrEmailTaken):
 		response.WriteJSON(w, http.StatusConflict,
-			response.Fail("USERNAME_TAKEN",
-				"that username is already in use", nil))
+			response.Fail("EMAIL_TAKEN",
+				"an account with that email already exists", nil))
+		return
+	case errors.Is(err, userregistration.ErrIDInvalid):
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("ID_INVALID",
+				"id must be 2-32 characters of letters, digits, dots, hyphens or underscores", nil))
+		return
+	case errors.Is(err, userregistration.ErrTagInvalid):
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("TAG_INVALID",
+				"tag must be exactly 4 characters using 0-9 and a-z", nil))
+		return
+	case errors.Is(err, userregistration.ErrUIDTaken):
+		response.WriteJSON(w, http.StatusConflict,
+			response.Fail("UID_TAKEN",
+				"that id+tag combination is already taken; try a different tag or leave it blank", nil))
+		return
+	case errors.Is(err, userregistration.ErrUsernameUnavailable):
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("USERNAME_UNAVAILABLE",
+				"could not generate a unique account ID; please retry", nil))
 		return
 	case err != nil:
 		s.logger.App.Error("register: userregistration.Register",
-			zap.String("username", req.Username), zap.Error(err))
+			zap.String("email", req.Email), zap.Error(err))
 		response.WriteJSON(w, http.StatusInternalServerError,
 			response.Fail("INTERNAL", "could not create user", nil))
 		return
 	}
 
+	// The auto-generated tagged uid (`<id>#<tag>`) is the leftmost
+	// RDN of the LDAP DN. We surface it in the response so clients
+	// can log it for diagnostics, but email is the user-facing
+	// identity going forward.
+	storedUsername := uidFromDN(user.LdapDN)
+
 	s.logger.Security.Info("user registered (self-service)",
 		zap.String("user_id", user.ID.String()),
-		zap.String("username", req.Username),
+		zap.String("uid", storedUsername),
 		zap.String("ldap_dn", user.LdapDN))
 
 	var resp registerUserResponse
 	resp.User.ID = user.ID.String()
-	resp.User.Username = req.Username
+	resp.User.Username = storedUsername
 	resp.User.Email = req.Email
 	resp.User.LdapDN = user.LdapDN
 	response.WriteJSON(w, http.StatusCreated, response.Success(resp))
+}
+
+// uidFromDN extracts the uid value from the leftmost RDN of an
+// LDAP DN. Returns "" when the format isn't `uid=<value>,...`
+// (defensive — production DNs always start with uid).
+func uidFromDN(dn string) string {
+	first := strings.SplitN(dn, ",", 2)[0]
+	if !strings.HasPrefix(strings.ToLower(first), "uid=") {
+		return ""
+	}
+	return strings.TrimSpace(first[4:])
 }
 
 // ─── GET /users/me ─────────────────────────────────────────────────

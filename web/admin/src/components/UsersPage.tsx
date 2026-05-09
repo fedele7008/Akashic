@@ -152,9 +152,31 @@ export function UsersPage({ session }: { session: SessionInfo }) {
               {users.map((u) => (
                 <tr key={u.id} style={{ borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
                   <Td>
-                    <code style={{ fontSize: '0.8125rem' }}>
-                      {extractUid(u.ldap_dn)}
-                    </code>
+                    {/* Email is the post-Phase-7.5 primary
+                        identity. uid stays visible as a smaller
+                        muted second line so an operator looking at
+                        an LDAP entry can still match the row. When
+                        LDAP is unreachable mid-list-render the
+                        email is empty; we fall back to showing the
+                        uid as the primary line so the row stays
+                        legible. */}
+                    {u.email ? (
+                      <>
+                        <div>{u.email}</div>
+                        <code style={{
+                          fontSize: '0.75rem',
+                          color: 'var(--text-muted)',
+                          display: 'block',
+                          marginTop: '2px',
+                        }}>
+                          {extractUid(u.ldap_dn)}
+                        </code>
+                      </>
+                    ) : (
+                      <code style={{ fontSize: '0.8125rem' }}>
+                        {extractUid(u.ldap_dn)}
+                      </code>
+                    )}
                     {isSelf(u) && (
                       <span style={badgeStyle('rgba(79, 140, 255, 0.18)', 'var(--accent)')}>
                         you
@@ -316,7 +338,7 @@ function EditUserDialog({
       if (e.target === e.currentTarget && !busy) onClose();
     }}>
       <div className="modal-dialog" role="dialog" aria-modal="true">
-        <h3 className="modal-title">Edit {extractUid(user.ldap_dn)}</h3>
+        <h3 className="modal-title">Edit {user.email || extractUid(user.ldap_dn)}</h3>
         <div className="modal-body">
           <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginBottom: '12px' }}>
             <span style={{ fontSize: '0.875rem' }}>Role</span>
@@ -371,7 +393,12 @@ function DeleteUserConfirm({
 }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The type-to-confirm phrase stays the uid (short, stable, easy
+  // to type) even though email is the user-facing identity. Email
+  // would be 20+ chars to type for confirm; uid is a focused 8-12.
+  // The body text includes the email so the operator can match it.
   const uid = extractUid(user.ldap_dn);
+  const headline = user.email || uid;
 
   const submit = async () => {
     setError(null);
@@ -389,13 +416,14 @@ function DeleteUserConfirm({
   return (
     <ConfirmModal
       open={true}
-      title={`Delete ${uid}?`}
+      title={`Delete ${headline}?`}
       body={
         <>
           <p>
-            This removes <strong>{uid}</strong>'s LDAP entry and PG row
-            immediately. The user will not be able to sign in; any
-            existing sessions remain valid until they expire.
+            This removes <strong>{headline}</strong> (<code>{uid}</code>)'s
+            LDAP entry and PG row immediately. The user will not be able
+            to sign in; any existing sessions remain valid until they
+            expire.
           </p>
           <p>
             This is <strong>not reversible</strong> — re-creating the

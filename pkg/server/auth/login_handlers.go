@@ -12,6 +12,7 @@ import (
 
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
+	"akashic/akashic/pkg/userregistration"
 
 	"go.uber.org/zap"
 )
@@ -164,6 +165,11 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	}
 
 	username := strings.TrimSpace(r.PostForm.Get("username"))
+	// Normalise the tag portion of uid-style input to uppercase
+	// so logs / audit / displays use the canonical stored form
+	// regardless of what the user typed. No-op for emails or
+	// untagged uids (no `#` to find).
+	username = userregistration.NormalizeUIDInput(username)
 	password := r.PostForm.Get("password")
 	returnTo := safeReturnTo(r.PostForm.Get("return_to"))
 

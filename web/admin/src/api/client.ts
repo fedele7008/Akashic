@@ -104,6 +104,10 @@ export class PolicyApi {
 export interface UserView {
   id: string;
   ldap_dn: string;
+  /** Joined from LDAP at admin-list/get time. May be empty if the
+   *  LDAP entry is missing (deprovisioned mid-flight) — UI falls
+   *  back to extracting uid from ldap_dn in that case. */
+  email?: string;
   user_type: 'root' | 'admin' | 'user';
   is_disabled: boolean;
   disabled_at?: string;

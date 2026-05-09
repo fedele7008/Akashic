@@ -19,6 +19,7 @@ import { apiCallPublic } from "../lib/api";
 
 interface FieldErrors {
   username?: string;
+  tag?: string;
   email?: string;
   password?: string;
   password_confirm?: string;
@@ -221,22 +222,32 @@ export class AkashicSignup extends LitElement {
           : ""}
 
         ${this.field({
-          name: "username",
-          label: "Username",
-          type: "text",
-          autocomplete: "username",
-          required: true,
-          hint: `3–64 characters. Letters, numbers, dots, underscores, dashes.`,
-          error: this.fieldErrors.username,
-        })}
-
-        ${this.field({
           name: "email",
           label: "Email",
           type: "email",
           autocomplete: "email",
           required: true,
           error: this.fieldErrors.email,
+        })}
+
+        ${this.field({
+          name: "username",
+          label: "ID (optional)",
+          type: "text",
+          autocomplete: "username",
+          required: false,
+          hint: `2–32 chars: letters, digits, dots, hyphens, underscores. Defaults to your email's prefix.`,
+          error: this.fieldErrors.username,
+        })}
+
+        ${this.field({
+          name: "tag",
+          label: "Tag (optional)",
+          type: "text",
+          autocomplete: "off",
+          required: false,
+          hint: `Exactly 4 chars (0–9, a–z). Auto-generated if blank. Final form: id#tag.`,
+          error: this.fieldErrors.tag,
         })}
 
         ${this.field({
@@ -320,19 +331,26 @@ export class AkashicSignup extends LitElement {
     const form = e.currentTarget as HTMLFormElement;
     const data = new FormData(form);
     const payload: Record<string, string> = {
-      username: String(data.get("username") ?? "").trim(),
       email: String(data.get("email") ?? "").trim(),
       password: String(data.get("password") ?? ""),
     };
+    // Optional id + tag — only include in payload when present so
+    // the server treats their absence as "auto-generate" rather
+    // than "validate this empty string".
+    const wantedID = String(data.get("username") ?? "").trim();
+    if (wantedID) payload.username = wantedID;
+    const wantedTag = String(data.get("tag") ?? "").trim();
+    if (wantedTag) payload.tag = wantedTag;
     const passwordConfirm = String(data.get("password_confirm") ?? "");
     const dn = String(data.get("display_name") ?? "").trim();
     if (dn) payload.display_name = dn;
 
     // Pre-flight: required-fields, password-policy, password-match.
     // Server re-runs these and is authoritative; the early checks
-    // give the user fast feedback without a round-trip.
-    if (!payload.username || !payload.email || !payload.password) {
-      this.topError = "All required fields must be filled.";
+    // give the user fast feedback without a round-trip. Username
+    // is no longer in the required set — see above.
+    if (!payload.email || !payload.password) {
+      this.topError = "Email and password are required.";
       this.busy = false;
       return;
     }
@@ -377,11 +395,39 @@ export class AkashicSignup extends LitElement {
 
     // Server-side error mapping.
     switch (res.code) {
-      case "USERNAME_TAKEN":
-        this.fieldErrors = { username: "That username is already taken." };
+      case "EMAIL_TAKEN":
+        this.fieldErrors = {
+          email:
+            "An account with that email already exists. Sign in instead, or use a different email.",
+        };
+        break;
+      case "ID_INVALID":
+        this.fieldErrors = {
+          username:
+            "ID must be 2–32 characters of letters, digits, dots, hyphens, or underscores.",
+        };
+        break;
+      case "TAG_INVALID":
+        this.fieldErrors = {
+          tag: "Tag must be exactly 4 characters using 0–9 and a–z.",
+        };
+        break;
+      case "UID_TAKEN":
+        this.fieldErrors = {
+          tag:
+            "That ID + tag combination is already taken. Try a different tag, or leave it blank to auto-pick.",
+        };
+        break;
+      case "USERNAME_UNAVAILABLE":
+        this.topError =
+          "Could not generate a unique account ID. Please retry or pick an explicit tag.";
         break;
       case "PASSWORD_POLICY_VIOLATION":
         this.fieldErrors = { password: res.message };
+        break;
+      case "SIGNUP_DISABLED":
+        this.topError =
+          "Self-service signup is disabled on this deployment. Contact the operator.";
         break;
       case "BOOTSTRAP_INCOMPLETE":
         this.topError =
