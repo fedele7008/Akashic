@@ -28,6 +28,7 @@ import "./components/akashic-signin";
 import "./components/akashic-forgot-help";
 import "./components/akashic-profile";
 import "./components/akashic-change-password";
+import "./components/akashic-change-id";
 import "./components/akashic-clients";
 import "./components/akashic-connected-apps";
 

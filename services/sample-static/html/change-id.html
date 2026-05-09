@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Profile — Akashic Sample</title>
+  <title>Change ID — Akashic Sample</title>
   <link rel="stylesheet" href="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic-default.css" />
   <script src="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic.js" type="module"></script>
   <script src="/_oauth.js"></script>
@@ -11,35 +11,19 @@
     body { max-width: 32rem; margin: 0 auto; padding: 2rem 1rem;
            font-family: system-ui, sans-serif; color: #e4e6eb; background: #0f1115; }
     a { color: #4f8cff; }
+    p.lede { color: #b1b5be; font-size: 0.9rem; }
   </style>
 </head>
 <body>
-  <h1>Your profile</h1>
-  <!--
-    The widget uses the bearer set by _oauth.js
-    (AkashicOAuth.applyToWidgets() on DOMContentLoaded → calls
-    Akashic.configure({ accessToken })). If no token is present
-    yet, the widget shows its needs-signin state and emits an
-    `akashic-needs-signin` event, which we listen for below.
-  -->
-  <akashic-profile editable></akashic-profile>
-
-  <p style="margin-top: 2rem;">
-    <a href="/clients">Manage your OAuth clients →</a>
+  <h1>Change account ID</h1>
+  <p class="lede">
+    Rotate your <code>id#TAG</code> handle. The operator-configured
+    cooldown applies between successive changes.
   </p>
-
-  <p>
-    <a href="/connected-apps">Review connected apps →</a>
-  </p>
-
-  <p>
-    <a href="/change-id">Change ID / tag →</a>
-  </p>
-
+  <akashic-change-id></akashic-change-id>
   <p style="margin-top: 1.5rem;">
-    <a href="/">← Home</a>
+    <a href="/profile">← Back to profile</a>
   </p>
-
   <script>
     document.addEventListener("akashic-needs-signin", function () {
       AkashicOAuth.signin();

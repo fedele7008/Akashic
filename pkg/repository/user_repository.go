@@ -247,6 +247,30 @@ func (r *UserRepository) EnableUser(ctx context.Context, userID uuid.UUID) error
 	return nil
 }
 
+// UpdateLdapDNAndMarkUIDChanged updates a user's `ldap_dn` and
+// stamps `last_uid_changed_at` to now. Used by the
+// PATCH /users/me/uid endpoint after a successful LDAP modrdn.
+//
+// Done as a single UPDATE so the two columns can't get out of
+// sync — either both move forward, or neither (and the caller
+// rolls back the LDAP rename).
+func (r *UserRepository) UpdateLdapDNAndMarkUIDChanged(ctx context.Context, userID uuid.UUID, newDN string) error {
+	now := time.Now()
+	res := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", userID).
+		Updates(map[string]any{
+			"ldap_dn":              newDN,
+			"last_uid_changed_at":  &now,
+		})
+	if res.Error != nil {
+		return fmt.Errorf("update ldap_dn + last_uid_changed_at: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return models.ErrUserNotFound
+	}
+	return nil
+}
+
 // DeleteUser removes a user's PG row by id. Phase 8c.2 hard-delete
 // path: callers are expected to remove the LDAP entry first via
 // pkg/ldap.Client.DeleteUserByDN, then call this to drop the

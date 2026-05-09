@@ -154,7 +154,7 @@ func Register(ctx context.Context, d Deps, p Params) (*models.User, error) {
 		return nil, fmt.Errorf("%w: %s", ErrEmailTaken, p.Email)
 	}
 
-	uid, err := resolveUID(d.LDAP, p.Email, p.Username, p.Tag)
+	uid, err := ResolveUID(d.LDAP, p.Email, p.Username, p.Tag, "")
 	if err != nil {
 		return nil, err
 	}
@@ -173,7 +173,7 @@ func Register(ctx context.Context, d Deps, p Params) (*models.User, error) {
 	return user, nil
 }
 
-// resolveUID produces the final Discord-style `<id>#<tag>` LDAP uid
+// ResolveUID produces the final Discord-style `<id>#<tag>` LDAP uid
 // from the four input cases:
 //
 //	supplied? id  tag  → behaviour
@@ -188,10 +188,16 @@ func Register(ctx context.Context, d Deps, p Params) (*models.User, error) {
 // regenerating to "fix" a collision would silently produce a uid
 // they didn't ask for. So we surface ErrUIDTaken instead.
 //
+// `currentUID` is the existing uid the caller is renaming FROM. When
+// non-empty, candidates that match it are treated as not-taken (the
+// caller is allowed to "rename to themselves" — useful for the
+// PATCH /users/me/uid no-op short-circuit). Pass "" for registration
+// where there's no existing uid to exclude.
+//
 // `#` is RFC-4514-safe mid-RDN-value, RFC-4515-safe in filters, and
 // percent-encodes correctly in URL query strings. See the design
 // note in the package doc-comment for the full layer-by-layer audit.
-func resolveUID(client *ldap.Client, email, suppliedID, suppliedTag string) (string, error) {
+func ResolveUID(client *ldap.Client, email, suppliedID, suppliedTag, currentUID string) (string, error) {
 	// Resolve id-base.
 	var idBase string
 	if suppliedID = strings.TrimSpace(suppliedID); suppliedID != "" {
@@ -218,6 +224,13 @@ func resolveUID(client *ldap.Client, email, suppliedID, suppliedTag string) (str
 			return "", err
 		}
 		candidate := idBase + "#" + tag
+		// `currentUID` short-circuit: when the caller is renaming
+		// from `currentUID` and lands on the same value, treat as
+		// "free for me to claim" so PATCH /users/me/uid handlers
+		// can detect a no-op cleanly.
+		if candidate == currentUID {
+			return candidate, nil
+		}
 		exists, err := client.UserExists(candidate)
 		if err != nil {
 			return "", fmt.Errorf("%w: LDAP lookup: %v", ErrInternal, err)
@@ -239,6 +252,14 @@ func resolveUID(client *ldap.Client, email, suppliedID, suppliedTag string) (str
 			return "", fmt.Errorf("%w: tag generation: %v", ErrInternal, err)
 		}
 		candidate := idBase + "#" + tag
+		// Same currentUID exclusion as the explicit-tag branch — a
+		// caller renaming to themselves shouldn't fail uniqueness.
+		// In the auto-generate path this is much rarer (random
+		// tag would have to match the existing tag) but the short-
+		// circuit is uniform.
+		if candidate == currentUID {
+			return candidate, nil
+		}
 		exists, err := client.UserExists(candidate)
 		if err != nil {
 			return "", fmt.Errorf("%w: LDAP lookup: %v", ErrInternal, err)

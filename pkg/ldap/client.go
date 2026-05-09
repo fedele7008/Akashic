@@ -809,6 +809,60 @@ func (c *Client) CreateUser(username, email, displayName, password string) (stri
 	return userDN, nil
 }
 
+// RenameUser changes a user's RDN — i.e., the leftmost
+// `uid=<value>` component of their DN. Used by the Phase-9
+// PATCH /users/me/uid endpoint to give a user a different uid
+// without otherwise altering their entry.
+//
+// `oldDN`: the user's existing full DN (e.g.
+//
+//	`uid=alice#A8F3,ou=users,dc=akashic,dc=local`).
+//
+// `newUID`: the new uid value (e.g. `bob#K7M2`). The function
+// constructs `uid=<newUID>` as the new RDN.
+//
+// `deleteOldRDN: true` removes the old `uid` attribute value
+// from the entry; without that flag the entry would carry both
+// the old and new uids and login filter would still match the
+// old one.
+//
+// Returns the new full DN on success. The new DN is
+// `uid=<newUID>` + the same parent path as oldDN. We construct
+// it locally rather than re-fetching from LDAP because the
+// modrdn response doesn't include it and we already have all
+// the components.
+//
+// Failure modes the caller should be prepared for:
+//   - LDAPResultEntryAlreadyExists (68): the new RDN collides
+//     with another entry. Caller should have checked uniqueness
+//     before calling, but a race is possible.
+//   - LDAPResultNoSuchObject (32): oldDN doesn't exist. Probably
+//     means the user was deleted between the lookup and rename.
+//   - Connection / network errors: propagate as-is.
+func (c *Client) RenameUser(oldDN, newUID string) (string, error) {
+	if c.conn == nil {
+		return "", fmt.Errorf("LDAP connection not established")
+	}
+	newRDN := fmt.Sprintf("%s=%s", c.config.UsernameAttr, newUID)
+	req := ldap.NewModifyDNRequest(oldDN, newRDN, true /* deleteOldRDN */, "" /* keep parent */)
+	if err := c.conn.ModifyDN(req); err != nil {
+		return "", fmt.Errorf("LDAP modrdn %s → %s: %w", oldDN, newRDN, err)
+	}
+	// Construct the new DN: new RDN + everything after the first
+	// comma in oldDN (the parent path). Falls back to just newRDN
+	// if oldDN had no comma — only happens for ill-formed DNs that
+	// would have failed validation upstream.
+	parent := ""
+	if i := strings.IndexByte(oldDN, ','); i > 0 {
+		parent = oldDN[i:] // includes the leading comma
+	}
+	newDN := newRDN + parent
+	c.logger.App.Info("RenameUser: entry renamed",
+		zap.String("old_dn", oldDN),
+		zap.String("new_dn", newDN))
+	return newDN, nil
+}
+
 // DeleteUserByDN removes a user entry from LDAP by Distinguished
 // Name. Returns nil on success, including the not-found case — the
 // idempotent semantic matches the operator-facing usermanagement

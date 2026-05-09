@@ -840,7 +840,7 @@ display name `alice` rather than the full `alice#a8f3`.
 Untagged uids (the bootstrap "admin", any pre-tag-design
 rows) get a no-op strip since there's no `#` to find.
 
-**UID-rotation foundation (B/C-1 of 3 follow-up sub-steps shipped):**
+**UID-rotation foundation (B-1, B-2, C-1 of 3 follow-up sub-steps shipped):**
 - New `User.LastUIDChangedAt *time.Time` (indexed) tracks the
   most recent successful PATCH /users/me/uid call per user;
   nil means the user has never rotated their uid.
@@ -854,13 +854,59 @@ rows) get a no-op strip since there's no `#` to find.
   Policy page all carry the new field through. Operator can
   tune from the "Account ID rotation" section of the Policy
   page; changes take effect for the next /users/me/uid call.
+- **B-2 — `PATCH /users/me/uid` endpoint shipped**
+  (`pkg/server/api/uid_change_handler.go`, route wired in
+  `pkg/server/api/routes.go`). Body
+  `{ "username"?, "tag"? }` (at least one required). Missing
+  `username` defaults to the user's CURRENT id-base extracted
+  from their LDAP DN — so a user named `alice` who only
+  rotates the tag stays as `alice#<new>`, rather than getting
+  re-derived from their email's local part. Missing `tag`
+  triggers the same 4-char base36 auto-generation + collision
+  retry as registration. Cooldown enforced against
+  `User.LastUIDChangedAt` + `policy.UIDChangeCooldownDays`
+  (0 disables; nil-LastUIDChangedAt always passes); a 409
+  `UID_CHANGE_COOLDOWN_ACTIVE` carries `next_allowed_at`,
+  `cooldown_days`, `last_changed_at` so the UI can show a
+  countdown. No-op short-circuit (resolved newUID matches
+  current) returns `changed: false` without burning the
+  cooldown. Atomicity: LDAP `modrdn` first, PG update second,
+  best-effort LDAP rollback if PG fails — and a loud Security-
+  channel error log if BOTH fail (manual operator fix needed,
+  rare). Audit log on success via the Security channel records
+  user_id + old_uid + new_uid.
 
-**Still TODO (B-2, B-3)**: the actual `PATCH /users/me/uid`
-endpoint that reads the cooldown + LDAP `modrdn` rename + PG
-row update + audit log; followed by the profile widget UI for
-the change. The cooldown setting is configurable today but
-not yet read by anything — the next two sub-steps land the
-endpoint and the user-facing form.
+- **B-3 — Profile widget UI shipped**
+  (`web/widgets/src/components/akashic-change-id.ts`). New
+  `<akashic-change-id>` Lit element: fetches `/users/me` on mount
+  to display the user's CURRENT uid in a read-only card, then
+  exposes side-by-side "New ID" + "New Tag" inputs with the same
+  side-by-side layout as `<akashic-signup>` (the same `field-row`
+  parts, the same 6rem tag cell, the same `align-items: flex-end`
+  baseline trick). Submit is permissive — leaving either field
+  blank lets the server keep the corresponding half (matches the
+  endpoint's "missing username = keep id-base, missing tag =
+  auto-generate" semantics). Maps every error code the handler
+  returns: `UID_CHANGE_COOLDOWN_ACTIVE` (formatted with
+  `details.next_allowed_at` into a "you can change again on
+  <localized date> (in about N days)" sentence), `ID_INVALID`,
+  `TAG_INVALID`, `UID_TAKEN`, `USERNAME_UNAVAILABLE`,
+  `VALIDATION_FAILED`, plus the standard `NO_SESSION` →
+  `akashic-needs-signin` event. Server-`changed: false` (no-op
+  short-circuit) is rendered as an info banner rather than a
+  success — preserves the "didn't burn the cooldown" signal in
+  the UI. On real success, dispatches `akashic-uid-changed`
+  CustomEvent (detail = `{ uid, ldap_dn }`) so the embedder page
+  can refresh any cached display. Mounted in both reference
+  portals: `web/portal/app/(authenticated)/profile/change-id`
+  (Next.js) and `services/sample-static/html/change-id.html`
+  (plain HTML), plus card links from each `/profile` page.
+
+The uid-rotation milestone is now fully end-to-end usable: the
+operator tunes the cooldown on the admin Policy page, the user
+rotates from `/profile/change-id` in either sample portal, the
+api-server enforces the cooldown + performs the LDAP+PG dance,
+and the audit log records every successful rotation.
 
 Login-by-email already worked at the LDAP filter layer
 (`UserLoginFilter` defaults to `(|(uid={login})(mail={login}))`);

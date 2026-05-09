@@ -36,6 +36,21 @@ export default function ProfilePage() {
 
       <div className="flex items-center justify-between rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm">
         <div>
+          <p className="font-medium">Change ID / tag</p>
+          <p className="text-[var(--text-muted)]">
+            Rotate your <code>id#TAG</code> handle. Cooldown applies.
+          </p>
+        </div>
+        <Link
+          href="/profile/change-id"
+          className="rounded-md border border-[var(--text-muted)]/30 px-3 py-1.5 hover:bg-[var(--bg)]"
+        >
+          Open
+        </Link>
+      </div>
+
+      <div className="flex items-center justify-between rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm">
+        <div>
           <p className="font-medium">OAuth clients</p>
           <p className="text-[var(--text-muted)]">
             Register integrations and manage their credentials.
