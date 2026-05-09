@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Authorize {{.ClientName}} — Akashic</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="card">
+    <h1>Authorize {{.ClientName}}</h1>
+    <p class="subtitle">Akashic Identity Provider</p>
+
+    {{if .Description}}
+    <p class="policy-hint">{{.Description}}</p>
+    {{end}}
+
+    <p style="margin: 16px 0 8px 0; color: var(--text);">
+      <strong>{{.ClientName}}</strong> would like to:
+    </p>
+    <ul class="scope-list">
+      {{range .Scopes}}
+      <li>
+        <code class="scope-code">{{.Code}}</code>
+        {{if .Description}}<span class="scope-desc">— {{.Description}}</span>{{end}}
+      </li>
+      {{end}}
+    </ul>
+
+    {{if .HomepageURL}}
+    <p class="cancel">
+      Learn more: <a href="{{.HomepageURL}}" target="_blank" rel="noopener noreferrer">{{.HomepageURL}}</a>
+    </p>
+    {{end}}
+
+    <form method="POST" action="/consent/submit" autocomplete="off" style="margin-top: 24px;">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+      <input type="hidden" name="return_to" value="{{.ReturnTo}}">
+      <div style="display: flex; gap: 12px; flex-direction: column;">
+        <button type="submit" name="decision" value="approve">
+          Approve
+        </button>
+        <button type="submit" name="decision" value="deny" class="deny-button">
+          Deny
+        </button>
+      </div>
+    </form>
+
+    <p class="cancel" style="margin-top: 18px;">
+      Approving means {{.ClientName}} can access the items above on
+      your behalf. You can revoke this in your account settings later.
+    </p>
+  </main>
+</body>
+</html>

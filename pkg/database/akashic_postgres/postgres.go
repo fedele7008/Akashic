@@ -136,6 +136,12 @@ func (db *DB) AutoMigrate() error {
 		// signup-enabled flag). Singleton row populated at first run
 		// from YAML defaults via pkg/policy.Service.EnsureSingleton.
 		&models.TenantPolicy{},
+		// Phase 7: OAuth consent records — one row per (user, client)
+		// pair tracking which scopes the user has granted. The
+		// auth-server's /authorize handler consults this before
+		// minting an authorization code; missing or stale rows
+		// trigger a /consent redirect.
+		&models.OAuthConsent{},
 	}
 
 	if err := db.DB.AutoMigrate(modelList...); err != nil {

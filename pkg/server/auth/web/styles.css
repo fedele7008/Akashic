@@ -159,3 +159,49 @@ button:hover { background: var(--accent-hover); }
 .signup-prompt a:hover {
   text-decoration: underline;
 }
+
+/* Consent page (Phase 7). Scope list shows what the client is
+   asking for; deny button is visually distinct from approve. */
+.scope-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 16px 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.scope-list li {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 10px 14px;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  line-height: 1.4;
+}
+
+.scope-code {
+  background: rgba(79, 140, 255, 0.12);
+  color: var(--accent);
+  border-radius: 4px;
+  padding: 1px 6px;
+  font-family: 'SF Mono', Monaco, monospace;
+  font-size: 0.8125rem;
+  margin-right: 4px;
+}
+
+.scope-desc {
+  color: var(--text-muted);
+}
+
+button.deny-button {
+  background: transparent;
+  color: var(--text-muted);
+  border: 1px solid var(--border);
+  margin-top: 0;
+}
+
+button.deny-button:hover {
+  background: var(--card-bg);
+  color: var(--text);
+}

@@ -26,6 +26,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/signup", s.handleSignupPage)
 	mux.HandleFunc("/signup/submit", s.handleSignupSubmit)
 
+	// OAuth consent UI (Phase 7). /authorize redirects here when the
+	// client isn't built-in / first-party AND no prior grant covers
+	// the requested scopes. Same CSRF + bootstrap-gate posture as
+	// /login and /signup.
+	mux.HandleFunc("/consent", s.handleConsentPage)
+	mux.HandleFunc("/consent/submit", s.handleConsentSubmit)
+
 	// OAuth flow endpoints (Phase 7 Steps 5-7).
 	//
 	// /authorize is a top-level browser navigation (the SPA / portal

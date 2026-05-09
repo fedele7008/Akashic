@@ -9,9 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"akashic/akashic/pkg/consent"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
 
+	"github.com/google/uuid"
 	"go.uber.org/zap"
 	"golang.org/x/crypto/bcrypt"
 	"gorm.io/gorm"
@@ -201,6 +203,33 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase 7: consent gate. Built-ins and first-party clients
+	// (IsTenantPortal=true) skip; everyone else is prompted unless
+	// the user has previously granted these scopes (or a superset).
+	// On approval, /consent/submit redirects back here, the gate
+	// re-evaluates, and the second pass mints the code as normal.
+	userID, parseErr := uuid.Parse(sess.UserID)
+	if parseErr != nil {
+		// Session row had a malformed user_id. Shouldn't happen,
+		// but if it does we'd loop forever in /consent. Fail the
+		// flow visibly.
+		s.logger.App.Error("authorize: malformed session user_id",
+			zap.String("sid", sid), zap.String("user_id", sess.UserID))
+		redirectWithError(w, r, redirectURI, state,
+			"server_error", "Session is in an inconsistent state.")
+		return
+	}
+	decision := consent.Required(r.Context(), s.consentRepo, &client, userID, scope)
+	if decision.Required {
+		s.logger.Security.Info("consent prompt required",
+			zap.String("client_id", clientID),
+			zap.String("user_id", sess.UserID),
+			zap.String("scope", scope),
+			zap.String("reason", decision.Reason))
+		s.redirectToConsent(w, r)
+		return
+	}
+
 	// Mint authorization code.
 	code, err := codeStore.Generate(r.Context(), &oauth.AuthorizationCode{
 		ClientID:            clientID,
@@ -275,6 +304,19 @@ func redirectWithError(w http.ResponseWriter, r *http.Request, redirectURI, stat
 func (s *Server) redirectToLogin(w http.ResponseWriter, r *http.Request) {
 	loginURL := "/login?return_to=" + url.QueryEscape(r.URL.RequestURI())
 	http.Redirect(w, r, loginURL, http.StatusFound)
+}
+
+// redirectToConsent sends the user to /consent with return_to set
+// to the original /authorize URL. After Approve, /consent/submit
+// redirects back here; the consent gate re-evaluates and now finds
+// a stored grant, so the flow proceeds to code mint normally.
+//
+// Phase 7. Same return_to pattern /login uses — the consent page
+// doesn't need to know the full OAuth state, just where to bounce
+// back to.
+func (s *Server) redirectToConsent(w http.ResponseWriter, r *http.Request) {
+	consentURL := "/consent?return_to=" + url.QueryEscape(r.URL.RequestURI())
+	http.Redirect(w, r, consentURL, http.StatusFound)
 }
 
 // redirectURIAllowed performs exact-string comparison per RFC 6749 §3.1.2.

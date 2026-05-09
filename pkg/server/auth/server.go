@@ -10,6 +10,7 @@ import (
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/policy"
+	"akashic/akashic/pkg/repository"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -54,6 +55,13 @@ type Server struct {
 	// operator edits via the admin web take effect on the next
 	// request without a restart.
 	policySvc *policy.Service
+
+	// Phase 7: OAuth consent repository. Consulted by /authorize
+	// to decide whether to redirect to /consent before minting an
+	// authorization code; written by /consent/submit on Approve.
+	// Nil-tolerant: missing repo means consent.Required fail-opens
+	// (treat all access as previously consented).
+	consentRepo *repository.OAuthConsentRepository
 }
 
 // ServerState represents the current state of the server
@@ -114,6 +122,15 @@ func (s *Server) SetPolicyService(p *policy.Service) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.policySvc = p
+}
+
+// SetConsentRepo wires the OAuth consent repository (Phase 7).
+// Used by /authorize to decide whether to prompt and by
+// /consent/submit to record approval.
+func (s *Server) SetConsentRepo(r *repository.OAuthConsentRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.consentRepo = r
 }
 
 // bootstrapBlocked returns true iff the deployment is still in

@@ -174,6 +174,9 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// Initialize repositories
 	bootstrapRepo := repository.NewBootstrapRepository(app.DB, app.Logger.App)
 	userRepo := repository.NewUserRepository(app.DB, app.LDAPClient, app.Logger.App)
+	// Phase 7: OAuth consent repo. Used by /authorize to gate the
+	// consent prompt and by /consent/submit to write grant rows.
+	consentRepo := repository.NewOAuthConsentRepository(app.DB.DB)
 
 	// Initialize OAuth signing-key store (Phase 7).
 	// On first-ever startup the directory is empty and we generate a
@@ -311,6 +314,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// Phase 8c.6: hand the auth server a live handle to the
 	// DB-backed tenant-policy accessor.
 	app.AuthServer.SetPolicyService(app.PolicyService)
+
+	// Phase 7: hand the auth server the consent repo so /authorize
+	// can decide whether to prompt and /consent/submit can record
+	// approval.
+	app.AuthServer.SetConsentRepo(consentRepo)
 
 	// Built-in OAuth client registration. After Phase 8b's tenant-
 	// client registration roadmap landed, akashic-admin is the only

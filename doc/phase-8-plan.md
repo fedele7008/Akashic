@@ -689,42 +689,68 @@ came back. Helps developers debug without writing code first.
 Separate from sign-in: the *consent* step where a user explicitly
 agrees to share their identity with a third-party OAuth client.
 
-### Step 7.1 — Consent policy
+### Step 7.1 — Consent policy ✅
 
-Decide when consent is required:
-- **Built-in clients** (`akashic-admin` only — see Phase 8b.3
-  Stage 4 for why the samples are no longer built-ins): no
-  consent.
-- **First-party tenant clients** (registered via CLI or admin
-  web — including the samples post-pivot): consent on first
-  authorization, remembered thereafter.
+**Hybrid policy** shipped in `pkg/consent/consent.go`:
+- **Built-ins** (`BuiltIn=true`, e.g. akashic-admin): never
+  prompt. Operator-shipped, consent implicit.
+- **First-party** (`IsTenantPortal=true`): never prompt. The
+  operator owns these and trust is implicit. Google's pattern —
+  Gmail signing into your Google account doesn't show a prompt.
+- **Third-party** (everything else): prompt on first grant,
+  prompt again whenever requested scopes ⊄ stored scopes.
+  Subset re-authorizations silently approved.
 
-Recommended: consent on first authorization per (user, client),
-remembered in postgres `oauth_consents` table.
+Fail-open when consent repo isn't wired (treat as previously
+consented). Fail-CLOSED on a real DB error mid-lookup (require
+prompt) — better one extra prompt than a token under uncertain
+consent state.
 
-### Step 7.2 — `oauth_consents` table
+### Step 7.2 — `oauth_consents` table ✅
 
-`(user_id, client_id, scopes, granted_at)`. Lookup during /authorize.
+`pkg/models/oauth_consent.go` + `pkg/repository/oauth_consent_repository.go`:
+columns `(id uuid, user_id uuid, client_id, scopes, granted_at,
+updated_at, revoked_at)`. Composite unique on `(user_id,
+client_id)` — one row per pair, re-grants UPDATE in place.
+Soft-delete via `revoked_at` so the audit history of a
+previously-consented relationship survives revocation. Repo
+exposes `Get`, `Upsert` (single ON CONFLICT round-trip),
+`Revoke`, `ListForUser` (for 7.5).
 
-### Step 7.3 — Auth-server consent redirect
+### Step 7.3 — Auth-server consent redirect ✅
 
-When `/authorize` finds a logged-in user but no consent record for
-this (user, client, scopes) tuple → redirect to portal's
-`/consent?...`. The portal renders the consent screen, user clicks
-Approve/Deny, portal POSTs back to akashic to record consent →
-akashic completes the flow.
+`pkg/server/auth/oauth_flow_handlers.go` gained a single branch
+between "session valid" and "mint code":
+`consent.Required(ctx, repo, &client, userID, scope)`. When the
+decision says required, `redirectToConsent` bounces to
+`/consent?return_to=<full /authorize URL>`. Same return-to
+strategy `/login` already uses — stateless, the consent page
+doesn't need its own server-side state mint. Consented decisions
+proceed straight to code mint with no behavioural change for
+built-ins / first-party clients.
 
-### Step 7.4 — Consent UI
+### Step 7.4 — Consent UI ✅
 
-Page showing the client's name, description, homepage URL, and the
-scopes being requested in plain English. Two buttons: Approve,
-Cancel.
+`pkg/server/auth/consent_handlers.go` (`handleConsentPage` +
+`handleConsentSubmit`) plus `web/consent.html.tmpl`. Same CSRF
+double-submit cookie /login + /signup use; same bootstrap-gate
+short-circuit. Approve writes consent row synchronously then
+302s to `return_to` (the original /authorize URL); /authorize's
+gate re-evaluates and now finds a stored grant → code minted.
+Deny extracts `redirect_uri` + `state` from `return_to` and
+redirects there with `?error=access_denied` per RFC 6749
+§4.1.2.1. Scopes rendered in plain English via a hand-curated
+`code → description` table; unknown scopes still show with their
+code so a custom scope isn't silently hidden.
 
-### Step 7.5 — Revoke-consent UI
+### Step 7.5 — Revoke-consent UI ⏳
 
-`/profile/connected-apps` — lists apps the user has granted consent
-to, with revoke buttons. Revoking deletes the consent row +
-invalidates any active sessions for that (user, client).
+`/profile/connected-apps` — end-user widget that lists active
+consent rows and lets users revoke them. Backend (`ListForUser`,
+`Revoke`) is already in `OAuthConsentRepository`; the missing
+piece is an api-server-side endpoint plus the widget. Deferred
+to a follow-up turn since it's an end-user widget rather than
+the operator surface.
 
 ---
 
