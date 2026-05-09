@@ -48,6 +48,21 @@ export default function ProfilePage() {
           Open
         </Link>
       </div>
+
+      <div className="flex items-center justify-between rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm">
+        <div>
+          <p className="font-medium">Connected apps</p>
+          <p className="text-[var(--text-muted)]">
+            Review and revoke third-party apps you've signed into.
+          </p>
+        </div>
+        <Link
+          href="/profile/connected-apps"
+          className="rounded-md border border-[var(--text-muted)]/30 px-3 py-1.5 hover:bg-[var(--bg)]"
+        >
+          Open
+        </Link>
+      </div>
     </section>
   );
 }

@@ -29,6 +29,7 @@ import "./components/akashic-forgot-help";
 import "./components/akashic-profile";
 import "./components/akashic-change-password";
 import "./components/akashic-clients";
+import "./components/akashic-connected-apps";
 
 declare global {
   interface Window {

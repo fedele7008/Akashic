@@ -56,6 +56,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/users/me/password",
 		s.requireBearer(s.handleChangePassword))
 
+	// Phase 7.5: end-user consent management.
+	//   GET    /users/me/consents       → list active grants
+	//   DELETE /users/me/consents/<id>  → revoke a specific grant
+	mux.HandleFunc("/users/me/consents",
+		s.requireBearer(s.handleListMyConsents))
+	mux.HandleFunc("/users/me/consents/",
+		s.requireBearer(s.handleRevokeMyConsent))
+
 	// Bearer-authenticated /clients/*.
 	mux.HandleFunc("/clients/mine",
 		s.requireBearer(s.handleListMyClients))

@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Connected apps — Akashic Sample</title>
+  <link rel="stylesheet" href="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic-default.css" />
+  <script src="${AKASHIC_PORTAL_API_BASE_URL}/widgets/akashic.js" type="module"></script>
+  <script src="/_oauth.js"></script>
+  <style>
+    body { max-width: 40rem; margin: 0 auto; padding: 2rem 1rem;
+           font-family: system-ui, sans-serif; color: #e4e6eb; background: #0f1115; }
+    a { color: #4f8cff; }
+    p.lede { color: #8b91a0; margin-top: 0.25rem; }
+  </style>
+</head>
+<body>
+  <h1>Connected apps</h1>
+  <p class="lede">
+    Third-party apps you've approved. Revoking removes their
+    access — they'll need to ask permission again next time.
+  </p>
+
+  <!--
+    Same bearer-bridge pattern as the other widget pages — the
+    widget reads the access token set by _oauth.js, calls
+    api.<tenant>/users/me/consents directly, and renders a
+    revoke-per-row list. Built-ins and first-party clients
+    skip the consent screen entirely (hybrid policy), so they
+    never appear here.
+  -->
+  <akashic-connected-apps></akashic-connected-apps>
+
+  <p style="margin-top: 1.5rem;">
+    <a href="/profile">← Back to profile</a>
+    &nbsp;·&nbsp;
+    <a href="/">Home</a>
+  </p>
+
+  <script>
+    document.addEventListener("akashic-needs-signin", function () {
+      AkashicOAuth.signin();
+    });
+  </script>
+</body>
+</html>

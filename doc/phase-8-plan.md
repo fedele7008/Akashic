@@ -743,14 +743,46 @@ redirects there with `?error=access_denied` per RFC 6749
 `code → description` table; unknown scopes still show with their
 code so a custom scope isn't silently hidden.
 
-### Step 7.5 — Revoke-consent UI ⏳
+### Step 7.5 — Revoke-consent UI ✅
 
-`/profile/connected-apps` — end-user widget that lists active
-consent rows and lets users revoke them. Backend (`ListForUser`,
-`Revoke`) is already in `OAuthConsentRepository`; the missing
-piece is an api-server-side endpoint plus the widget. Deferred
-to a follow-up turn since it's an end-user widget rather than
-the operator surface.
+End-user surface for managing OAuth grants:
+- Two new bearer-authenticated api-server endpoints (`pkg/server/api/consents_handlers.go`):
+  - `GET /users/me/consents` → joins consent rows with
+    `client_services` for client name/homepage; bulk-fetches
+    metadata in one IN-query rather than per-row to avoid N+1.
+    A grant whose `client_services` row was deleted post-grant
+    surfaces with the bare `client_id` as display name (so the
+    user can still revoke a stale entry).
+  - `DELETE /users/me/consents/<client_id>` → marks the row
+    revoked via `OAuthConsentRepository.Revoke` (soft-delete
+    via `revoked_at`). Idempotent.
+- New `<akashic-connected-apps>` widget
+  (`web/widgets/src/components/akashic-connected-apps.ts`) —
+  same shape as `<akashic-clients>`. List rows + per-row
+  inline-confirm revoke + dispatch of `akashic-consent-revoked`
+  event for embedder pages. Open shadow DOM with `::part(...)`
+  hooks for tenant CSS, mirroring the rest of the widget bundle.
+- Wiring: `consentRepo` plumbed into `api.Server` via new
+  `SetConsentRepo`, hooked up in `pkg/akashic/core/context.go`
+  alongside the auth-server's existing wire (single repo serves
+  both surfaces).
+- **Sample portal surfaces**: the widget is mounted in both
+  reference samples for parity:
+  - `web/portal/app/(authenticated)/profile/connected-apps/page.tsx`
+    (Next.js sample) — thin shell around `<akashic-connected-apps>`,
+    plus a "Connected apps" card on `/profile` linking to it.
+  - `services/sample-static/html/connected-apps.html` (static
+    sample) — same shape, plus an extra link from `profile.html`.
+    nginx's existing `try_files $uri $uri.html` rule routes
+    `/connected-apps` to the new file with no config change.
+  - JSX type declarations updated in
+    `web/portal/types/widgets.d.ts` so the Next.js portal's
+    TypeScript accepts the new element.
+
+**Revoke takes effect immediately.** The auth-server's `/authorize`
+gate consults the same repo, so the next sign-in attempt by the
+client+user pair finds the row marked revoked and re-prompts
+consent. No cache invalidation needed.
 
 ---
 

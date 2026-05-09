@@ -88,6 +88,12 @@ type Server struct {
 	// change) and the SignupEnabled gate. Same fail-open posture as
 	// the bootstrap gate: nil → permissive defaults.
 	policySvc *policy.Service
+
+	// Phase 7.5: consent repository for the bearer-authenticated
+	// /users/me/consents surface — list + revoke. Same repo handle
+	// the auth-server uses for /authorize gating; co-locating the
+	// reads/writes here keeps audit trails consistent.
+	consentRepo *repository.OAuthConsentRepository
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -125,6 +131,14 @@ func (s *Server) SetPolicyService(p *policy.Service) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.policySvc = p
+}
+
+// SetConsentRepo wires the OAuth consent repository. Used by the
+// Phase 7.5 /users/me/consents handlers (list + revoke).
+func (s *Server) SetConsentRepo(r *repository.OAuthConsentRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.consentRepo = r
 }
 
 // SetBootstrapManager wires the bootstrap-state checker so signup

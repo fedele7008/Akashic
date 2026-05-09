@@ -359,6 +359,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// signups both block until operator setup is done.
 	app.APIServer.SetBootstrapManager(app.BootstrapMgr)
 	app.APIServer.SetPolicyService(app.PolicyService)
+	// Phase 7.5: api-server's /users/me/consents uses the same
+	// repo the auth-server uses for /authorize gating — single
+	// source of truth for grant rows.
+	app.APIServer.SetConsentRepo(consentRepo)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(
