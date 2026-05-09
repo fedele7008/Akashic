@@ -127,6 +127,7 @@ type UpdateParams struct {
 	PasswordRequireNumber    *bool
 	PasswordRequireSpecial   *bool
 	SignupEnabled            *bool
+	UIDChangeCooldownDays    *int
 	CallerID                 uuid.UUID
 }
 
@@ -148,6 +149,12 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 				ErrInvalidPolicy)
 		}
 	}
+	if p.UIDChangeCooldownDays != nil {
+		if *p.UIDChangeCooldownDays < 0 || *p.UIDChangeCooldownDays > 365 {
+			return nil, fmt.Errorf("%w: uid_change_cooldown_days must be between 0 and 365",
+				ErrInvalidPolicy)
+		}
+	}
 
 	updates := map[string]any{}
 	if p.PasswordMinLength != nil {
@@ -164,6 +171,9 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 	}
 	if p.SignupEnabled != nil {
 		updates["signup_enabled"] = *p.SignupEnabled
+	}
+	if p.UIDChangeCooldownDays != nil {
+		updates["uid_change_cooldown_days"] = *p.UIDChangeCooldownDays
 	}
 	if p.CallerID != uuid.Nil {
 		updates["updated_by"] = p.CallerID

@@ -582,18 +582,20 @@ type TenantPolicyView struct {
 	PasswordRequireNumber    bool    `json:"password_require_number"`
 	PasswordRequireSpecial   bool    `json:"password_require_special"`
 	SignupEnabled            bool    `json:"signup_enabled"`
+	UIDChangeCooldownDays    int     `json:"uid_change_cooldown_days"`
 	UpdatedAt                string  `json:"updated_at"`
 	UpdatedBy                *string `json:"updated_by,omitempty"`
 }
 
 // UpdatePolicyRequest mirrors the control-plane PATCH /policy body.
 type UpdatePolicyRequest struct {
-	PasswordMinLength        *int    `json:"password_min_length,omitempty"`
-	PasswordRequireUppercase *bool   `json:"password_require_uppercase,omitempty"`
-	PasswordRequireNumber    *bool   `json:"password_require_number,omitempty"`
-	PasswordRequireSpecial   *bool   `json:"password_require_special,omitempty"`
-	SignupEnabled            *bool   `json:"signup_enabled,omitempty"`
-	CallerUserID             string  `json:"caller_user_id,omitempty"`
+	PasswordMinLength        *int   `json:"password_min_length,omitempty"`
+	PasswordRequireUppercase *bool  `json:"password_require_uppercase,omitempty"`
+	PasswordRequireNumber    *bool  `json:"password_require_number,omitempty"`
+	PasswordRequireSpecial   *bool  `json:"password_require_special,omitempty"`
+	SignupEnabled            *bool  `json:"signup_enabled,omitempty"`
+	UIDChangeCooldownDays    *int   `json:"uid_change_cooldown_days,omitempty"`
+	CallerUserID             string `json:"caller_user_id,omitempty"`
 }
 
 func (c *ControlClient) PolicyGet(ctx context.Context) (*TenantPolicyView, error) {

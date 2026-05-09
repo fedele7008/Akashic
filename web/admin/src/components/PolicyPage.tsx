@@ -33,6 +33,7 @@ export function PolicyPage() {
   const [requireNumber, setRequireNumber] = useState(false);
   const [requireSpecial, setRequireSpecial] = useState(false);
   const [signupEnabled, setSignupEnabled] = useState(true);
+  const [uidCooldown, setUidCooldown] = useState(30);
 
   const [submitting, setSubmitting] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -48,6 +49,7 @@ export function PolicyPage() {
       setRequireNumber(p.password_require_number);
       setRequireSpecial(p.password_require_special);
       setSignupEnabled(p.signup_enabled);
+      setUidCooldown(p.uid_change_cooldown_days);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -70,6 +72,7 @@ export function PolicyPage() {
     if (requireNumber !== policy.password_require_number) req.password_require_number = requireNumber;
     if (requireSpecial !== policy.password_require_special) req.password_require_special = requireSpecial;
     if (signupEnabled !== policy.signup_enabled) req.signup_enabled = signupEnabled;
+    if (uidCooldown !== policy.uid_change_cooldown_days) req.uid_change_cooldown_days = uidCooldown;
 
     if (Object.keys(req).length === 0) {
       setSubmitErr('No changes to save.');
@@ -182,6 +185,28 @@ export function PolicyPage() {
               "available regardless."
             }
           />
+        </div>
+
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Account ID rotation</h3>
+          <label>
+            <div>Cooldown between ID changes (days)</div>
+            <input
+              type="number"
+              min={0}
+              max={365}
+              value={uidCooldown}
+              onChange={(e) => setUidCooldown(parseInt(e.target.value, 10) || 0)}
+              disabled={submitting}
+              style={{ width: '120px' }}
+            />
+            <div className="hint" style={{ fontSize: '0.75rem', padding: 0, background: 'transparent', border: 'none' }}>
+              Minimum elapsed time before a user can change their ID
+              (id + tag) again. <strong>0</strong> disables the cooldown.
+              <strong>30</strong> is the default — discourages
+              rotation-as-impersonation. Server caps the value at 365.
+            </div>
+          </label>
         </div>
 
         {savedAt && (

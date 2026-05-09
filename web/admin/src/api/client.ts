@@ -51,6 +51,7 @@ export interface TenantPolicy {
   password_require_number: boolean;
   password_require_special: boolean;
   signup_enabled: boolean;
+  uid_change_cooldown_days: number;
   updated_at: string;
   updated_by?: string;
 }
@@ -61,6 +62,7 @@ export interface UpdatePolicyRequest {
   password_require_number?: boolean;
   password_require_special?: boolean;
   signup_enabled?: boolean;
+  uid_change_cooldown_days?: number;
 }
 
 export class PolicyApi {

@@ -61,6 +61,16 @@ type TenantPolicy struct {
 	// initiated user creation (Phase 9 territory; not yet built).
 	SignupEnabled bool `gorm:"not null;default:true" json:"signup_enabled"`
 
+	// ─── UID rotation ─────────────────────────────────────────
+	// UIDChangeCooldownDays is the minimum elapsed time between
+	// successive PATCH /users/me/uid calls per user. Default 30
+	// — discourages rotation-as-impersonation (changing an id to
+	// match someone else's, then changing back). 0 disables the
+	// cooldown entirely; values >365 are pointless in practice
+	// but the policy.Service.Update validation caps at 365 to
+	// keep the cooldown explicable in operator UI.
+	UIDChangeCooldownDays int `gorm:"not null;default:30" json:"uid_change_cooldown_days"`
+
 	UpdatedAt time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
 	UpdatedBy *uuid.UUID `gorm:"type:uuid" json:"updated_by,omitempty"`
 }

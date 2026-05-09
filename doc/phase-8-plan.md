@@ -840,6 +840,28 @@ display name `alice` rather than the full `alice#a8f3`.
 Untagged uids (the bootstrap "admin", any pre-tag-design
 rows) get a no-op strip since there's no `#` to find.
 
+**UID-rotation foundation (B/C-1 of 3 follow-up sub-steps shipped):**
+- New `User.LastUIDChangedAt *time.Time` (indexed) tracks the
+  most recent successful PATCH /users/me/uid call per user;
+  nil means the user has never rotated their uid.
+- New `TenantPolicy.UIDChangeCooldownDays int` (default 30,
+  validated to `[0, 365]`) — the minimum elapsed time between
+  successive uid rotations per user. 0 disables; 30 is the
+  default; values >365 are rejected as nonsensical.
+- Policy service `Update` accepts the new field; `EnsureSingleton`
+  seeds the default 30 on first run.
+- Control plane `PATCH /policy` + admin-bff proxy + admin web
+  Policy page all carry the new field through. Operator can
+  tune from the "Account ID rotation" section of the Policy
+  page; changes take effect for the next /users/me/uid call.
+
+**Still TODO (B-2, B-3)**: the actual `PATCH /users/me/uid`
+endpoint that reads the cooldown + LDAP `modrdn` rename + PG
+row update + audit log; followed by the profile widget UI for
+the change. The cooldown setting is configurable today but
+not yet read by anything — the next two sub-steps land the
+endpoint and the user-facing form.
+
 Login-by-email already worked at the LDAP filter layer
 (`UserLoginFilter` defaults to `(|(uid={login})(mail={login}))`);
 the email-uniqueness fix is what makes it actually disambiguate.

@@ -59,12 +59,13 @@ func (s *Server) adminGetPolicy(w http.ResponseWriter, r *http.Request) {
 // Pointer fields preserve the "leave unchanged" / "set to false"
 // distinction the policy.Service.Update method needs.
 type adminPatchPolicyRequest struct {
-	PasswordMinLength        *int    `json:"password_min_length,omitempty"`
-	PasswordRequireUppercase *bool   `json:"password_require_uppercase,omitempty"`
-	PasswordRequireNumber    *bool   `json:"password_require_number,omitempty"`
-	PasswordRequireSpecial   *bool   `json:"password_require_special,omitempty"`
-	SignupEnabled            *bool   `json:"signup_enabled,omitempty"`
-	CallerUserID             string  `json:"caller_user_id,omitempty"`
+	PasswordMinLength        *int   `json:"password_min_length,omitempty"`
+	PasswordRequireUppercase *bool  `json:"password_require_uppercase,omitempty"`
+	PasswordRequireNumber    *bool  `json:"password_require_number,omitempty"`
+	PasswordRequireSpecial   *bool  `json:"password_require_special,omitempty"`
+	SignupEnabled            *bool  `json:"signup_enabled,omitempty"`
+	UIDChangeCooldownDays    *int   `json:"uid_change_cooldown_days,omitempty"`
+	CallerUserID             string `json:"caller_user_id,omitempty"`
 }
 
 func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
@@ -83,6 +84,7 @@ func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
 		PasswordRequireNumber:    req.PasswordRequireNumber,
 		PasswordRequireSpecial:   req.PasswordRequireSpecial,
 		SignupEnabled:            req.SignupEnabled,
+		UIDChangeCooldownDays:    req.UIDChangeCooldownDays,
 	}
 	if req.CallerUserID != "" {
 		callerID, err := uuid.Parse(req.CallerUserID)
@@ -133,6 +135,9 @@ func changedPolicyFields(req adminPatchPolicyRequest) []string {
 	}
 	if req.SignupEnabled != nil {
 		out = append(out, "signup_enabled")
+	}
+	if req.UIDChangeCooldownDays != nil {
+		out = append(out, "uid_change_cooldown_days")
 	}
 	return out
 }

@@ -62,6 +62,15 @@ type User struct {
 	// queries like "users inactive for 90 days" stay cheap.
 	LastLoginAt *time.Time `gorm:"index" json:"last_login_at,omitempty"`
 
+	// LastUIDChangedAt tracks the most recent successful uid (id+tag)
+	// rotation via PATCH /users/me/uid. nil means the user has never
+	// rotated their uid since signup. Used by the cooldown check —
+	// the policy table's UIDChangeCooldownDays gives the minimum
+	// elapsed time before another change is allowed. Indexed so
+	// future "users who changed in the last week" admin queries
+	// stay cheap.
+	LastUIDChangedAt *time.Time `gorm:"index" json:"last_uid_changed_at,omitempty"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }

@@ -167,6 +167,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		PasswordRequireNumber:    cfg.Bootstrap.Password.RequireNumber,
 		PasswordRequireSpecial:   cfg.Bootstrap.Password.RequireSpecial,
 		SignupEnabled:            true,
+		// Default 30-day cooldown between PATCH /users/me/uid calls
+		// per user. Discourages rotation-as-impersonation. Operators
+		// can tune from the Policy page.
+		UIDChangeCooldownDays: 30,
 	}); err != nil {
 		return fmt.Errorf("seed tenant policy: %v", err)
 	}
