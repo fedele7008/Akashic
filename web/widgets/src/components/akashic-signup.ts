@@ -155,9 +155,47 @@ export class AkashicSignup extends LitElement {
       flex-direction: column;
       gap: 0.25rem;
     }
+    /* Side-by-side layout for the id + tag pair. Tenants who want
+       a stacked layout can override by setting flex-direction:
+       column on this part.
+
+       align-items: flex-end is load-bearing — when the cell labels
+       have different heights (e.g. "Tag (optional)" wraps to two
+       lines in a tight cell while "ID (optional)" stays one),
+       anchoring to the bottom keeps both inputs on the same baseline.
+
+       min-width: 0 on the cells lets them shrink below their
+       default content width — without it, the 4-char tag input's
+       intrinsic content size keeps its cell wide enough to push
+       the row past the form. */
+    [part="field-row"] {
+      display: flex;
+      flex-direction: row;
+      gap: 0.75rem;
+      align-items: flex-end;
+    }
+    [part="field-row-cell"] {
+      min-width: 0;
+    }
+    /* The tag cell needs enough room for its label to render on
+       one line + a 4-char input. Without this, narrow forms
+       wrap "Tag (optional)" to two lines, making the column
+       taller than the id column even with align-items: flex-end
+       (the label content still occupies more vertical space than
+       its sibling). 6rem fits the label in typical UI fonts. */
+    [part="field-row-cell"][data-cell="tag"] {
+      flex: 0 0 6rem;
+    }
     [part="field-label"] {
       font-size: 0.875rem;
       font-weight: 500;
+      /* Prevent labels from wrapping in narrow cells (the side-by-side
+         id+tag layout puts tag in a ~6rem cell where any non-trivial
+         label string would otherwise fold to two lines, breaking the
+         row's visual alignment). Overflow stays visible — a too-long
+         label spills into adjacent space rather than silently
+         re-flowing. */
+      white-space: nowrap;
     }
     [part="field-input"] {
       font: inherit;
@@ -230,25 +268,33 @@ export class AkashicSignup extends LitElement {
           error: this.fieldErrors.email,
         })}
 
-        ${this.field({
-          name: "username",
-          label: "ID (optional)",
-          type: "text",
-          autocomplete: "username",
-          required: false,
-          hint: `2–32 chars: letters, digits, dots, hyphens, underscores. Defaults to your email's prefix.`,
-          error: this.fieldErrors.username,
-        })}
-
-        ${this.field({
-          name: "tag",
-          label: "Tag (optional)",
-          type: "text",
-          autocomplete: "off",
-          required: false,
-          hint: `Exactly 4 chars (0–9, a–z). Auto-generated if blank. Final form: id#tag.`,
-          error: this.fieldErrors.tag,
-        })}
+        <div part="field-row">
+          <div part="field-row-cell" style="flex: 1 1 auto;">
+            ${this.field({
+              name: "username",
+              label: "ID",
+              type: "text",
+              autocomplete: "username",
+              required: false,
+              error: this.fieldErrors.username,
+            })}
+          </div>
+          <div part="field-row-cell" data-cell="tag">
+            ${this.field({
+              name: "tag",
+              label: "Tag",
+              type: "text",
+              autocomplete: "off",
+              required: false,
+              error: this.fieldErrors.tag,
+            })}
+          </div>
+        </div>
+        <span part="field-hint" style="margin-top: -0.5rem;">
+          ID: 2–32 chars (letters/digits/dots/hyphens/underscores).
+          Tag: 4 chars (0–9, A–Z). Both auto-generated if blank;
+          final form is <code>id#TAG</code>.
+        </span>
 
         ${this.field({
           name: "password",

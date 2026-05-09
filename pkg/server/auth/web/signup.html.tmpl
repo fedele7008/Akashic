@@ -32,38 +32,29 @@
                value="{{.Email}}">
       </label>
 
-      <details style="margin-top: -8px;">
-        <summary style="font-size: 0.875rem; color: var(--text-muted); cursor: pointer;">
-          Customise account ID (optional)
-        </summary>
-        <div style="display: flex; flex-direction: column; gap: 16px; margin-top: 12px;">
-          <label>
-            <span>ID <em>(optional)</em></span>
-            <input type="text" name="username"
-                   spellcheck="false" autocapitalize="off"
-                   minlength="2" maxlength="32"
-                   pattern="[a-zA-Z0-9._-]+"
-                   value="{{.Username}}">
-            <small style="color: var(--text-muted); font-size: 0.8125rem; margin-top: 4px;">
-              2–32 chars: letters, digits, dots, hyphens, underscores.
-              Defaults to your email's prefix.
-            </small>
-          </label>
-
-          <label>
-            <span>Tag <em>(optional)</em></span>
-            <input type="text" name="tag"
-                   spellcheck="false" autocapitalize="off"
-                   minlength="4" maxlength="4"
-                   pattern="[a-zA-Z0-9]{4}"
-                   value="{{.Tag}}">
-            <small style="color: var(--text-muted); font-size: 0.8125rem; margin-top: 4px;">
-              Exactly 4 chars (0–9, a–z). Auto-generated if blank.
-              Your final ID will be <code>id#tag</code>.
-            </small>
-          </label>
-        </div>
-      </details>
+      <div class="field-row">
+        <label class="id-cell">
+          <span>ID</span>
+          <input type="text" name="username"
+                 spellcheck="false" autocapitalize="off"
+                 minlength="2" maxlength="32"
+                 pattern="[a-zA-Z0-9._-]+"
+                 value="{{.Username}}">
+        </label>
+        <label class="tag-cell">
+          <span>Tag</span>
+          <input type="text" name="tag"
+                 spellcheck="false" autocapitalize="off"
+                 minlength="4" maxlength="4"
+                 pattern="[a-zA-Z0-9]{4}"
+                 value="{{.Tag}}">
+        </label>
+      </div>
+      <small class="field-row-hint">
+        ID: 2–32 chars (letters/digits/dots/hyphens/underscores).
+        Tag: 4 chars (0–9, A–Z). Both auto-generated if blank;
+        final form is <code>id#TAG</code>.
+      </small>
 
       <label>
         <span>Display name <em>(optional)</em></span>

@@ -160,6 +160,51 @@ button:hover { background: var(--accent-hover); }
   text-decoration: underline;
 }
 
+/* ─── Field row (signup form ID + Tag side-by-side) ───
+   The page's CSP is `style-src 'self'`, which blocks inline
+   style="..." attributes. Layout that needs to differ from the
+   default vertical stack must come from the stylesheet. */
+.field-row {
+  display: flex;
+  flex-direction: row;
+  gap: 12px;
+  align-items: flex-end; /* align inputs if labels wrap differently */
+}
+.field-row > label {
+  /* Both cells get min-width: 0 so they can shrink below content
+     width — without it, the 4-char tag input pins its cell wide
+     enough to push the row past the form. */
+  min-width: 0;
+}
+.field-row > label > span {
+  /* Prevent the cell label ("ID", "Tag") from wrapping in a
+     narrow cell — wrapped labels make the cells diverge in
+     height and the inputs visually misalign. Overflow stays
+     visible (no `text-overflow: ellipsis`) so a too-long string
+     spills into adjacent space rather than silently truncating. */
+  white-space: nowrap;
+}
+.field-row > label.id-cell {
+  flex: 4 1 0;
+}
+.field-row > label.tag-cell {
+  flex: 1 1 0;
+  /* Enough room for "Tag (optional)" + a 4-char input + padding. */
+  min-width: 6rem;
+}
+.field-row-hint {
+  display: block;
+  color: var(--text-muted);
+  font-size: 0.8125rem;
+  margin-top: -8px;
+}
+.field-row-hint code {
+  font-size: 0.875em;
+  background: var(--hint-bg);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
 /* Consent page (Phase 7). Scope list shows what the client is
    asking for; deny button is visually distinct from approve. */
 .scope-list {
