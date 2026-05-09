@@ -963,6 +963,103 @@ guard that catches the obvious-but-catastrophic regression
 where someone defines `SessionTokenAudience = ""` (which would
 make `VerifyAudience` accept every token).
 
+**OAuth refresh-token grant + per-client TTL overrides.**
+`/token` now accepts `grant_type=refresh_token` and issues
+refresh tokens alongside access tokens whenever the auth code's
+scope set includes `offline_access` (OIDC §11). Refresh tokens
+are opaque 256-bit base64url strings, stored as their SHA-256
+hash in the new `oauth_refresh_tokens` table, and rotated on
+every exchange per OAuth 2.1 §6.1. Replay detection: presenting
+a consumed-or-revoked RT triggers chain revocation across every
+RT sharing the same `chain_id`, with a Security-channel audit
+log entry; the API surface still returns `invalid_grant` per
+spec to avoid leaking the distinction. Concurrency is serialized
+by an atomic compare-and-swap on the parent's `consumed_at`
+column inside a transaction — no application-level locking
+needed.
+
+Lifetimes ride a tenant-ceiling + per-client-override resolution
+rule: `effective = min(client_override ?? ceiling, ceiling)`.
+
+Tenant ceilings (singleton `TenantPolicy` row, default-seeded):
+- `AccessTokenTTLSeconds`           = 900    (15 min)
+- `RefreshTokenSlidingTTLSeconds`   = 30 days
+- `RefreshTokenAbsoluteTTLSeconds`  = 90 days
+
+Per-client overrides (nullable on `client_services`, validated
+against the ceiling at PATCH time):
+- `AccessTokenTTLSecondsOverride`
+- `RefreshTokenSlidingTTLSecondsOverride`
+- `RefreshTokenAbsoluteTTLSecondsOverride`
+
+Floors: access ≥ 30s, sliding ≥ 60s, absolute ≥ sliding,
+absolute ≥ 60s. Hard caps: access ≤ 24h, sliding ≤ 1y, absolute
+≤ 10y on the ceilings themselves so even a fat-fingered admin
+PATCH can't mint year-long access tokens.
+
+Discovery doc (`/.well-known/openid-configuration`) now lists
+`refresh_token` in `grant_types_supported` and `offline_access`
+in `scopes_supported`.
+
+**Testing affordances** (the explicit motivation for the per-
+client overrides): operators can spin up a test client with sub-
+minute TTLs via the new `akashic-cli clients update` command:
+
+```
+akashic-cli clients update myapp \
+    --access-token-ttl 30s \
+    --refresh-sliding-ttl 90s \
+    --refresh-absolute-ttl 5m
+```
+
+After that, the full rotation + replay-detection dance plays out
+in under 6 minutes instead of 90 days. `--clear-access-token-ttl`
+(and the corresponding sliding/absolute clear flags) revert an
+override to inheriting the ceiling. The control plane PATCH
+endpoint enforces the override-vs-ceiling invariant before
+writing, so a 5-year override gets rejected with
+`VALIDATION_FAILED` rather than silently clamped.
+
+Tests:
+- `pkg/oauth/refresh_test.go` — 4 functions: token uniqueness
+  over 1000 mints, hash determinism + URL-safe encoding,
+  `ResolveTokenTTLs` across no-override / below-ceiling /
+  above-ceiling / zero-override / mixed-override cases,
+  `ValidateCeilings` and `ValidateOverrideAgainstCeiling` over
+  floor + cap + cross-field invariants.
+- `pkg/server/auth/refresh_grant_handler_test.go` — 10 cases on
+  `isScopeSubset` (the OAuth 2.1 §6 "may narrow but not widen"
+  predicate that gates the refresh-grant scope path).
+
+**Admin UI shipped alongside.** The Policy page (`web/admin/src/components/PolicyPage.tsx`)
+gained a "Token lifetimes" panel with three duration-string inputs
+(access, refresh sliding, refresh absolute). The Client edit page
+(`web/admin/src/components/ClientsEdit.tsx`) gained a "Token
+lifetimes (per-client overrides)" panel with the same three fields,
+where blank means "inherit the tenant ceiling." Operators see the
+inheritance explicitly: an unset override renders as the literal
+placeholder `<inherited>`. Duration parsing is single-unit
+(`30s`/`5m`/`2h`/`30d`) — `time.ParseDuration` semantics in TS,
+shared between both pages via exported helpers
+`parseDurationToSeconds` + `formatSecondsAsDuration` on PolicyPage.
+The diff-helper `diffTTLOverride` on the Client edit page handles the
+three-state logic (inherit, set, no-op) so each field generates the
+right PATCH contribution without duplicated branching.
+
+What's not yet shipped (next turns):
+- RFC 7009 `/oauth/revoke` endpoint for explicit RT revocation
+  (today users revoke via consent revocation, which cascades
+  through `RevokeAllForUserClient`).
+- User-facing surface for "list active refresh tokens / revoke
+  this device" — Phase 9b territory.
+- Additional per-client refresh-token policy beyond TTLs:
+  `AllowRefreshTokens` toggle (disable RTs entirely for a client),
+  `MaxRefreshRotations` cap (force re-auth after N rotations),
+  `IssueWithoutOfflineAccess` (auto-issue RTs without the scope —
+  for trusted first-party clients). All three are straightforward
+  schema-additions when there's an actual use case; the existing
+  TTL-override path is the template.
+
 Login-by-email already worked at the LDAP filter layer
 (`UserLoginFilter` defaults to `(|(uid={login})(mail={login}))`);
 the email-uniqueness fix is what makes it actually disambiguate.

@@ -20,6 +20,7 @@ import (
 
 	"akashic/akashic/pkg/auth"
 	"akashic/akashic/pkg/models"
+	"akashic/akashic/pkg/oauth"
 
 	"github.com/google/uuid"
 	"gorm.io/gorm"
@@ -128,7 +129,15 @@ type UpdateParams struct {
 	PasswordRequireSpecial   *bool
 	SignupEnabled            *bool
 	UIDChangeCooldownDays    *int
-	CallerID                 uuid.UUID
+
+	// Phase 9 prep: tenant-level token-lifetime ceilings. Per-client
+	// rows on `client_services` may override DOWN, never UP — see
+	// pkg/clientservice for the override-against-ceiling validation.
+	AccessTokenTTLSeconds          *int
+	RefreshTokenSlidingTTLSeconds  *int
+	RefreshTokenAbsoluteTTLSeconds *int
+
+	CallerID uuid.UUID
 }
 
 // Update applies field changes + invariant checks. Returns the
@@ -156,6 +165,34 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 		}
 	}
 
+	// Token-lifetime ceilings: validated as a triple because the
+	// absolute-vs-sliding ordering is cross-field. Read the current
+	// row first so a partial update (e.g. only access_ttl) inherits
+	// the unchanged sliding/absolute values for the cross-check.
+	if p.AccessTokenTTLSeconds != nil ||
+		p.RefreshTokenSlidingTTLSeconds != nil ||
+		p.RefreshTokenAbsoluteTTLSeconds != nil {
+		current, err := s.Get(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("read policy for ttl validation: %w", err)
+		}
+		access := current.AccessTokenTTLSeconds
+		sliding := current.RefreshTokenSlidingTTLSeconds
+		absolute := current.RefreshTokenAbsoluteTTLSeconds
+		if p.AccessTokenTTLSeconds != nil {
+			access = *p.AccessTokenTTLSeconds
+		}
+		if p.RefreshTokenSlidingTTLSeconds != nil {
+			sliding = *p.RefreshTokenSlidingTTLSeconds
+		}
+		if p.RefreshTokenAbsoluteTTLSeconds != nil {
+			absolute = *p.RefreshTokenAbsoluteTTLSeconds
+		}
+		if err := oauth.ValidateCeilings(access, sliding, absolute); err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidPolicy, err.Error())
+		}
+	}
+
 	updates := map[string]any{}
 	if p.PasswordMinLength != nil {
 		updates["password_min_length"] = *p.PasswordMinLength
@@ -174,6 +211,15 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 	}
 	if p.UIDChangeCooldownDays != nil {
 		updates["uid_change_cooldown_days"] = *p.UIDChangeCooldownDays
+	}
+	if p.AccessTokenTTLSeconds != nil {
+		updates["access_token_ttl_seconds"] = *p.AccessTokenTTLSeconds
+	}
+	if p.RefreshTokenSlidingTTLSeconds != nil {
+		updates["refresh_token_sliding_ttl_seconds"] = *p.RefreshTokenSlidingTTLSeconds
+	}
+	if p.RefreshTokenAbsoluteTTLSeconds != nil {
+		updates["refresh_token_absolute_ttl_seconds"] = *p.RefreshTokenAbsoluteTTLSeconds
 	}
 	if p.CallerID != uuid.Nil {
 		updates["updated_by"] = p.CallerID

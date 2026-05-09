@@ -37,6 +37,7 @@ import logging
 import os
 import secrets
 import socket
+import time
 from urllib.parse import urlencode, urlparse
 
 import jwt
@@ -44,6 +45,7 @@ import requests
 from dotenv import load_dotenv
 from flask import (
     Flask,
+    jsonify,
     redirect,
     render_template,
     request,
@@ -79,7 +81,11 @@ CLIENT_SECRET = _require("AKASHIC_TEST_CLIENT_SECRET")
 REDIRECT_URI = os.environ.get(
     "AKASHIC_TEST_REDIRECT_URI", "http://localhost:5050/callback"
 )
-SCOPE = os.environ.get("AKASHIC_TEST_SCOPE", "openid profile email")
+# `offline_access` is included by default so the demo can showcase
+# the refresh-token rotation + replay-detection flow on the home
+# page (the "Token liveness lab"). Operators who want to test the
+# AT-only flow can override the env var to drop it.
+SCOPE = os.environ.get("AKASHIC_TEST_SCOPE", "openid profile email offline_access")
 # 5050 (not 5000) by default. macOS Monterey+ ships AirPlay Receiver
 # squatting on 5000 — Flask binds successfully but the OS routes
 # requests to AirPlay, so the browser gets garbage and lands on
@@ -477,7 +483,21 @@ def callback():
             "/authorize. This would let an attacker replay an id_token.",
         ), 502
 
-    # Step 5: capture identity in the session.
+    # Step 5: capture identity + the full token set in the session.
+    # We store absolute epoch-ms timestamps for the access + refresh
+    # token expiries so the home page's live countdown can render
+    # without re-deriving from the original issuance time. The raw
+    # access_token / refresh_token strings stay in the session so the
+    # "Token liveness lab" UI can exercise /userinfo and /token from
+    # button presses.
+    now_ms = int(time.time() * 1000)
+    access_expires_in = int(tokens.get("expires_in", 0))
+    # Akashic adds `refresh_token_expires_in` alongside `refresh_token`
+    # whenever the auth code carried `offline_access`; older OAuth
+    # servers omit it. We default to 0 so missing-RT renders cleanly
+    # in the UI.
+    refresh_expires_in = int(tokens.get("refresh_token_expires_in", 0))
+
     session["user"] = {
         "sub": claims.get("sub"),
         "username": claims.get("preferred_username") or claims.get("sub"),
@@ -486,7 +506,24 @@ def callback():
     }
     session["id_token"] = id_token
     session["access_token"] = tokens.get("access_token")
-    session["access_token_expires_at"] = tokens.get("expires_in")
+    session["access_token_expires_at_ms"] = (
+        now_ms + access_expires_in * 1000 if access_expires_in else 0
+    )
+    session["refresh_token"] = tokens.get("refresh_token")
+    session["refresh_token_expires_at_ms"] = (
+        now_ms + refresh_expires_in * 1000 if refresh_expires_in else 0
+    )
+    # `previous_refresh_token` is set by the /api/refresh endpoint
+    # when an RT is rotated — it lets the "Replay previous RT" button
+    # demonstrate chain revocation. Initialised empty here.
+    session["previous_refresh_token"] = ""
+    # Append-only log of token-lifecycle events shown in the home
+    # page's "Activity" pane. Bounded; oldest entries drop off.
+    session["activity"] = []
+    _log_activity(
+        f"signed in · access_token TTL {access_expires_in}s"
+        + (f" · refresh_token TTL {refresh_expires_in}s" if refresh_expires_in else " · no refresh_token (offline_access not granted)")
+    )
     return redirect(url_for("home"))
 
 
@@ -509,6 +546,249 @@ def logout():
     if id_token:
         params["id_token_hint"] = id_token
     return redirect(f"{end_session}?{urlencode(params)}")
+
+
+# ─── Token liveness lab (test endpoints) ─────────────────────────────
+#
+# Four endpoints power the "Token liveness lab" panel on the home
+# page. They're deliberately small + JSON-shaped so a future curl-
+# based test could call them too:
+#
+#   GET  /api/status          → current AT/RT state + expiry timestamps
+#   POST /api/test-call       → call /userinfo with the current AT;
+#                                shows whether AT is still valid
+#   POST /api/refresh         → call /token with grant_type=refresh_token;
+#                                rotates the chain (new AT + new RT)
+#   POST /api/replay-last-rt  → submit the PREVIOUS (consumed) RT;
+#                                triggers chain revocation per OAuth 2.1
+
+
+_ACTIVITY_MAX = 30  # cap on activity log; older entries drop off.
+
+
+def _log_activity(msg: str) -> None:
+    """Append a timestamped entry to the session's activity log.
+    Bounded so the session cookie doesn't grow without limit during
+    long demo runs."""
+    log = session.get("activity", [])
+    log.append({"ts": int(time.time() * 1000), "msg": msg})
+    if len(log) > _ACTIVITY_MAX:
+        log = log[-_ACTIVITY_MAX:]
+    session["activity"] = log
+    session.modified = True
+
+
+def _short(token: str | None) -> str:
+    """Render the last 6 chars of a token as a visual identifier.
+    Lets the UI show 'access_token …a8f3c2' so the user can SEE that
+    the token actually changed after a refresh, without exposing the
+    full secret."""
+    if not token:
+        return "—"
+    return "…" + token[-6:]
+
+
+@app.route("/api/status")
+def api_status():
+    """Snapshot of the current token state. Polled by the home page
+    every ~500ms to keep countdowns live without page reloads."""
+    if not session.get("user"):
+        return jsonify({"signed_in": False}), 200
+    return jsonify(
+        {
+            "signed_in": True,
+            "now_ms": int(time.time() * 1000),
+            "access_token": {
+                "present": bool(session.get("access_token")),
+                "marker": _short(session.get("access_token")),
+                "expires_at_ms": session.get("access_token_expires_at_ms", 0),
+            },
+            "refresh_token": {
+                "present": bool(session.get("refresh_token")),
+                "marker": _short(session.get("refresh_token")),
+                "expires_at_ms": session.get("refresh_token_expires_at_ms", 0),
+            },
+            "has_previous_rt": bool(session.get("previous_refresh_token")),
+            "activity": session.get("activity", []),
+        }
+    )
+
+
+@app.route("/api/test-call", methods=["POST"])
+def api_test_call():
+    """Call Akashic's /userinfo with the current access_token.
+    Standard OIDC endpoint that requires a valid bearer — perfect
+    "is my token still alive?" probe. 200 = AT good. 401 = AT
+    expired or revoked; the user should hit Refresh."""
+    if not session.get("user"):
+        return jsonify({"ok": False, "message": "not signed in"}), 401
+    at = session.get("access_token")
+    if not at:
+        _log_activity("test call: no access_token in session")
+        return jsonify({"ok": False, "message": "no access_token"}), 400
+
+    userinfo_url = discovery().get("userinfo_endpoint")
+    if not userinfo_url:
+        return (
+            jsonify({"ok": False, "message": "discovery doc missing userinfo_endpoint"}),
+            502,
+        )
+    r = requests.get(
+        userinfo_url,
+        headers={"Authorization": f"Bearer {at}"},
+        verify=TLS_VERIFY,
+        timeout=10,
+    )
+    if r.ok:
+        _log_activity(f"test call → /userinfo · 200 OK · AT {_short(at)} valid")
+        return jsonify({"ok": True, "status": r.status_code, "claims": r.json()}), 200
+
+    # Akashic's /userinfo returns the RFC 6750 WWW-Authenticate header
+    # on bearer failures; surface the error_description for clarity.
+    auth_header = r.headers.get("WWW-Authenticate", "")
+    body_msg = r.text[:200]
+    _log_activity(
+        f"test call → /userinfo · {r.status_code} · AT {_short(at)} rejected"
+    )
+    return (
+        jsonify(
+            {
+                "ok": False,
+                "status": r.status_code,
+                "message": body_msg,
+                "www_authenticate": auth_header,
+            }
+        ),
+        200,  # 200 to the BROWSER even on AT failure — we want the
+        # JSON to flow into the UI's result panel; the inner `ok`
+        # field signals the actual outcome.
+    )
+
+
+@app.route("/api/refresh", methods=["POST"])
+def api_refresh():
+    """Exchange the current refresh_token for a new (AT, RT) pair.
+    On success: rotate the session — new AT + new RT take over,
+    OLD RT moves to `previous_refresh_token` so the next button
+    can demonstrate replay detection."""
+    if not session.get("user"):
+        return jsonify({"ok": False, "message": "not signed in"}), 401
+    rt = session.get("refresh_token")
+    if not rt:
+        _log_activity("refresh: no refresh_token in session")
+        return jsonify({"ok": False, "message": "no refresh_token"}), 400
+
+    r = requests.post(
+        discovery()["token_endpoint"],
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": rt,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        },
+        headers={"Accept": "application/json"},
+        verify=TLS_VERIFY,
+        timeout=10,
+    )
+    if not r.ok:
+        body = r.text[:300]
+        _log_activity(
+            f"refresh → /token · {r.status_code} · RT {_short(rt)} rejected"
+        )
+        return (
+            jsonify({"ok": False, "status": r.status_code, "message": body}),
+            200,
+        )
+
+    tokens = r.json()
+    now_ms = int(time.time() * 1000)
+    new_at = tokens.get("access_token")
+    new_rt = tokens.get("refresh_token")
+    access_expires_in = int(tokens.get("expires_in", 0))
+    refresh_expires_in = int(tokens.get("refresh_token_expires_in", 0))
+
+    # Stash the OLD RT for the replay-detection demo BEFORE we
+    # overwrite. The replay button submits this exact value to
+    # trigger chain revocation.
+    session["previous_refresh_token"] = rt
+    session["access_token"] = new_at
+    session["access_token_expires_at_ms"] = (
+        now_ms + access_expires_in * 1000 if access_expires_in else 0
+    )
+    session["refresh_token"] = new_rt
+    session["refresh_token_expires_at_ms"] = (
+        now_ms + refresh_expires_in * 1000 if refresh_expires_in else 0
+    )
+    _log_activity(
+        f"refresh → /token · 200 OK · "
+        f"AT {_short(new_at)} (TTL {access_expires_in}s) · "
+        f"RT {_short(new_rt)} (TTL {refresh_expires_in}s)"
+    )
+    return jsonify({"ok": True, "status": r.status_code}), 200
+
+
+@app.route("/api/replay-last-rt", methods=["POST"])
+def api_replay_last_rt():
+    """Submit the PREVIOUS (already-consumed) refresh_token to
+    Akashic's /token. OAuth 2.1 §6.1 requires this to fail AND
+    revoke the entire chain — meaning the CURRENT (still-valid)
+    refresh_token also dies. Subsequent /api/refresh calls then
+    fail too; the user must re-authenticate via /authorize.
+
+    This is THE demonstrative test for refresh-token rotation
+    safety: it shows that a stolen RT used by an attacker burns
+    the legitimate client's session along with the attacker's."""
+    if not session.get("user"):
+        return jsonify({"ok": False, "message": "not signed in"}), 401
+    prev_rt = session.get("previous_refresh_token")
+    if not prev_rt:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "message": (
+                        "no previous refresh_token to replay. Click 'Refresh tokens' "
+                        "first — that rotates the RT and stores the old one for replay."
+                    ),
+                }
+            ),
+            400,
+        )
+
+    r = requests.post(
+        discovery()["token_endpoint"],
+        data={
+            "grant_type": "refresh_token",
+            "refresh_token": prev_rt,
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        },
+        headers={"Accept": "application/json"},
+        verify=TLS_VERIFY,
+        timeout=10,
+    )
+    body = r.text[:300]
+    expected = "invalid_grant" in body.lower()
+    if expected:
+        _log_activity(
+            f"replay → /token · {r.status_code} invalid_grant · chain revoked "
+            f"(current RT {_short(session.get('refresh_token'))} now ALSO dead)"
+        )
+    else:
+        _log_activity(
+            f"replay → /token · {r.status_code} (UNEXPECTED — replay should fail)"
+        )
+    return (
+        jsonify(
+            {
+                "ok": expected,
+                "status": r.status_code,
+                "message": body,
+                "expected_failure": expected,
+            }
+        ),
+        200,
+    )
 
 
 # ─── Entry point ─────────────────────────────────────────────────────

@@ -256,6 +256,22 @@ type ClientService struct {
 	// remember-on-first-grant) is a Chapter 7 design decision.
 	IsTenantPortal bool `gorm:"not null;default:false;index" json:"is_tenant_portal"`
 
+	// Per-client TTL overrides (Phase 9 prep). Nullable — nil means
+	// "inherit the tenant-policy ceiling." Validated against the
+	// ceiling at write time (pkg/clientservice rejects values that
+	// exceed `tenant_policies.*_ttl_seconds`). At mint time
+	// `oauth.ResolveTokenTTLs` takes `min(override, ceiling)` so a
+	// late ceiling drop instantly clamps any pre-existing override
+	// without an admin sweep across rows.
+	//
+	// Primary use case is testing: an operator sets a client to
+	// 30-second access tokens + 90-second sliding refresh + 5-min
+	// absolute refresh, and the full rotation+replay-detection
+	// dance plays out in three minutes instead of three months.
+	AccessTokenTTLSecondsOverride          *int `gorm:"" json:"access_token_ttl_seconds_override,omitempty"`
+	RefreshTokenSlidingTTLSecondsOverride  *int `gorm:"" json:"refresh_token_sliding_ttl_seconds_override,omitempty"`
+	RefreshTokenAbsoluteTTLSecondsOverride *int `gorm:"" json:"refresh_token_absolute_ttl_seconds_override,omitempty"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }

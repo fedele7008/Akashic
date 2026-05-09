@@ -62,6 +62,13 @@ type Server struct {
 	// Nil-tolerant: missing repo means consent.Required fail-opens
 	// (treat all access as previously consented).
 	consentRepo *repository.OAuthConsentRepository
+
+	// Phase 9 prep: refresh-token repository. Persists the rotation
+	// chain and consumes/revokes rows on /token + replay-detection.
+	// Nil-tolerant — when nil, /token simply doesn't issue refresh
+	// tokens and the `offline_access` scope is treated as a no-op
+	// (rather than failing the auth-code exchange outright).
+	refreshTokenRepo *repository.OAuthRefreshTokenRepository
 }
 
 // ServerState represents the current state of the server
@@ -131,6 +138,18 @@ func (s *Server) SetConsentRepo(r *repository.OAuthConsentRepository) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.consentRepo = r
+}
+
+// SetRefreshTokenRepo wires the OAuth refresh-token repository
+// (Phase 9 prep). When wired, /token issues refresh tokens
+// alongside access tokens whenever the auth code's scope set
+// includes `offline_access`, and accepts `grant_type=refresh_token`
+// for rotation. When nil, the auth code flow continues to work
+// but no refresh tokens are minted.
+func (s *Server) SetRefreshTokenRepo(r *repository.OAuthRefreshTokenRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.refreshTokenRepo = r
 }
 
 // bootstrapBlocked returns true iff the deployment is still in

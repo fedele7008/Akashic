@@ -8,6 +8,7 @@ import (
 
 	"akashic/akashic/pkg/clientservice"
 	"akashic/akashic/pkg/models"
+	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/server/response"
 
 	"go.uber.org/zap"
@@ -79,8 +80,16 @@ type adminClientView struct {
 	BuiltIn        bool   `json:"built_in"`
 	RequirePKCE    bool   `json:"require_pkce"`
 	IsTenantPortal bool   `json:"is_tenant_portal"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+
+	// Per-client TTL overrides — nil/omitted means "inherits the
+	// tenant ceiling." Operator UI / CLI can render these as
+	// "<inherited>" when nil to make the inheritance visible.
+	AccessTokenTTLSecondsOverride          *int `json:"access_token_ttl_seconds_override,omitempty"`
+	RefreshTokenSlidingTTLSecondsOverride  *int `json:"refresh_token_sliding_ttl_seconds_override,omitempty"`
+	RefreshTokenAbsoluteTTLSecondsOverride *int `json:"refresh_token_absolute_ttl_seconds_override,omitempty"`
+
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 type adminCreateClientResponse struct {
@@ -97,20 +106,23 @@ func toAdminClientView(c *models.ClientService) adminClientView {
 		label = adminClientTypeSPA
 	}
 	return adminClientView{
-		ClientID:       c.ClientID,
-		Name:           c.Name,
-		Description:    c.Description,
-		HomepageURL:    c.HomepageURL,
-		ClientType:     label,
-		Public:         c.Public,
-		RedirectURIs:   c.RedirectURIs,
-		AllowedScopes:  c.AllowedScopes,
-		AuthTypes:      c.AuthTypes,
-		BuiltIn:        c.BuiltIn,
-		RequirePKCE:    c.RequirePKCE,
-		IsTenantPortal: c.IsTenantPortal,
-		CreatedAt:      c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:      c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ClientID:                               c.ClientID,
+		Name:                                   c.Name,
+		Description:                            c.Description,
+		HomepageURL:                            c.HomepageURL,
+		ClientType:                             label,
+		Public:                                 c.Public,
+		RedirectURIs:                           c.RedirectURIs,
+		AllowedScopes:                          c.AllowedScopes,
+		AuthTypes:                              c.AuthTypes,
+		BuiltIn:                                c.BuiltIn,
+		RequirePKCE:                            c.RequirePKCE,
+		IsTenantPortal:                         c.IsTenantPortal,
+		AccessTokenTTLSecondsOverride:          c.AccessTokenTTLSecondsOverride,
+		RefreshTokenSlidingTTLSecondsOverride:  c.RefreshTokenSlidingTTLSecondsOverride,
+		RefreshTokenAbsoluteTTLSecondsOverride: c.RefreshTokenAbsoluteTTLSecondsOverride,
+		CreatedAt:                              c.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:                              c.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 }
 
@@ -271,6 +283,24 @@ type adminPatchClientRequest struct {
 	RoleAllowlist  *string `json:"role_allowlist,omitempty"`
 	RequirePKCE    *bool   `json:"require_pkce,omitempty"`
 	IsTenantPortal *bool   `json:"is_tenant_portal,omitempty"`
+
+	// Per-client TTL overrides. Single-pointer set, boolean clear:
+	//   field absent  → leave existing override as-is
+	//   field = N     → set override to N seconds (validated against
+	//                   the tenant ceiling)
+	//   <clear> = true → revert to inheriting the ceiling (NULL in DB)
+	//
+	// The companion `Clear*` boolean is the simpler alternative to
+	// JSON's tri-state-via-double-pointer dance. `Clear*` and the
+	// value field on the same row in the same request is rejected
+	// (operator must pick one).
+	AccessTokenTTLSecondsOverride          *int `json:"access_token_ttl_seconds_override,omitempty"`
+	RefreshTokenSlidingTTLSecondsOverride  *int `json:"refresh_token_sliding_ttl_seconds_override,omitempty"`
+	RefreshTokenAbsoluteTTLSecondsOverride *int `json:"refresh_token_absolute_ttl_seconds_override,omitempty"`
+
+	ClearAccessTokenTTLOverride          bool `json:"clear_access_token_ttl_override,omitempty"`
+	ClearRefreshTokenSlidingTTLOverride  bool `json:"clear_refresh_token_sliding_ttl_override,omitempty"`
+	ClearRefreshTokenAbsoluteTTLOverride bool `json:"clear_refresh_token_absolute_ttl_override,omitempty"`
 }
 
 // handleAdminPatchClient implements PATCH /clients/<id>. Operator-
@@ -348,6 +378,94 @@ func (s *Server) handleAdminPatchClient(w http.ResponseWriter, r *http.Request, 
 	if req.IsTenantPortal != nil {
 		updates["is_tenant_portal"] = *req.IsTenantPortal
 	}
+
+	// Per-client TTL overrides. We fetch the tenant ceiling once
+	// (cheap: single SELECT on a one-row table) ONLY if any of the
+	// override fields are touched, so the unrelated PATCH paths
+	// stay at their current cost.
+	touchTTL := req.AccessTokenTTLSecondsOverride != nil ||
+		req.RefreshTokenSlidingTTLSecondsOverride != nil ||
+		req.RefreshTokenAbsoluteTTLSecondsOverride != nil ||
+		req.ClearAccessTokenTTLOverride ||
+		req.ClearRefreshTokenSlidingTTLOverride ||
+		req.ClearRefreshTokenAbsoluteTTLOverride
+	if touchTTL {
+		// Mutually-exclusive checks: a field can be SET or CLEARED,
+		// not both in the same request.
+		if req.AccessTokenTTLSecondsOverride != nil && req.ClearAccessTokenTTLOverride {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED",
+					"cannot both set and clear access_token_ttl_seconds_override in the same request", nil))
+			return
+		}
+		if req.RefreshTokenSlidingTTLSecondsOverride != nil && req.ClearRefreshTokenSlidingTTLOverride {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED",
+					"cannot both set and clear refresh_token_sliding_ttl_seconds_override in the same request", nil))
+			return
+		}
+		if req.RefreshTokenAbsoluteTTLSecondsOverride != nil && req.ClearRefreshTokenAbsoluteTTLOverride {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED",
+					"cannot both set and clear refresh_token_absolute_ttl_seconds_override in the same request", nil))
+			return
+		}
+		// Read the live ceiling for the override-vs-ceiling check.
+		var policyRow models.TenantPolicy
+		if err := s.db.WithContext(r.Context()).Where("id = ?", 1).First(&policyRow).Error; err != nil {
+			s.logger.App.Error("adminPatchClient: read policy", zap.Error(err))
+			response.WriteJSON(w, http.StatusInternalServerError,
+				response.Fail("INTERNAL", "could not read tenant policy", nil))
+			return
+		}
+		if err := oauth.ValidateOverrideAgainstCeiling(
+			req.AccessTokenTTLSecondsOverride,
+			policyRow.AccessTokenTTLSeconds,
+			"access_token_ttl_seconds_override"); err != nil {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED", err.Error(), nil))
+			return
+		}
+		if err := oauth.ValidateOverrideAgainstCeiling(
+			req.RefreshTokenSlidingTTLSecondsOverride,
+			policyRow.RefreshTokenSlidingTTLSeconds,
+			"refresh_token_sliding_ttl_seconds_override"); err != nil {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED", err.Error(), nil))
+			return
+		}
+		if err := oauth.ValidateOverrideAgainstCeiling(
+			req.RefreshTokenAbsoluteTTLSecondsOverride,
+			policyRow.RefreshTokenAbsoluteTTLSeconds,
+			"refresh_token_absolute_ttl_seconds_override"); err != nil {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED", err.Error(), nil))
+			return
+		}
+
+		// Map updates: GORM's `Updates` with a map drops nil values
+		// silently, so to clear a column we must put a typed nil
+		// pointer (`(*int)(nil)`) in the map explicitly.
+		if req.AccessTokenTTLSecondsOverride != nil {
+			updates["access_token_ttl_seconds_override"] = *req.AccessTokenTTLSecondsOverride
+		}
+		if req.ClearAccessTokenTTLOverride {
+			updates["access_token_ttl_seconds_override"] = (*int)(nil)
+		}
+		if req.RefreshTokenSlidingTTLSecondsOverride != nil {
+			updates["refresh_token_sliding_ttl_seconds_override"] = *req.RefreshTokenSlidingTTLSecondsOverride
+		}
+		if req.ClearRefreshTokenSlidingTTLOverride {
+			updates["refresh_token_sliding_ttl_seconds_override"] = (*int)(nil)
+		}
+		if req.RefreshTokenAbsoluteTTLSecondsOverride != nil {
+			updates["refresh_token_absolute_ttl_seconds_override"] = *req.RefreshTokenAbsoluteTTLSecondsOverride
+		}
+		if req.ClearRefreshTokenAbsoluteTTLOverride {
+			updates["refresh_token_absolute_ttl_seconds_override"] = (*int)(nil)
+		}
+	}
+
 	if len(updates) == 0 {
 		response.WriteJSON(w, http.StatusBadRequest,
 			response.Fail("VALIDATION_FAILED",

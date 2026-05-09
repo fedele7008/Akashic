@@ -52,6 +52,11 @@ export interface TenantPolicy {
   password_require_special: boolean;
   signup_enabled: boolean;
   uid_change_cooldown_days: number;
+  // Phase 9 prep: token-lifetime ceilings. Per-client overrides on
+  // ClientView may clamp DOWN within these but never exceed them.
+  access_token_ttl_seconds: number;
+  refresh_token_sliding_ttl_seconds: number;
+  refresh_token_absolute_ttl_seconds: number;
   updated_at: string;
   updated_by?: string;
 }
@@ -63,6 +68,9 @@ export interface UpdatePolicyRequest {
   password_require_special?: boolean;
   signup_enabled?: boolean;
   uid_change_cooldown_days?: number;
+  access_token_ttl_seconds?: number;
+  refresh_token_sliding_ttl_seconds?: number;
+  refresh_token_absolute_ttl_seconds?: number;
 }
 
 export class PolicyApi {
@@ -466,6 +474,17 @@ export interface UpdateClientRequest {
   role_allowlist?: string;
   require_pkce?: boolean;
   is_tenant_portal?: boolean;
+
+  // Per-client TTL overrides + companion clear flags.
+  // Send the seconds value to set; send the matching `clear_*: true`
+  // boolean to revert to inheriting the tenant ceiling. Set+clear in
+  // the same request is rejected at the server.
+  access_token_ttl_seconds_override?: number;
+  refresh_token_sliding_ttl_seconds_override?: number;
+  refresh_token_absolute_ttl_seconds_override?: number;
+  clear_access_token_ttl_override?: boolean;
+  clear_refresh_token_sliding_ttl_override?: boolean;
+  clear_refresh_token_absolute_ttl_override?: boolean;
 }
 
 /**
@@ -505,6 +524,14 @@ export interface ClientView {
   built_in: boolean;
   require_pkce: boolean;
   is_tenant_portal: boolean;
+
+  // Per-client TTL overrides; absent/null means "inherits the
+  // tenant ceiling." UI renders nullish as the literal label
+  // "<inherited>" so operators see the inheritance explicitly.
+  access_token_ttl_seconds_override?: number;
+  refresh_token_sliding_ttl_seconds_override?: number;
+  refresh_token_absolute_ttl_seconds_override?: number;
+
   created_at: string;
   updated_at: string;
 }

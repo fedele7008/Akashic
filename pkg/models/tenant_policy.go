@@ -71,6 +71,22 @@ type TenantPolicy struct {
 	// keep the cooldown explicable in operator UI.
 	UIDChangeCooldownDays int `gorm:"not null;default:30" json:"uid_change_cooldown_days"`
 
+	// ─── Token lifetimes (ceilings) ───────────────────────────
+	// Tenant-level ceilings on access + refresh token TTLs. Per-
+	// client overrides on `client_services` may reduce these but
+	// never exceed them — `pkg/clientservice` validates that
+	// `client.*TTLOverride <= policy.*TTLSeconds` at write time,
+	// and `oauth.ResolveTokenTTLs` belt-and-braces with a
+	// `min(override, ceiling)` at mint time.
+	//
+	// Defaults: 15 min access / 30 day sliding refresh / 90 day
+	// absolute refresh — the OAuth-2.1 conventional shape.
+	// Floors enforced by policy.Service.Update: access ≥ 30s,
+	// sliding ≥ 60s, absolute ≥ sliding.
+	AccessTokenTTLSeconds          int `gorm:"not null;default:900" json:"access_token_ttl_seconds"`
+	RefreshTokenSlidingTTLSeconds  int `gorm:"not null;default:2592000" json:"refresh_token_sliding_ttl_seconds"`
+	RefreshTokenAbsoluteTTLSeconds int `gorm:"not null;default:7776000" json:"refresh_token_absolute_ttl_seconds"`
+
 	UpdatedAt time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
 	UpdatedBy *uuid.UUID `gorm:"type:uuid" json:"updated_by,omitempty"`
 }

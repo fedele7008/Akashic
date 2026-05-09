@@ -34,6 +34,16 @@ export function PolicyPage() {
   const [requireSpecial, setRequireSpecial] = useState(false);
   const [signupEnabled, setSignupEnabled] = useState(true);
   const [uidCooldown, setUidCooldown] = useState(30);
+  // Token-lifetime ceilings — stored as seconds in the DB but
+  // edited as duration strings (30s, 5m, 1h, 30d) for ergonomics.
+  // The form holds the *string* representation so partial typing
+  // doesn't reset to seconds; we parse on submit. Ceilings vs. per-
+  // client overrides: this page edits the CEILING (the operator-
+  // wide cap). Per-client overrides clamp DOWN within the ceiling
+  // and live on the Client edit page.
+  const [accessTTL, setAccessTTL] = useState('15m');
+  const [refreshSlidingTTL, setRefreshSlidingTTL] = useState('30d');
+  const [refreshAbsoluteTTL, setRefreshAbsoluteTTL] = useState('90d');
 
   const [submitting, setSubmitting] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -50,6 +60,9 @@ export function PolicyPage() {
       setRequireSpecial(p.password_require_special);
       setSignupEnabled(p.signup_enabled);
       setUidCooldown(p.uid_change_cooldown_days);
+      setAccessTTL(formatSecondsAsDuration(p.access_token_ttl_seconds));
+      setRefreshSlidingTTL(formatSecondsAsDuration(p.refresh_token_sliding_ttl_seconds));
+      setRefreshAbsoluteTTL(formatSecondsAsDuration(p.refresh_token_absolute_ttl_seconds));
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -73,6 +86,25 @@ export function PolicyPage() {
     if (requireSpecial !== policy.password_require_special) req.password_require_special = requireSpecial;
     if (signupEnabled !== policy.signup_enabled) req.signup_enabled = signupEnabled;
     if (uidCooldown !== policy.uid_change_cooldown_days) req.uid_change_cooldown_days = uidCooldown;
+
+    // Parse the duration-string fields. Errors here become a UI
+    // banner rather than a network round-trip — same shape the
+    // server would have produced anyway, but faster and clearer.
+    let accessSec: number;
+    let slidingSec: number;
+    let absoluteSec: number;
+    try {
+      accessSec = parseDurationToSeconds(accessTTL, 'Access token TTL');
+      slidingSec = parseDurationToSeconds(refreshSlidingTTL, 'Refresh token sliding TTL');
+      absoluteSec = parseDurationToSeconds(refreshAbsoluteTTL, 'Refresh token absolute TTL');
+    } catch (parseErr) {
+      setSubmitErr((parseErr as Error).message);
+      setSubmitting(false);
+      return;
+    }
+    if (accessSec !== policy.access_token_ttl_seconds) req.access_token_ttl_seconds = accessSec;
+    if (slidingSec !== policy.refresh_token_sliding_ttl_seconds) req.refresh_token_sliding_ttl_seconds = slidingSec;
+    if (absoluteSec !== policy.refresh_token_absolute_ttl_seconds) req.refresh_token_absolute_ttl_seconds = absoluteSec;
 
     if (Object.keys(req).length === 0) {
       setSubmitErr('No changes to save.');
@@ -209,6 +241,71 @@ export function PolicyPage() {
           </label>
         </div>
 
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Token lifetimes</h3>
+          <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0 }}>
+            Tenant-wide ceilings for OAuth access + refresh tokens.
+            Per-client overrides on the Clients page can clamp these
+            DOWN for testing or specific integrations, but they cannot
+            exceed these ceilings — a tighter ceiling here clamps every
+            client immediately on the next mint. Durations: <code>30s</code>,{' '}
+            <code>5m</code>, <code>2h</code>, <code>30d</code>.
+          </p>
+
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+            <label>
+              <div>Access token TTL</div>
+              <input
+                type="text"
+                value={accessTTL}
+                onChange={(e) => setAccessTTL(e.target.value)}
+                disabled={submitting}
+                style={{ width: '160px' }}
+                placeholder="15m"
+              />
+              <div className="hint" style={{ fontSize: '0.75rem', padding: 0, background: 'transparent', border: 'none' }}>
+                Lifetime of an issued access token. Floor 30 seconds,
+                ceiling 24 hours. Default <strong>15m</strong>.
+              </div>
+            </label>
+
+            <label>
+              <div>Refresh token — sliding TTL</div>
+              <input
+                type="text"
+                value={refreshSlidingTTL}
+                onChange={(e) => setRefreshSlidingTTL(e.target.value)}
+                disabled={submitting}
+                style={{ width: '160px' }}
+                placeholder="30d"
+              />
+              <div className="hint" style={{ fontSize: '0.75rem', padding: 0, background: 'transparent', border: 'none' }}>
+                Per-row sliding window before a refresh token must be
+                exchanged. Each rotation resets the window. Floor 60
+                seconds, ceiling 1 year. Default <strong>30d</strong>.
+              </div>
+            </label>
+
+            <label>
+              <div>Refresh token — absolute TTL (chain)</div>
+              <input
+                type="text"
+                value={refreshAbsoluteTTL}
+                onChange={(e) => setRefreshAbsoluteTTL(e.target.value)}
+                disabled={submitting}
+                style={{ width: '160px' }}
+                placeholder="90d"
+              />
+              <div className="hint" style={{ fontSize: '0.75rem', padding: 0, background: 'transparent', border: 'none' }}>
+                Hard cap on the entire rotation chain from initial
+                issuance. Even continuous use cannot extend past this —
+                user re-authenticates via /authorize. Must be ≥ sliding
+                TTL. Ceiling 10 years. Default <strong>90d</strong>.
+              </div>
+            </label>
+          </div>
+        </div>
+
         {savedAt && (
           <p className="success" role="status">
             Saved at {savedAt}.
@@ -268,4 +365,62 @@ function Checkbox({
       </span>
     </label>
   );
+}
+
+// parseDurationToSeconds accepts forms like "30s", "5m", "2h", "30d"
+// (single-unit, integer coefficient). Returns the duration in
+// seconds. Throws on parse failure with a contextual error message
+// — caller catches and renders as a UI banner.
+//
+// We don't use a more permissive parser (e.g. "1h 30m") because the
+// server's `time.ParseDuration` doesn't accept "d" at all (Go's
+// stdlib has no day unit), and our duration strings are operator-
+// facing; an operator typing "1h 30m" expecting it to work would be
+// surprised when the next field they save accepts "1.5h" but their
+// previous "30m 30s" didn't. Single-unit keeps the round-trip
+// honest.
+export function parseDurationToSeconds(raw: string, fieldLabel: string): number {
+  const trimmed = raw.trim();
+  if (trimmed === '') {
+    throw new Error(`${fieldLabel}: a value is required (e.g. 30s, 5m, 1h, 30d)`);
+  }
+  const match = /^(\d+)\s*([smhd])$/i.exec(trimmed);
+  if (!match) {
+    throw new Error(
+      `${fieldLabel}: invalid duration "${raw}". Use a single unit: ` +
+        `30s (seconds), 5m (minutes), 2h (hours), 30d (days).`
+    );
+  }
+  const n = parseInt(match[1], 10);
+  if (!Number.isFinite(n) || n <= 0) {
+    throw new Error(`${fieldLabel}: must be a positive integer.`);
+  }
+  switch (match[2].toLowerCase()) {
+    case 's':
+      return n;
+    case 'm':
+      return n * 60;
+    case 'h':
+      return n * 60 * 60;
+    case 'd':
+      return n * 24 * 60 * 60;
+    default:
+      // Unreachable given the regex above; keeps the type-checker
+      // happy and surfaces a clear error if the regex ever evolves.
+      throw new Error(`${fieldLabel}: unknown unit ${match[2]}.`);
+  }
+}
+
+// formatSecondsAsDuration is the round-trip companion to
+// parseDurationToSeconds. Picks the largest unit that divides the
+// seconds value cleanly so 86400s renders as "1d" rather than
+// "86400s". For values that don't fit a clean unit (e.g. 90 seconds,
+// 25 hours), falls back to the next-smaller unit. Worst case is
+// always seconds, which is always exact.
+export function formatSecondsAsDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '0s';
+  if (seconds % (24 * 60 * 60) === 0) return `${seconds / (24 * 60 * 60)}d`;
+  if (seconds % (60 * 60) === 0) return `${seconds / (60 * 60)}h`;
+  if (seconds % 60 === 0) return `${seconds / 60}m`;
+  return `${seconds}s`;
 }

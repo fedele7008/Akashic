@@ -440,14 +440,30 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 
 	// Step 2: grant_type
 	grant := r.PostForm.Get("grant_type")
-	if grant != "authorization_code" {
-		writeTokenError(w, http.StatusBadRequest, "unsupported_grant_type",
-			"Only authorization_code is supported.")
+	switch grant {
+	case "authorization_code":
+		if !grantTypeAllowed(client.AuthTypes, grant) {
+			writeTokenError(w, http.StatusBadRequest, "unauthorized_client",
+				"Client not authorized for this grant_type.")
+			return
+		}
+	case "refresh_token":
+		// Refresh tokens fall under the same client-allowed-grants
+		// gate as authorization_code — issuing a refresh token at
+		// auth-code time only made sense for clients allowed to use
+		// the auth-code grant in the first place, so the rotation
+		// path mirrors that authorization. We don't require operators
+		// to add a separate "refresh_token" entry to AuthTypes.
+		if !grantTypeAllowed(client.AuthTypes, "authorization_code") {
+			writeTokenError(w, http.StatusBadRequest, "unauthorized_client",
+				"Client not authorized for refresh-token grants.")
+			return
+		}
+		s.handleRefreshGrant(w, r, &client)
 		return
-	}
-	if !grantTypeAllowed(client.AuthTypes, grant) {
-		writeTokenError(w, http.StatusBadRequest, "unauthorized_client",
-			"Client not authorized for this grant_type.")
+	default:
+		writeTokenError(w, http.StatusBadRequest, "unsupported_grant_type",
+			"Only authorization_code and refresh_token are supported.")
 		return
 	}
 
@@ -534,7 +550,15 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Step 8: mint tokens
+	// Step 8: resolve TTLs (per-client overrides clamped to tenant
+	// ceilings, see pkg/oauth/refresh.go for the resolution rule).
+	ttls, err := s.resolveTokenTTLs(r.Context(), &client)
+	if err != nil {
+		s.logger.App.Error("token: resolve TTLs", zap.Error(err))
+		writeTokenError(w, http.StatusInternalServerError, "server_error",
+			"Could not resolve token lifetimes.")
+		return
+	}
 	cfg := s.config.GetConfig()
 	now := time.Now().UTC()
 
@@ -543,7 +567,7 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 		Subject:   authCode.UserID,
 		Audience:  clientID,
 		IssuedAt:  now,
-		ExpiresIn: cfg.OAuth.AccessTokenTTL,
+		ExpiresIn: ttls.Access,
 	}
 
 	accessToken, err := oauth.MintAccessToken(keyStore, mintIn, authCode.Scope, authCode.UserType)
@@ -557,8 +581,53 @@ func (s *Server) handleToken(w http.ResponseWriter, r *http.Request) {
 	resp := map[string]any{
 		"access_token": accessToken,
 		"token_type":   "Bearer",
-		"expires_in":   int(cfg.OAuth.AccessTokenTTL.Seconds()),
+		"expires_in":   int(ttls.Access.Seconds()),
 		"scope":        authCode.Scope,
+	}
+
+	// Refresh-token issuance (Phase 9 prep): only when the auth code
+	// carried `offline_access` AND the refresh-token repo is wired.
+	// Without the scope we're an OAuth 2.0 access-token-only flow;
+	// without the repo we treat the scope as a no-op.
+	if scopeIncludes(authCode.Scope, oauth.RefreshScopeOfflineAccess) {
+		s.mu.RLock()
+		rtRepo := s.refreshTokenRepo
+		s.mu.RUnlock()
+		if rtRepo != nil {
+			rawRT, hash, err := oauth.MintRefreshTokenValue()
+			if err != nil {
+				s.logger.App.Error("mint refresh token", zap.Error(err))
+				writeTokenError(w, http.StatusInternalServerError, "server_error",
+					"Could not mint refresh token.")
+				return
+			}
+			userUUID, perr := uuid.Parse(authCode.UserID)
+			if perr != nil {
+				// authCode.UserID came from the session; it's already
+				// a parsed-and-formatted UUID upstream. Treat any
+				// failure here as a server-error (don't expose to the
+				// caller).
+				s.logger.App.Error("token: parse user uuid for RT",
+					zap.String("raw", authCode.UserID), zap.Error(perr))
+				writeTokenError(w, http.StatusInternalServerError, "server_error",
+					"Could not persist refresh token.")
+				return
+			}
+			row, err := rtRepo.CreateInitial(r.Context(), hash, userUUID,
+				clientID, authCode.Scope, now, ttls.RefreshSliding, ttls.RefreshAbsolute)
+			if err != nil {
+				s.logger.App.Error("token: persist initial refresh token", zap.Error(err))
+				writeTokenError(w, http.StatusInternalServerError, "server_error",
+					"Could not persist refresh token.")
+				return
+			}
+			resp["refresh_token"] = rawRT
+			resp["refresh_token_expires_in"] = int(ttls.RefreshSliding.Seconds())
+			s.logger.Security.Info("refresh token issued (initial)",
+				zap.String("client_id", clientID),
+				zap.String("user_id", authCode.UserID),
+				zap.String("chain_id", row.ChainID.String()))
+		}
 	}
 
 	// ID token if openid scope was granted (OIDC core §3.1.3.3)

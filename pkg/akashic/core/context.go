@@ -171,6 +171,14 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		// per user. Discourages rotation-as-impersonation. Operators
 		// can tune from the Policy page.
 		UIDChangeCooldownDays: 30,
+		// Token-lifetime ceilings — Phase 9 prep. 15 min access /
+		// 30 day sliding refresh / 90 day absolute refresh chain.
+		// Matches OAuth 2.1 conventional shape; per-client overrides
+		// (set via `akashic-cli clients update --access-token-ttl`)
+		// can clamp DOWN within these ceilings.
+		AccessTokenTTLSeconds:          900,
+		RefreshTokenSlidingTTLSeconds:  30 * 24 * 60 * 60,
+		RefreshTokenAbsoluteTTLSeconds: 90 * 24 * 60 * 60,
 	}); err != nil {
 		return fmt.Errorf("seed tenant policy: %v", err)
 	}
@@ -181,6 +189,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// Phase 7: OAuth consent repo. Used by /authorize to gate the
 	// consent prompt and by /consent/submit to write grant rows.
 	consentRepo := repository.NewOAuthConsentRepository(app.DB.DB)
+	// Phase 9 prep: OAuth refresh-token repo. Persists rotation chain;
+	// /token mints initial RTs on `offline_access` and rotates on
+	// `grant_type=refresh_token`.
+	refreshTokenRepo := repository.NewOAuthRefreshTokenRepository(app.DB.DB)
 
 	// Initialize OAuth signing-key store (Phase 7).
 	// On first-ever startup the directory is empty and we generate a
@@ -323,6 +335,12 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// can decide whether to prompt and /consent/submit can record
 	// approval.
 	app.AuthServer.SetConsentRepo(consentRepo)
+
+	// Phase 9 prep: hand the auth server the refresh-token repo so
+	// /token can mint and rotate refresh tokens. Without this wire,
+	// the auth code flow still works but `offline_access` becomes a
+	// no-op (granted but doesn't materialize an RT in the response).
+	app.AuthServer.SetRefreshTokenRepo(refreshTokenRepo)
 
 	// Built-in OAuth client registration. After Phase 8b's tenant-
 	// client registration roadmap landed, akashic-admin is the only

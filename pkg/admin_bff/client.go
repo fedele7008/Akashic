@@ -226,8 +226,16 @@ type ClientView struct {
 	BuiltIn        bool   `json:"built_in"`
 	RequirePKCE    bool   `json:"require_pkce"`
 	IsTenantPortal bool   `json:"is_tenant_portal"`
-	CreatedAt      string `json:"created_at"`
-	UpdatedAt      string `json:"updated_at"`
+
+	// Per-client TTL overrides — nil means "inherits the tenant
+	// ceiling." The admin UI renders nil as the literal string
+	// "<inherited>" and lets the operator clear or set per field.
+	AccessTokenTTLSecondsOverride          *int `json:"access_token_ttl_seconds_override,omitempty"`
+	RefreshTokenSlidingTTLSecondsOverride  *int `json:"refresh_token_sliding_ttl_seconds_override,omitempty"`
+	RefreshTokenAbsoluteTTLSecondsOverride *int `json:"refresh_token_absolute_ttl_seconds_override,omitempty"`
+
+	CreatedAt string `json:"created_at"`
+	UpdatedAt string `json:"updated_at"`
 }
 
 // CreateClientResponse is what the control plane returns on a
@@ -326,6 +334,18 @@ type UpdateClientRequest struct {
 	RoleAllowlist  *string `json:"role_allowlist,omitempty"`
 	RequirePKCE    *bool   `json:"require_pkce,omitempty"`
 	IsTenantPortal *bool   `json:"is_tenant_portal,omitempty"`
+
+	// Per-client TTL overrides + companion clear flags.
+	// Set: pass the seconds value. Clear: pass the corresponding
+	// `Clear*` boolean. The control-plane enforces mutual
+	// exclusion (set+clear in the same request → 400).
+	AccessTokenTTLSecondsOverride          *int `json:"access_token_ttl_seconds_override,omitempty"`
+	RefreshTokenSlidingTTLSecondsOverride  *int `json:"refresh_token_sliding_ttl_seconds_override,omitempty"`
+	RefreshTokenAbsoluteTTLSecondsOverride *int `json:"refresh_token_absolute_ttl_seconds_override,omitempty"`
+
+	ClearAccessTokenTTLOverride          bool `json:"clear_access_token_ttl_override,omitempty"`
+	ClearRefreshTokenSlidingTTLOverride  bool `json:"clear_refresh_token_sliding_ttl_override,omitempty"`
+	ClearRefreshTokenAbsoluteTTLOverride bool `json:"clear_refresh_token_absolute_ttl_override,omitempty"`
 }
 
 // ClientUpdate calls PATCH /clients/<id> on the control plane.
@@ -577,25 +597,31 @@ func (c *ControlClient) UserDelete(ctx context.Context, userID, callerUserID str
 // JSON keys; the ID field is dropped (singleton — clients don't need
 // it).
 type TenantPolicyView struct {
-	PasswordMinLength        int     `json:"password_min_length"`
-	PasswordRequireUppercase bool    `json:"password_require_uppercase"`
-	PasswordRequireNumber    bool    `json:"password_require_number"`
-	PasswordRequireSpecial   bool    `json:"password_require_special"`
-	SignupEnabled            bool    `json:"signup_enabled"`
-	UIDChangeCooldownDays    int     `json:"uid_change_cooldown_days"`
-	UpdatedAt                string  `json:"updated_at"`
-	UpdatedBy                *string `json:"updated_by,omitempty"`
+	PasswordMinLength              int     `json:"password_min_length"`
+	PasswordRequireUppercase       bool    `json:"password_require_uppercase"`
+	PasswordRequireNumber          bool    `json:"password_require_number"`
+	PasswordRequireSpecial         bool    `json:"password_require_special"`
+	SignupEnabled                  bool    `json:"signup_enabled"`
+	UIDChangeCooldownDays          int     `json:"uid_change_cooldown_days"`
+	AccessTokenTTLSeconds          int     `json:"access_token_ttl_seconds"`
+	RefreshTokenSlidingTTLSeconds  int     `json:"refresh_token_sliding_ttl_seconds"`
+	RefreshTokenAbsoluteTTLSeconds int     `json:"refresh_token_absolute_ttl_seconds"`
+	UpdatedAt                      string  `json:"updated_at"`
+	UpdatedBy                      *string `json:"updated_by,omitempty"`
 }
 
 // UpdatePolicyRequest mirrors the control-plane PATCH /policy body.
 type UpdatePolicyRequest struct {
-	PasswordMinLength        *int   `json:"password_min_length,omitempty"`
-	PasswordRequireUppercase *bool  `json:"password_require_uppercase,omitempty"`
-	PasswordRequireNumber    *bool  `json:"password_require_number,omitempty"`
-	PasswordRequireSpecial   *bool  `json:"password_require_special,omitempty"`
-	SignupEnabled            *bool  `json:"signup_enabled,omitempty"`
-	UIDChangeCooldownDays    *int   `json:"uid_change_cooldown_days,omitempty"`
-	CallerUserID             string `json:"caller_user_id,omitempty"`
+	PasswordMinLength              *int   `json:"password_min_length,omitempty"`
+	PasswordRequireUppercase       *bool  `json:"password_require_uppercase,omitempty"`
+	PasswordRequireNumber          *bool  `json:"password_require_number,omitempty"`
+	PasswordRequireSpecial         *bool  `json:"password_require_special,omitempty"`
+	SignupEnabled                  *bool  `json:"signup_enabled,omitempty"`
+	UIDChangeCooldownDays          *int   `json:"uid_change_cooldown_days,omitempty"`
+	AccessTokenTTLSeconds          *int   `json:"access_token_ttl_seconds,omitempty"`
+	RefreshTokenSlidingTTLSeconds  *int   `json:"refresh_token_sliding_ttl_seconds,omitempty"`
+	RefreshTokenAbsoluteTTLSeconds *int   `json:"refresh_token_absolute_ttl_seconds,omitempty"`
+	CallerUserID                   string `json:"caller_user_id,omitempty"`
 }
 
 func (c *ControlClient) PolicyGet(ctx context.Context) (*TenantPolicyView, error) {

@@ -59,13 +59,16 @@ func (s *Server) adminGetPolicy(w http.ResponseWriter, r *http.Request) {
 // Pointer fields preserve the "leave unchanged" / "set to false"
 // distinction the policy.Service.Update method needs.
 type adminPatchPolicyRequest struct {
-	PasswordMinLength        *int   `json:"password_min_length,omitempty"`
-	PasswordRequireUppercase *bool  `json:"password_require_uppercase,omitempty"`
-	PasswordRequireNumber    *bool  `json:"password_require_number,omitempty"`
-	PasswordRequireSpecial   *bool  `json:"password_require_special,omitempty"`
-	SignupEnabled            *bool  `json:"signup_enabled,omitempty"`
-	UIDChangeCooldownDays    *int   `json:"uid_change_cooldown_days,omitempty"`
-	CallerUserID             string `json:"caller_user_id,omitempty"`
+	PasswordMinLength              *int   `json:"password_min_length,omitempty"`
+	PasswordRequireUppercase       *bool  `json:"password_require_uppercase,omitempty"`
+	PasswordRequireNumber          *bool  `json:"password_require_number,omitempty"`
+	PasswordRequireSpecial         *bool  `json:"password_require_special,omitempty"`
+	SignupEnabled                  *bool  `json:"signup_enabled,omitempty"`
+	UIDChangeCooldownDays          *int   `json:"uid_change_cooldown_days,omitempty"`
+	AccessTokenTTLSeconds          *int   `json:"access_token_ttl_seconds,omitempty"`
+	RefreshTokenSlidingTTLSeconds  *int   `json:"refresh_token_sliding_ttl_seconds,omitempty"`
+	RefreshTokenAbsoluteTTLSeconds *int   `json:"refresh_token_absolute_ttl_seconds,omitempty"`
+	CallerUserID                   string `json:"caller_user_id,omitempty"`
 }
 
 func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
@@ -79,12 +82,15 @@ func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
 	defer r.Body.Close()
 
 	params := policy.UpdateParams{
-		PasswordMinLength:        req.PasswordMinLength,
-		PasswordRequireUppercase: req.PasswordRequireUppercase,
-		PasswordRequireNumber:    req.PasswordRequireNumber,
-		PasswordRequireSpecial:   req.PasswordRequireSpecial,
-		SignupEnabled:            req.SignupEnabled,
-		UIDChangeCooldownDays:    req.UIDChangeCooldownDays,
+		PasswordMinLength:              req.PasswordMinLength,
+		PasswordRequireUppercase:       req.PasswordRequireUppercase,
+		PasswordRequireNumber:          req.PasswordRequireNumber,
+		PasswordRequireSpecial:         req.PasswordRequireSpecial,
+		SignupEnabled:                  req.SignupEnabled,
+		UIDChangeCooldownDays:          req.UIDChangeCooldownDays,
+		AccessTokenTTLSeconds:          req.AccessTokenTTLSeconds,
+		RefreshTokenSlidingTTLSeconds:  req.RefreshTokenSlidingTTLSeconds,
+		RefreshTokenAbsoluteTTLSeconds: req.RefreshTokenAbsoluteTTLSeconds,
 	}
 	if req.CallerUserID != "" {
 		callerID, err := uuid.Parse(req.CallerUserID)
@@ -138,6 +144,15 @@ func changedPolicyFields(req adminPatchPolicyRequest) []string {
 	}
 	if req.UIDChangeCooldownDays != nil {
 		out = append(out, "uid_change_cooldown_days")
+	}
+	if req.AccessTokenTTLSeconds != nil {
+		out = append(out, "access_token_ttl_seconds")
+	}
+	if req.RefreshTokenSlidingTTLSeconds != nil {
+		out = append(out, "refresh_token_sliding_ttl_seconds")
+	}
+	if req.RefreshTokenAbsoluteTTLSeconds != nil {
+		out = append(out, "refresh_token_absolute_ttl_seconds")
 	}
 	return out
 }

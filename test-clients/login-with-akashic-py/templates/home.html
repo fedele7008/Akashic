@@ -18,18 +18,162 @@
     {% endif %}
   </dl>
 
-  <h2>What this proves</h2>
-  <p>
-    Akashic just authenticated a user, minted an id_token and an
-    access_token, and this app verified the id_token's signature
-    against Akashic's JWKS before trusting any of the claims. The
-    token exchange used PKCE in addition to the client_secret
-    (defense-in-depth for confidential clients).
+  <h2>Token liveness lab</h2>
+  <p style="font-size: 0.875rem; color: var(--muted);">
+    Live state of this session's OAuth tokens. The countdowns tick
+    locally; on each button click we hit Akashic for real and show
+    the result. Set short TTLs via
+    <code>akashic-cli clients update &lt;id&gt; --access-token-ttl 30s --refresh-sliding-ttl 60s</code>
+    and watch a token expire in seconds.
   </p>
+
+  <div class="token-grid">
+    <div class="token-row">
+      <span class="token-label">access_token</span>
+      <span class="token-marker" id="at-marker">…</span>
+      <span class="token-ttl" id="at-ttl">…</span>
+    </div>
+    <div class="token-row">
+      <span class="token-label">refresh_token</span>
+      <span class="token-marker" id="rt-marker">…</span>
+      <span class="token-ttl" id="rt-ttl">…</span>
+    </div>
+  </div>
+
+  <div class="lab-actions">
+    <button type="button" class="btn small" id="btn-test-call">Test access token (call /userinfo)</button>
+    <button type="button" class="btn small" id="btn-refresh">Refresh tokens</button>
+    <button type="button" class="btn small secondary" id="btn-replay" disabled>
+      Replay previous RT (chain revocation test)
+    </button>
+  </div>
+
+  <div class="activity">
+    <div class="activity-title">Activity</div>
+    <ol id="activity-log" class="activity-log"></ol>
+  </div>
 
   <p style="margin-top: 1.5rem;">
     <a href="/logout" class="btn secondary">Sign out</a>
   </p>
+
+  <script>
+    // Token liveness lab — keeps the AT/RT countdowns updating
+    // every 250ms and re-fetches authoritative state from /api/status
+    // every 1000ms (enough to keep the activity log + markers fresh
+    // without hammering the server).
+    (function () {
+      const atMarker = document.getElementById('at-marker');
+      const atTtl = document.getElementById('at-ttl');
+      const rtMarker = document.getElementById('rt-marker');
+      const rtTtl = document.getElementById('rt-ttl');
+      const log = document.getElementById('activity-log');
+      const btnReplay = document.getElementById('btn-replay');
+
+      // Cached snapshot of the last /api/status response. Countdowns
+      // tick from this without hitting the server every frame.
+      let snapshot = null;
+
+      function fmtCountdown(expiresAtMs) {
+        if (!expiresAtMs) return '(no expiry)';
+        const remainingMs = expiresAtMs - Date.now();
+        if (remainingMs <= 0) return 'EXPIRED';
+        const totalSec = Math.floor(remainingMs / 1000);
+        if (totalSec < 60) return totalSec + 's';
+        const m = Math.floor(totalSec / 60);
+        const s = totalSec % 60;
+        return m + 'm ' + s + 's';
+      }
+
+      function ttlClass(expiresAtMs) {
+        if (!expiresAtMs) return '';
+        const remainingMs = expiresAtMs - Date.now();
+        if (remainingMs <= 0) return 'expired';
+        if (remainingMs < 10_000) return 'soon';
+        return '';
+      }
+
+      function tick() {
+        if (!snapshot || !snapshot.signed_in) return;
+        atMarker.textContent = snapshot.access_token.marker;
+        atTtl.textContent = fmtCountdown(snapshot.access_token.expires_at_ms);
+        atTtl.className = 'token-ttl ' + ttlClass(snapshot.access_token.expires_at_ms);
+        if (snapshot.refresh_token.present) {
+          rtMarker.textContent = snapshot.refresh_token.marker;
+          rtTtl.textContent = fmtCountdown(snapshot.refresh_token.expires_at_ms);
+          rtTtl.className = 'token-ttl ' + ttlClass(snapshot.refresh_token.expires_at_ms);
+        } else {
+          rtMarker.textContent = '—';
+          rtTtl.textContent = 'no refresh_token issued (offline_access not granted)';
+          rtTtl.className = 'token-ttl';
+        }
+        btnReplay.disabled = !snapshot.has_previous_rt;
+      }
+
+      function renderActivity(entries) {
+        log.innerHTML = '';
+        // Show newest at top so the latest action is visible without
+        // scrolling. Server stores oldest-first; we reverse for display.
+        const reversed = entries.slice().reverse();
+        for (const e of reversed) {
+          const li = document.createElement('li');
+          const ts = new Date(e.ts).toLocaleTimeString();
+          li.innerHTML = '<span class="activity-ts">' + ts + '</span> ' + escapeHtml(e.msg);
+          log.appendChild(li);
+        }
+      }
+
+      function escapeHtml(s) {
+        return String(s)
+          .replaceAll('&', '&amp;')
+          .replaceAll('<', '&lt;')
+          .replaceAll('>', '&gt;');
+      }
+
+      async function refreshStatus() {
+        try {
+          const r = await fetch('/api/status', { credentials: 'same-origin' });
+          if (!r.ok) return;
+          snapshot = await r.json();
+          if (snapshot.activity) renderActivity(snapshot.activity);
+          tick();
+        } catch (e) {
+          // Network blip — countdowns keep ticking from cached snapshot.
+        }
+      }
+
+      async function postAction(url) {
+        try {
+          const r = await fetch(url, {
+            method: 'POST',
+            credentials: 'same-origin',
+            headers: { 'Accept': 'application/json' },
+          });
+          // Don't care about the body — the server's already logged
+          // the activity entry, and our next status poll will pick
+          // it up. Pull a fresh status immediately so the UI
+          // feels snappy instead of waiting for the 1s tick.
+          await refreshStatus();
+        } catch (e) {
+          // Surface in the log via the next poll.
+        }
+      }
+
+      document.getElementById('btn-test-call')
+        .addEventListener('click', () => postAction('/api/test-call'));
+      document.getElementById('btn-refresh')
+        .addEventListener('click', () => postAction('/api/refresh'));
+      document.getElementById('btn-replay')
+        .addEventListener('click', () => postAction('/api/replay-last-rt'));
+
+      // Startup: pull initial state immediately, then settle into
+      // the periodic polls. 250ms tick is purely visual — only the
+      // local clock advances; no fetch on every tick.
+      refreshStatus();
+      setInterval(tick, 250);
+      setInterval(refreshStatus, 1000);
+    })();
+  </script>
 {% else %}
   <span class="badge signed-out">○ Signed out</span>
   <h1>Login with Akashic</h1>

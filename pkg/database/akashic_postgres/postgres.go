@@ -142,6 +142,11 @@ func (db *DB) AutoMigrate() error {
 		// minting an authorization code; missing or stale rows
 		// trigger a /consent redirect.
 		&models.OAuthConsent{},
+		// Phase 9 prep: OAuth refresh tokens (opaque, hashed,
+		// rotated). Issued from /token when the auth code carried
+		// the `offline_access` scope. See the model doc for the
+		// rotation invariant + chain-revocation-on-replay design.
+		&models.OAuthRefreshToken{},
 	}
 
 	if err := db.DB.AutoMigrate(modelList...); err != nil {

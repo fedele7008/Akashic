@@ -34,9 +34,9 @@ func (s *Server) handleDiscovery(w http.ResponseWriter, r *http.Request) {
 		"response_types_supported":              []string{"code"},
 		"subject_types_supported":               []string{"public"},
 		"id_token_signing_alg_values_supported": []string{"RS256"},
-		"scopes_supported":                      []string{"openid", "profile", "email"},
+		"scopes_supported":                      []string{"openid", "profile", "email", "offline_access"},
 		"token_endpoint_auth_methods_supported": []string{"client_secret_basic", "client_secret_post"},
-		"grant_types_supported":                 []string{"authorization_code"},
+		"grant_types_supported":                 []string{"authorization_code", "refresh_token"},
 		"code_challenge_methods_supported":      []string{"S256"},
 		"claims_supported": []string{
 			"sub", "iss", "aud", "exp", "iat",

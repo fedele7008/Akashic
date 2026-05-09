@@ -5,6 +5,7 @@ import {
   type ClientView,
   type UpdateClientRequest,
 } from '../api/client';
+import { parseDurationToSeconds, formatSecondsAsDuration } from './PolicyPage';
 
 /**
  * ClientsEdit — Phase 8c.4.
@@ -39,6 +40,30 @@ export function ClientsEdit({
   const [allowedScopes, setAllowedScopes] = useState(client.allowed_scopes);
   const [requirePKCE, setRequirePKCE] = useState(client.require_pkce);
   const [isTenantPortal, setIsTenantPortal] = useState(client.is_tenant_portal);
+
+  // Per-client TTL overrides — three-state UI per row:
+  //   "<inherited>" (empty input)  → row uses tenant ceiling
+  //   <duration>                   → row's override is set
+  // The user types a duration string (30s, 5m, 1h, 30d) or clears
+  // the input to revert to inheriting. We track the typed string;
+  // an empty value sends the corresponding `clear_*: true` on
+  // submit, a non-empty value parses to seconds and sets the
+  // override.
+  const [accessTTLOverride, setAccessTTLOverride] = useState(
+    client.access_token_ttl_seconds_override != null
+      ? formatSecondsAsDuration(client.access_token_ttl_seconds_override)
+      : ''
+  );
+  const [refreshSlidingTTLOverride, setRefreshSlidingTTLOverride] = useState(
+    client.refresh_token_sliding_ttl_seconds_override != null
+      ? formatSecondsAsDuration(client.refresh_token_sliding_ttl_seconds_override)
+      : ''
+  );
+  const [refreshAbsoluteTTLOverride, setRefreshAbsoluteTTLOverride] = useState(
+    client.refresh_token_absolute_ttl_seconds_override != null
+      ? formatSecondsAsDuration(client.refresh_token_absolute_ttl_seconds_override)
+      : ''
+  );
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -92,6 +117,42 @@ export function ClientsEdit({
     }
     if (isTenantPortal !== client.is_tenant_portal) {
       req.is_tenant_portal = isTenantPortal;
+    }
+
+    // Per-client TTL overrides. For each field: compare the typed
+    // string against the row's stored override.
+    //   - typed empty + stored set      → clear flag
+    //   - typed non-empty + stored unset → set
+    //   - typed differs from stored      → set (new value)
+    //   - typed equals stored            → no-op
+    // Parse errors here become a UI banner without a network round-
+    // trip (server would reject anyway, but faster to catch locally).
+    try {
+      diffTTLOverride(
+        accessTTLOverride,
+        client.access_token_ttl_seconds_override,
+        'Access token TTL override',
+        (n) => (req.access_token_ttl_seconds_override = n),
+        () => (req.clear_access_token_ttl_override = true)
+      );
+      diffTTLOverride(
+        refreshSlidingTTLOverride,
+        client.refresh_token_sliding_ttl_seconds_override,
+        'Refresh token sliding TTL override',
+        (n) => (req.refresh_token_sliding_ttl_seconds_override = n),
+        () => (req.clear_refresh_token_sliding_ttl_override = true)
+      );
+      diffTTLOverride(
+        refreshAbsoluteTTLOverride,
+        client.refresh_token_absolute_ttl_seconds_override,
+        'Refresh token absolute TTL override',
+        (n) => (req.refresh_token_absolute_ttl_seconds_override = n),
+        () => (req.clear_refresh_token_absolute_ttl_override = true)
+      );
+    } catch (parseErr) {
+      setError((parseErr as Error).message);
+      setSubmitting(false);
+      return;
     }
 
     if (Object.keys(req).length === 0) {
@@ -240,6 +301,57 @@ export function ClientsEdit({
               </span>
             </span>
           </label>
+
+          <div className="panel" style={{ padding: '12px 16px' }}>
+            <div style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '6px' }}>
+              Token lifetimes (per-client overrides)
+            </div>
+            <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0, marginBottom: '12px' }}>
+              Leave blank to <em>inherit</em> the tenant ceiling from the
+              Policy page. Type a duration (e.g. <code>30s</code>,{' '}
+              <code>5m</code>, <code>1h</code>, <code>7d</code>) to override
+              DOWN — the server rejects anything that exceeds the ceiling.
+              Primary use: testing the OAuth refresh flow with sub-minute
+              TTLs. Use the same flow with <code>akashic-cli clients
+              update --access-token-ttl 30s</code> from a terminal.
+            </p>
+
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              <label>
+                <div>Access token TTL <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(blank = inherit)</span></div>
+                <input
+                  type="text"
+                  value={accessTTLOverride}
+                  onChange={(e) => setAccessTTLOverride(e.target.value)}
+                  disabled={submitting}
+                  placeholder="<inherited>"
+                  style={{ width: '160px' }}
+                />
+              </label>
+              <label>
+                <div>Refresh token — sliding <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(blank = inherit)</span></div>
+                <input
+                  type="text"
+                  value={refreshSlidingTTLOverride}
+                  onChange={(e) => setRefreshSlidingTTLOverride(e.target.value)}
+                  disabled={submitting}
+                  placeholder="<inherited>"
+                  style={{ width: '160px' }}
+                />
+              </label>
+              <label>
+                <div>Refresh token — absolute (chain) <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(blank = inherit)</span></div>
+                <input
+                  type="text"
+                  value={refreshAbsoluteTTLOverride}
+                  onChange={(e) => setRefreshAbsoluteTTLOverride(e.target.value)}
+                  disabled={submitting}
+                  placeholder="<inherited>"
+                  style={{ width: '160px' }}
+                />
+              </label>
+            </div>
+          </div>
         </div>
 
         {error && (
@@ -259,4 +371,42 @@ export function ClientsEdit({
       </form>
     </div>
   );
+}
+
+// diffTTLOverride builds the right PATCH-payload contribution for a
+// single TTL-override field. Three branches:
+//
+//   typed=""    + stored=null → no change
+//   typed=""    + stored=<n>  → emit `clear_*: true` (revert to ceiling)
+//   typed=<x>   + stored=null → parse + emit `*_seconds_override: <x>`
+//   typed=<x>   + stored=<n>  → if differs, parse + emit override
+//                                   if same, no change
+//
+// Throws on parse failure — caller surfaces as a UI banner. Caller
+// supplies two callbacks (`setOverride` / `setClear`) so the
+// function stays generic over which field it's diffing.
+function diffTTLOverride(
+  typed: string,
+  stored: number | undefined,
+  fieldLabel: string,
+  setOverride: (n: number) => void,
+  setClear: () => void
+) {
+  const trimmed = typed.trim();
+
+  if (trimmed === '') {
+    // User wants to inherit. Only emit the clear flag if there's
+    // actually an override on the row to clear — emitting it when
+    // the row is already null is a wasteful no-op write.
+    if (stored != null) {
+      setClear();
+    }
+    return;
+  }
+
+  // User typed something. Parse it; throws on bad input.
+  const parsed = parseDurationToSeconds(trimmed, fieldLabel);
+  if (parsed !== stored) {
+    setOverride(parsed);
+  }
 }
