@@ -1,6 +1,7 @@
 package auth
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"net/http"
@@ -41,11 +42,15 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 		s.renderBootstrapPending(w)
 		return
 	}
+	if !s.signupEnabled(r.Context()) {
+		s.renderSignupDisabled(w)
+		return
+	}
 
 	csrf := s.ensureLoginCSRF(w, r)
 	returnTo := safeReturnTo(r.URL.Query().Get("return_to"))
 
-	renderTemplate(w, "signup.html.tmpl", http.StatusOK, s.signupTemplateData(map[string]any{
+	renderTemplate(w, "signup.html.tmpl", http.StatusOK, s.signupTemplateData(r.Context(), map[string]any{
 		"CSRFToken":   csrf,
 		"ReturnTo":    returnTo,
 		"Username":    "",
@@ -55,28 +60,60 @@ func (s *Server) handleSignupPage(w http.ResponseWriter, r *http.Request) {
 	}))
 }
 
+// signupEnabled returns whether the operator-configured policy
+// allows self-service signup. Defaults to TRUE when the policy
+// service isn't wired or the DB read fails — mirrors the
+// "fail-open during transient outage" stance the bootstrapBlocked
+// gate takes. Operators who genuinely want signup off MUST have
+// the DB row reachable for the gate to bite.
+func (s *Server) signupEnabled(ctx context.Context) bool {
+	if s.policySvc == nil {
+		return true
+	}
+	enabled, err := s.policySvc.SignupEnabled(ctx)
+	if err != nil {
+		return true
+	}
+	return enabled
+}
+
+// renderSignupDisabled serves a friendly 403 explaining that
+// self-service signup has been disabled by the operator. Distinct
+// from the bootstrap-pending page (different cause, different
+// recovery — operator must re-enable in the admin UI).
+func (s *Server) renderSignupDisabled(w http.ResponseWriter) {
+	renderTemplate(w, "error.html.tmpl", http.StatusForbidden, map[string]any{
+		"Title":   "Signup is disabled",
+		"Message": "This deployment doesn't currently allow self-service signup.",
+		"Detail":  "Contact your deployment operator to request an account.",
+	})
+}
+
 // signupTemplateData augments per-render data with the shared,
 // dynamically-derived fields. PolicyHint is a one-line description
 // of the operator-configured password policy, surfaced above the
 // form so users see the rules before typing.
-func (s *Server) signupTemplateData(extra map[string]any) map[string]any {
-	extra["PolicyHint"] = passwordPolicyHint(s.passwordPolicy())
+func (s *Server) signupTemplateData(ctx context.Context, extra map[string]any) map[string]any {
+	extra["PolicyHint"] = passwordPolicyHint(s.passwordPolicy(ctx))
 	return extra
 }
 
-// passwordPolicy reads the operator-configured policy from akashic
-// config. Mirrors api-server's policyFromConfig() — same shape, same
-// "RequireLowercase always-true" invariant. Could be extracted into
-// the auth package itself in a future cleanup.
-func (s *Server) passwordPolicy() *auth.PasswordPolicy {
-	cfg := s.config.GetConfig().Bootstrap.Password
-	return &auth.PasswordPolicy{
-		MinLength:        cfg.MinLength,
-		RequireUppercase: cfg.RequireUppercase,
-		RequireLowercase: true,
-		RequireNumber:    cfg.RequireNumber,
-		RequireSpecial:   cfg.RequireSpecial,
+// passwordPolicy reads the active password policy. Phase 8c.6
+// switched this from cfg-derived (YAML) to DB-backed: edits made
+// through the admin web's Policy page take effect on the next
+// request without a restart.
+//
+// Falls back to a hard-coded MinLength=8 + lowercase-required
+// policy if the policy service isn't wired or the DB read fails
+// — better to enforce SOMETHING than to silently accept any
+// password during a transient outage.
+func (s *Server) passwordPolicy(ctx context.Context) *auth.PasswordPolicy {
+	if s.policySvc != nil {
+		if p, err := s.policySvc.PasswordPolicy(ctx); err == nil {
+			return p
+		}
 	}
+	return &auth.PasswordPolicy{MinLength: 8, RequireLowercase: true}
 }
 
 // passwordPolicyHint formats a policy as a single-line natural-
@@ -121,6 +158,10 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 		s.renderBootstrapPending(w)
 		return
 	}
+	if !s.signupEnabled(r.Context()) {
+		s.renderSignupDisabled(w)
+		return
+	}
 
 	if err := r.ParseForm(); err != nil {
 		s.renderSignupError(w, r, "Could not parse the form. Please retry.", "", "", "")
@@ -149,7 +190,7 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 	user, err := userregistration.Register(r.Context(), userregistration.Deps{
 		LDAP:     s.authService.LDAPClient(),
 		UserRepo: s.authService.UserRepository(),
-		Policy:   s.passwordPolicy(),
+		Policy:   s.passwordPolicy(r.Context()),
 	}, userregistration.Params{
 		Username:    username,
 		Email:       email,
@@ -215,7 +256,7 @@ func (s *Server) renderSignupError(w http.ResponseWriter, r *http.Request,
 	if r.PostForm != nil {
 		returnTo = safeReturnTo(r.PostForm.Get("return_to"))
 	}
-	renderTemplate(w, "signup.html.tmpl", http.StatusOK, s.signupTemplateData(map[string]any{
+	renderTemplate(w, "signup.html.tmpl", http.StatusOK, s.signupTemplateData(r.Context(), map[string]any{
 		"CSRFToken":   csrf,
 		"ReturnTo":    returnTo,
 		"Username":    username,

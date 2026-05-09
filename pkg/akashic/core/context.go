@@ -16,6 +16,7 @@ import (
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
+	"akashic/akashic/pkg/policy"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/api"
@@ -48,6 +49,7 @@ type AkashicApp struct {
 	APIServer             *api.Server // Phase 8: bearer-token resource server
 	ControlServer         *control.Server
 	OAuthKeyStore         *oauth.KeyStore // Phase 7: JWT signing keys
+	PolicyService         *policy.Service // Phase 8c.6: DB-backed tenant policy
 	closerFns             []func()
 	verbose               bool
 	bootstrapToken        string // Stored for console display
@@ -152,6 +154,21 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// Run automatic database migrations with GORM
 	if err := app.DB.AutoMigrate(); err != nil {
 		return fmt.Errorf("failed to run auto-migration: %v", err)
+	}
+
+	// Phase 8c.6: tenant-policy service. Singleton row gets seeded
+	// from YAML defaults on first run; subsequent edits go through
+	// the admin web. After this point, callers (signup, register,
+	// password-policy hint) read live from the DB instead of cfg.
+	app.PolicyService = policy.NewService(app.DB.DB)
+	if err := app.PolicyService.EnsureSingleton(app.ctx, &models.TenantPolicy{
+		PasswordMinLength:        cfg.Bootstrap.Password.MinLength,
+		PasswordRequireUppercase: cfg.Bootstrap.Password.RequireUppercase,
+		PasswordRequireNumber:    cfg.Bootstrap.Password.RequireNumber,
+		PasswordRequireSpecial:   cfg.Bootstrap.Password.RequireSpecial,
+		SignupEnabled:            true,
+	}); err != nil {
+		return fmt.Errorf("seed tenant policy: %v", err)
 	}
 
 	// Initialize repositories
@@ -291,6 +308,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// before the operator has finished mint-the-root-user.
 	app.AuthServer.SetBootstrapManager(app.BootstrapMgr)
 
+	// Phase 8c.6: hand the auth server a live handle to the
+	// DB-backed tenant-policy accessor.
+	app.AuthServer.SetPolicyService(app.PolicyService)
+
 	// Built-in OAuth client registration. After Phase 8b's tenant-
 	// client registration roadmap landed, akashic-admin is the only
 	// server-managed built-in — every other client (tenant portals,
@@ -329,6 +350,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// the auth server's /login gate). Direct API hits and portal-side
 	// signups both block until operator setup is done.
 	app.APIServer.SetBootstrapManager(app.BootstrapMgr)
+	app.APIServer.SetPolicyService(app.PolicyService)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(
@@ -361,6 +383,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// userRepo so all writes go through the same audit-aware
 	// methods (DisableUser populates disabled_by, etc.).
 	app.ControlServer.SetUserRepo(userRepo)
+
+	// Phase 8c.6: control-plane policy CRUD shares the singleton
+	// service across all surfaces — operator edits via /policy
+	// and any signup/register call read the same row.
+	app.ControlServer.SetPolicyService(app.PolicyService)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil

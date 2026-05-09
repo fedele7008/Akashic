@@ -9,6 +9,7 @@ import (
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
+	"akashic/akashic/pkg/policy"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -47,6 +48,12 @@ type Server struct {
 	// operator's bootstrap path on the control plane works. Wired
 	// in via SetBootstrapManager.
 	bootstrapMgr *bootstrap.Manager
+
+	// Phase 8c.6: tenant-policy service. Read live at request time
+	// for password-policy validation + the SignupEnabled gate, so
+	// operator edits via the admin web take effect on the next
+	// request without a restart.
+	policySvc *policy.Service
 }
 
 // ServerState represents the current state of the server
@@ -98,6 +105,15 @@ func (s *Server) SetBootstrapManager(m *bootstrap.Manager) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.bootstrapMgr = m
+}
+
+// SetPolicyService wires the DB-backed tenant-policy accessor (Phase
+// 8c.6). Read live at request time by /signup, the password-policy
+// hint endpoint, and signup-enabled gating.
+func (s *Server) SetPolicyService(p *policy.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.policySvc = p
 }
 
 // bootstrapBlocked returns true iff the deployment is still in

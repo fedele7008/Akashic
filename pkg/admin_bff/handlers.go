@@ -8,6 +8,52 @@ import (
 	"strings"
 )
 
+// ─── Phase 8c.6: tenant policy ────────────────────────────────────
+//
+// Two routes — GET + PATCH on /api/policy — proxied to the control
+// plane. Session-gated to admin/root. The BFF resolves the caller's
+// user_id from the session and threads it as caller_user_id so the
+// control plane's audit `updated_by` column gets populated.
+
+func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	p, err := s.controlClient.PolicyGet(r.Context())
+	if err != nil {
+		s.writeControlError(w, err, "fetching policy")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"policy": p},
+	})
+}
+
+func (s *Server) handlePatchPolicy(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	var body UpdatePolicyRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"Could not parse request body.")
+		return
+	}
+	defer r.Body.Close()
+	body.CallerUserID = s.callerUserIDFromSession(r)
+
+	p, err := s.controlClient.PolicyUpdate(r.Context(), &body)
+	if err != nil {
+		s.writeControlError(w, err, "updating policy")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"policy": p},
+	})
+}
+
 // ─── Phase 8c.2: user management ──────────────────────────────────
 //
 // Pure proxies to the control plane's /users + /users/<id>, with

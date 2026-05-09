@@ -352,6 +352,15 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleUserByID)))
 
+	// Phase 8c.6: tenant policy (singleton). Session-gated to admin/root
+	// in the handlers.
+	mux.HandleFunc("GET /api/policy",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleGetPolicy)))
+	mux.HandleFunc("PATCH /api/policy",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handlePatchPolicy)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).

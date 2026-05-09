@@ -132,6 +132,10 @@ func (db *DB) AutoMigrate() error {
 		// future tenant-registered services). Table: client_services.
 		// Schema lives in pkg/models/client_service.go.
 		&models.ClientService{},
+		// Phase 8c.6: tenant-level runtime policy (password rules,
+		// signup-enabled flag). Singleton row populated at first run
+		// from YAML defaults via pkg/policy.Service.EnsureSingleton.
+		&models.TenantPolicy{},
 	}
 
 	if err := db.DB.AutoMigrate(modelList...); err != nil {

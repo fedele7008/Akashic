@@ -29,6 +29,7 @@ import (
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
+	"akashic/akashic/pkg/policy"
 	"akashic/akashic/pkg/repository"
 	"context"
 	"crypto/tls"
@@ -81,6 +82,12 @@ type Server struct {
 	// operator's setup runs first. Wired in via SetBootstrapManager;
 	// nil is tolerated (handlers fail-open during init races).
 	bootstrapMgr *bootstrap.Manager
+
+	// Phase 8c.6: tenant-policy service. DB-backed live read for
+	// password rules (used by signup, password-policy hint, password-
+	// change) and the SignupEnabled gate. Same fail-open posture as
+	// the bootstrap gate: nil → permissive defaults.
+	policySvc *policy.Service
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -110,6 +117,14 @@ func (s *Server) SetDeps(
 	s.ldapClient = ldapClient
 	s.authSvc = authSvc
 	s.db = db
+}
+
+// SetPolicyService wires the DB-backed tenant-policy accessor.
+// Phase 8c.6. Same fail-open posture as SetBootstrapManager.
+func (s *Server) SetPolicyService(p *policy.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.policySvc = p
 }
 
 // SetBootstrapManager wires the bootstrap-state checker so signup

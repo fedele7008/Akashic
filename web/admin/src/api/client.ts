@@ -43,6 +43,62 @@ export interface SetupStatus {
   ldap_ok: boolean;
 }
 
+// ─── Phase 8c.6: tenant policy ────────────────────────────────────
+
+export interface TenantPolicy {
+  password_min_length: number;
+  password_require_uppercase: boolean;
+  password_require_number: boolean;
+  password_require_special: boolean;
+  signup_enabled: boolean;
+  updated_at: string;
+  updated_by?: string;
+}
+
+export interface UpdatePolicyRequest {
+  password_min_length?: number;
+  password_require_uppercase?: boolean;
+  password_require_number?: boolean;
+  password_require_special?: boolean;
+  signup_enabled?: boolean;
+}
+
+export class PolicyApi {
+  static async get(): Promise<TenantPolicy> {
+    const r = await fetch('/api/policy', {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ policy: TenantPolicy }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Get failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.policy;
+  }
+
+  static async update(req: UpdatePolicyRequest): Promise<TenantPolicy> {
+    const r = await fetch('/api/policy', {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify(req),
+    });
+    const body: ApiResponse<{ policy: TenantPolicy }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Update failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.policy;
+  }
+}
+
 // ─── Phase 8c.2: user management ──────────────────────────────────
 
 export interface UserView {

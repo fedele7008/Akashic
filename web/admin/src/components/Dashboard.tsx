@@ -2,6 +2,7 @@ import { useState } from 'react';
 import type { SessionInfo } from '../api/client';
 import { ClientsPage } from './ClientsPage';
 import { OverviewPage } from './OverviewPage';
+import { PolicyPage } from './PolicyPage';
 import { ServerPage } from './ServerPage';
 import { SetupStatusBanner } from './SetupStatusBanner';
 import { Sidebar, type Page } from './Sidebar';
@@ -70,6 +71,7 @@ export function Dashboard({ session }: { session: SessionInfo }) {
           )}
           {page === 'users' && <UsersPage session={session} />}
           {page === 'clients' && <ClientsPage session={session} />}
+          {page === 'policy' && <PolicyPage />}
           {page === 'server' && <ServerPage />}
           {page === 'tools' && <ToolsPage />}
         </div>
@@ -86,6 +88,8 @@ function pageTitleFor(page: Page): string {
       return 'Users';
     case 'clients':
       return 'OAuth clients';
+    case 'policy':
+      return 'Policy';
     case 'server':
       return 'Server';
     case 'tools':

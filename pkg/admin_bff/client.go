@@ -570,6 +570,73 @@ func (c *ControlClient) UserDelete(ctx context.Context, userID, callerUserID str
 	return nil
 }
 
+// ─── Phase 8c.6: tenant policy ────────────────────────────────────
+
+// TenantPolicyView mirrors models.TenantPolicy for the wire. Same
+// JSON keys; the ID field is dropped (singleton — clients don't need
+// it).
+type TenantPolicyView struct {
+	PasswordMinLength        int     `json:"password_min_length"`
+	PasswordRequireUppercase bool    `json:"password_require_uppercase"`
+	PasswordRequireNumber    bool    `json:"password_require_number"`
+	PasswordRequireSpecial   bool    `json:"password_require_special"`
+	SignupEnabled            bool    `json:"signup_enabled"`
+	UpdatedAt                string  `json:"updated_at"`
+	UpdatedBy                *string `json:"updated_by,omitempty"`
+}
+
+// UpdatePolicyRequest mirrors the control-plane PATCH /policy body.
+type UpdatePolicyRequest struct {
+	PasswordMinLength        *int    `json:"password_min_length,omitempty"`
+	PasswordRequireUppercase *bool   `json:"password_require_uppercase,omitempty"`
+	PasswordRequireNumber    *bool   `json:"password_require_number,omitempty"`
+	PasswordRequireSpecial   *bool   `json:"password_require_special,omitempty"`
+	SignupEnabled            *bool   `json:"signup_enabled,omitempty"`
+	CallerUserID             string  `json:"caller_user_id,omitempty"`
+}
+
+func (c *ControlClient) PolicyGet(ctx context.Context) (*TenantPolicyView, error) {
+	resp, body, err := c.do(ctx, http.MethodGet, "/policy", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		Policy TenantPolicyView `json:"policy"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed policy payload: %w", err)
+	}
+	return &wrap.Policy, nil
+}
+
+func (c *ControlClient) PolicyUpdate(ctx context.Context, req *UpdatePolicyRequest) (*TenantPolicyView, error) {
+	resp, body, err := c.do(ctx, http.MethodPatch, "/policy", req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		Policy TenantPolicyView `json:"policy"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed policy payload: %w", err)
+	}
+	return &wrap.Policy, nil
+}
+
 // SetupStatus is the shape of GET /admin/setup-status's response.data.
 // Mirrors pkg/server/control/setup_status_handlers.go's output. Each
 // field is a single boolean — the FE banner renders one row per false.

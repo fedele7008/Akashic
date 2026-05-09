@@ -1232,20 +1232,66 @@ template via Vault, and surface as discoverable keys in a
   requirements" — every tool we'd want to surface is already in
   the catalog.
 
-### 8c.6 — Policy management ⏳
+### 8c.6 — Policy management ✅
 
-The architecturally weighty piece. Today policy lives in two
-places:
-- **Tenant-level** (password rules, session TTL, default scopes)
-  in YAML config, hot-reloadable via `/config/reload`.
-- **Per-client** (`redirect_uris`, `allowed_scopes`,
-  `role_allowlist`, `require_pkce`) in `client_services` rows.
+DB-backed singleton table `tenant_policies` holding the
+deployment's runtime-tunable policy: password rules and the
+self-service signup gate. Operator edits via the admin web's
+Policy page; signup / register / password-policy-hint reads go
+live to the DB row, so changes take effect on the next request
+without a restart.
 
-Per-client policy is mostly already there — the create form
-exposes most fields and 8c.4's edit form completes that surface.
-So 8c.6 is **predominantly tenant-level policy**: choose the
-storage model (Open Question 1), build the UI, and decide which
-config keys move into the editable surface.
+**As-shipped scope:**
+- Schema: new `pkg/models/tenant_policy.go` with explicit columns
+  (singleton `id=1`). Migration via AutoMigrate. First-run
+  population in `pkg/akashic/core/context.go::Init` after
+  migrations: `policy.Service.EnsureSingleton` reads YAML
+  `Bootstrap.Password.*` defaults and inserts the row only if
+  the table is empty. After first run, YAML's password section
+  becomes bootstrap-only-defaults; runtime reads come from DB.
+- Domain: `pkg/policy/policy.go` with `Service.Get`,
+  `Service.PasswordPolicy` (auth-package shape adapter),
+  `Service.SignupEnabled`, `Service.Update`. Sentinel
+  `ErrInvalidPolicy` on per-field validity failures
+  (MinLength must be in `[4, 256]`).
+- Migrated callers: auth-server's `/signup` flow (template hint
+  + submit validation) and api-server's `/users/register`
+  + `/users/password-policy` now read live from DB. Bootstrap
+  manager intentionally stays YAML-snapshot at construction
+  (one-time deployment action; the DB row is created by
+  EnsureSingleton during startup, before bootstrap can run).
+- New `SIGNUP_DISABLED` gate on both signup paths:
+  auth-server `/signup` + `/signup/submit` render a friendly
+  403 page; api-server `/users/register` returns 403 with a
+  distinct error code so the widget can render its own copy.
+  Distinct from `BOOTSTRAP_INCOMPLETE` — different cause,
+  different recovery path (admin UI vs CLI bootstrap-create-root).
+- Control plane: `GET /policy` and `PATCH /policy` (singleton —
+  no `:id`). NOT gated by `requireBootstrapComplete`, since the
+  singleton row exists from app startup regardless of bootstrap.
+  Audit logs to security channel with `caller_user_id` +
+  `changed_fields`.
+- Admin-bff: typed `PolicyGet`, `PolicyUpdate` + handlers +
+  routes (`GET/PATCH /api/policy`). BFF resolves `caller_user_id`
+  from the session and threads it through.
+- Admin web: new `<PolicyPage>` mounted on a sidebar entry
+  (shield icon). One form, only-changed-fields PATCH semantics
+  (mirrors ClientsEdit / EditUserDialog), explicit help text
+  noting that existing stored passwords are NOT re-validated
+  against tighter rules — only new passwords going forward.
+- Fail-open posture on the read path: when `policySvc` is nil
+  or the DB read fails, callers fall back to a minimal
+  MinLength=8 + lowercase-required policy and `SignupEnabled=true`.
+  Consistent with the bootstrap-gate stance — better to keep
+  signups working during a transient outage than to lock
+  everyone out.
+
+**Resolved Open Question 1** (tenant-policy storage model):
+DB-backed table populated from YAML on first run. YAML becomes
+bootstrap-only-defaults; subsequent edits go through the UI.
+Hybrid (DB overrides YAML) was rejected — two-source-of-truth
+drift is historically painful; one source plus first-run seeding
+is cleaner.
 
 ### 8c.7 — Phasing notes
 
@@ -1264,12 +1310,13 @@ the schema-changing pieces.
 
 ### 8c.8 — Open questions (must resolve before starting)
 
-1. **Tenant-policy storage** — DB-backed table, read-only-config,
-   or hybrid (DB overrides YAML)? Hybrid is most flexible but
-   historically painful (two sources of truth that drift).
-   Leaning recommendation: DB-backed table populated from YAML
-   on first run; subsequent edits go through the UI; YAML
-   becomes bootstrap-only-defaults.
+1. **Tenant-policy storage** ✅ **resolved** (Phase 8c.6 shipped):
+   DB-backed `tenant_policies` table populated from YAML on first
+   run via `policy.Service.EnsureSingleton`. YAML's password
+   section becomes bootstrap-only-defaults; subsequent edits go
+   through the admin web's Policy page. Hybrid (DB overrides
+   YAML) was rejected — two-source-of-truth drift is historically
+   painful.
 2. **User-deletion semantics** ✅ **resolved** (Phase 8c.2
    shipped with hard delete): DELETE removes the LDAP entry
    then the PG row; soft-delete is the orthogonal `is_disabled`

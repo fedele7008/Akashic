@@ -81,6 +81,15 @@ func (s *Server) handleRegisterUser(w http.ResponseWriter, r *http.Request) {
 				nil))
 		return
 	}
+	// Phase 8c.6: operator-configurable signup gate. Distinct from
+	// BOOTSTRAP_INCOMPLETE — different cause, different recovery
+	// (operator re-enables in admin UI vs. completes bootstrap).
+	if !s.signupEnabled(r.Context()) {
+		response.WriteJSON(w, http.StatusForbidden,
+			response.Fail("SIGNUP_DISABLED",
+				"self-service signup is disabled on this deployment; contact the operator", nil))
+		return
+	}
 
 	var req registerUserRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -386,26 +395,44 @@ func (s *Server) handlePasswordPolicy(w http.ResponseWriter, r *http.Request) {
 
 // ─── helpers ───────────────────────────────────────────────────────
 
-// policyFromConfig builds an auth.PasswordPolicy from the operator's
-// `bootstrap.password.*` config block. Replaces the previous behavior
-// where /users/register, /users/me/password, and /users/password-policy
-// all used auth.DefaultPasswordPolicy() — silently ignoring whatever
-// the operator had set in config.
-//
-// `RequireLowercase` isn't operator-configurable today (the auth
-// package's defaults hard-code it to true on the principle that
-// allowing all-uppercase passwords is rarely intended); we preserve
-// that invariant here regardless of config shape.
-func (s *Server) policyFromConfig() *auth.PasswordPolicy {
-	cfg := s.config.GetConfig().Bootstrap.Password
-	return &auth.PasswordPolicy{
-		MinLength:        cfg.MinLength,
-		RequireUppercase: cfg.RequireUppercase,
-		RequireLowercase: true,
-		RequireNumber:    cfg.RequireNumber,
-		RequireSpecial:   cfg.RequireSpecial,
+// signupEnabled returns whether the operator-configured policy
+// allows self-service signup via /users/register. Defaults to TRUE
+// when the policy service isn't wired or the DB read fails — same
+// fail-open posture the bootstrap gate uses.
+func (s *Server) signupEnabled(ctx context.Context) bool {
+	if s.policySvc == nil {
+		return true
 	}
+	enabled, err := s.policySvc.SignupEnabled(ctx)
+	if err != nil {
+		return true
+	}
+	return enabled
 }
+
+// policyFromConfig returns the active password policy. Phase 8c.6
+// switched the source of truth from YAML to a DB-backed singleton
+// (pkg/policy.Service); operator edits via the admin web's Policy
+// page take effect on the next request. Falls back to a minimal
+// MinLength=8 + lowercase-required policy when the service isn't
+// wired or the DB read fails — better to enforce SOMETHING than
+// silently accept any password during a transient outage. The name
+// is kept (not renamed to e.g. policyFromService) to minimize diff
+// at call sites.
+func (s *Server) policyFromConfig() *auth.PasswordPolicy {
+	if s.policySvc != nil {
+		if p, err := s.policySvc.PasswordPolicy(s.serverCtx()); err == nil {
+			return p
+		}
+	}
+	return &auth.PasswordPolicy{MinLength: 8, RequireLowercase: true}
+}
+
+// serverCtx returns a background context for in-handler service
+// calls that don't have a request context handy. Used only by
+// policyFromConfig's fallback path; production callers should pass
+// the request context through their own helpers when they can.
+func (s *Server) serverCtx() context.Context { return context.Background() }
 
 func looksLikeEmail(s string) bool {
 	at := strings.IndexByte(s, '@')

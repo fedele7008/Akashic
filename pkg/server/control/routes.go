@@ -120,4 +120,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/users/",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
 			s.requireBootstrapComplete(s.handleAdminUserByID)))
+
+	// Phase 8c.6: tenant-policy CRUD. Singleton; mTLS-gated. NOT
+	// gated on bootstrap-complete — operators may want to tighten
+	// password rules even before the first user is minted, and
+	// the singleton row exists from app startup regardless.
+	mux.HandleFunc("/policy",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.handleAdminPolicy))
 }

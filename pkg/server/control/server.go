@@ -7,6 +7,7 @@ import (
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/pki"
+	"akashic/akashic/pkg/policy"
 	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/api"
 	"akashic/akashic/pkg/server/auth"
@@ -61,6 +62,10 @@ type Server struct {
 	// delete). Optional: handlers nil-check before use so the
 	// control server still starts in degraded mode without it.
 	userRepo *repository.UserRepository
+
+	// policySvc backs the Phase 8c.6 GET/PATCH /policy endpoints.
+	// Same nil-tolerant pattern as the other Set* fields.
+	policySvc *policy.Service
 }
 
 // SetDB wires the GORM handle into the control server. Called from
@@ -86,6 +91,12 @@ func (s *Server) SetLDAP(client *ldap.Client) {
 // users. Same nil-tolerant pattern as SetDB / SetLDAP.
 func (s *Server) SetUserRepo(repo *repository.UserRepository) {
 	s.userRepo = repo
+}
+
+// SetPolicyService wires the DB-backed tenant-policy accessor for
+// the Phase 8c.6 GET/PATCH /policy endpoints.
+func (s *Server) SetPolicyService(p *policy.Service) {
+	s.policySvc = p
 }
 
 // SetAPIServer wires the API server's state manager into the control

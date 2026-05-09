@@ -101,6 +101,15 @@ export function WarningIcon({ size = 18, className, style }: IconProps) {
   );
 }
 
+/** Shield — sidebar entry for the policy page. */
+export function ShieldIcon({ size = 18, className, style }: IconProps) {
+  return (
+    <svg {...base(size)} className={className} style={style} aria-hidden="true">
+      <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+    </svg>
+  );
+}
+
 /** Users — sidebar entry for user management. Person + small "+" hint. */
 export function UsersIcon({ size = 18, className, style }: IconProps) {
   return (
