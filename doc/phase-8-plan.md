@@ -908,6 +908,61 @@ rotates from `/profile/change-id` in either sample portal, the
 api-server enforces the cooldown + performs the LDAP+PG dance,
 and the audit log records every successful rotation.
 
+**First-party gate on account-mutation endpoints.** The api-server
+previously accepted any valid OAuth access token (signature OK +
+`openid` scope) on every authenticated route, including the
+account-mutation surfaces. That meant a third-party OAuth client
+that a user had legitimately granted consent to could call
+`PATCH /users/me`, `PATCH /users/me/uid`, `POST /clients`,
+`DELETE /users/me/consents/<id>`, etc. — taking actions the user
+never visually authorized.
+
+The half-built defense was already in the codebase: auth-server
+`/session/token` mints with a dedicated audience claim
+(`oauth.SessionTokenAudience = "akashic-session"`) specifically
+to distinguish first-party widget bearers from OAuth-flow
+bearers. The api-server's `requireBearer` was passing empty-
+string for `expectedAudience` to `oauth.VerifyAccessToken`,
+intentionally skipping the check (with a TODO comment marking
+it as future work). This now enforces the check via a new
+`requireFirstPartyBearer` wrapper:
+
+- `requireBearer` (unchanged): signature + `openid` scope; any
+  audience accepted. Used for read-only `GET /users/me`.
+- `requireFirstPartyBearer`: builds on `requireBearer` and asserts
+  `claims.VerifyAudience(oauth.SessionTokenAudience)` —
+  guaranteeing the token was minted for a first-party portal
+  session. Failures get HTTP 403 with
+  `error="insufficient_scope"` (RFC 6750 §3.1) and a Security-
+  channel audit log entry recording the rejected
+  path + user_id + audience.
+
+Route table now splits accordingly: `GET /users/me` stays open to
+any valid bearer (so a third-party app can read profile basics
+just like /userinfo), while every mutation surface
+(`PATCH /users/me`, password, uid, all `/clients/*`, all
+consent endpoints — list and revoke alike) is locked to
+first-party.
+
+Why audience and not scope: scopes are user-grantable through
+the OAuth consent screen; an attacker could trick a user into
+granting `account:manage` if we defined one. Audience is set by
+the issuer at mint time and is not user-grantable — a third-
+party client cannot obtain a token with `aud=akashic-session`
+because the only mint path that produces it is gated by the
+host-scoped first-party session cookie + the
+`AKASHIC_PORTAL_TENANT_ORIGINS` CORS allowlist. This matches the
+"zone of trust" pattern from RFC 9068 (JWT Profile for OAuth
+Access Tokens) §5.
+
+Tests in `pkg/server/api/bearer_test.go`: 5 cases over
+`AccessTokenClaims.VerifyAudience` covering session-bearer,
+third-party client_id audience, empty audience, near-miss
+literal, and multi-audience tokens; plus a non-empty constant
+guard that catches the obvious-but-catastrophic regression
+where someone defines `SessionTokenAudience = ""` (which would
+make `VerifyAudience` accept every token).
+
 Login-by-email already worked at the LDAP filter layer
 (`UserLoginFilter` defaults to `(|(uid={login})(mail={login}))`);
 the email-uniqueness fix is what makes it actually disambiguate.

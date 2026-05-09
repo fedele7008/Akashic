@@ -14,6 +14,24 @@ import (
 // and (elsewhere) in PKCE code_challenge computation.
 var rawURLEncoding = base64.RawURLEncoding
 
+// SessionTokenAudience is the `aud` claim that distinguishes a bearer
+// minted via auth-server `/session/token` (cookie-exchange for first-
+// party widgets) from a bearer issued through the OAuth `/oauth/token`
+// flow (audience = the requesting client's `client_id`).
+//
+// The api-server treats this audience as a "first-party trust marker":
+// sensitive endpoints (account mutation, client management, consent
+// revocation) require it, so a third-party OAuth-flow bearer cannot
+// reach them even with valid signature + `openid` scope. Read-only
+// endpoints accept either audience.
+//
+// Why this is safe: a third-party client cannot mint a token with this
+// audience because `/session/token` is gated by the host-scoped
+// auth-server session cookie + the tenant-origin CORS allowlist. There
+// is no path from "user grants client X consent" to "client X obtains
+// a token with aud=akashic-session".
+const SessionTokenAudience = "akashic-session"
+
 // AccessTokenClaims is the JWT-claim shape for OAuth access tokens.
 //
 // Fields beyond the standard set:

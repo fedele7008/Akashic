@@ -121,3 +121,41 @@ func scopeIncludes(scopes, target string) bool {
 func requirePublic(next http.HandlerFunc) http.HandlerFunc {
 	return next
 }
+
+// requireFirstPartyBearer wraps `requireBearer` with an additional
+// check: the bearer's `aud` claim must equal `oauth.SessionTokenAudience`.
+//
+// Only auth-server `/session/token` mints with that audience, and that
+// endpoint requires the host-scoped first-party session cookie + the
+// tenant-origin CORS allowlist. So a token with this audience proves
+// "the call is on behalf of a user who is signed in to a first-party
+// portal" — which is the trust boundary we need for sensitive flows
+// like changing account ID, mutating profile fields, registering or
+// deleting OAuth clients, and revoking other apps' consents.
+//
+// Tokens minted via the OAuth `/oauth/token` flow carry their
+// requesting client's `client_id` as `aud` and therefore fail this
+// check. They keep working on the read-only endpoints (e.g.
+// `GET /users/me`) that wrap with `requireBearer` directly.
+//
+// Failure mode: 403 with `error="insufficient_scope"`. We use 403,
+// not 401, because the token IS valid — it just isn't trusted enough
+// for this operation. RFC 6750 §3.1 reserves "insufficient_scope" for
+// exactly this shape ("the request requires higher privileges than
+// provided by the access token"); we reuse it for our audience-based
+// gate since the semantic match is closer than any other listed code.
+func (s *Server) requireFirstPartyBearer(next func(http.ResponseWriter, *http.Request, uuid.UUID, *oauth.AccessTokenClaims)) http.HandlerFunc {
+	return s.requireBearer(func(w http.ResponseWriter, r *http.Request, uid uuid.UUID, claims *oauth.AccessTokenClaims) {
+		if !claims.VerifyAudience(oauth.SessionTokenAudience) {
+			s.logger.Security.Warn(
+				"api: third-party bearer rejected on first-party-only endpoint",
+				zap.String("path", r.URL.Path),
+				zap.String("user_id", uid.String()),
+				zap.Strings("token_audience", claims.Audience))
+			writeBearerError(w, http.StatusForbidden, "insufficient_scope",
+				"this endpoint is restricted to first-party portal sessions")
+			return
+		}
+		next(w, r, uid, claims)
+	})
+}

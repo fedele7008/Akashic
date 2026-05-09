@@ -103,11 +103,12 @@ func (s *Server) handleSessionToken(w http.ResponseWriter, r *http.Request) {
 	mintIn := oauth.MintInput{
 		Issuer:    cfg.OAuth.Issuer,
 		Subject:   sess.UserID,
-		// Audience: a synthetic identifier so audit logs can tell
-		// session-bearer vs OAuth-bearer apart. The api-server's
-		// bearer middleware uses VerifyAccessToken(..., "") — skips
-		// audience check — so any value is accepted at validation.
-		Audience:  "akashic-session",
+		// Audience: the dedicated first-party marker. The api-server's
+		// `requireFirstPartyBearer` wrapper enforces aud == this on
+		// every sensitive endpoint, so a third-party OAuth-flow bearer
+		// cannot reach (e.g.) /users/me/uid even with a valid signature
+		// + openid scope.
+		Audience:  oauth.SessionTokenAudience,
 		IssuedAt:  now,
 		ExpiresIn: cfg.OAuth.AccessTokenTTL,
 	}

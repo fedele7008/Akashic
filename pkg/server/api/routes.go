@@ -13,21 +13,33 @@ import (
 // PUBLIC (no token required):
 //   POST /users/register
 //   GET  /users/forgot-password-help
+//   GET  /users/password-policy
 //
-// BEARER (token's `sub` claim = user identity):
-//   GET, PATCH /users/me
-//   POST /users/me/password
-//   GET /clients/mine, POST /clients (mine + create)
-//   GET, PATCH, DELETE /clients/:id
-//   POST /clients/:id/rotate-secret
+// BEARER (any valid OAuth access token; `sub` claim = user identity):
+//   GET  /users/me                      — read profile basics
+//
+// FIRST-PARTY BEARER (token must have aud == oauth.SessionTokenAudience):
+//   PATCH  /users/me                    — mutate profile fields
+//   POST   /users/me/password           — change password (still requires old)
+//   PATCH  /users/me/uid                — rotate id#TAG
+//   GET    /users/me/consents           — list connected apps
+//   DELETE /users/me/consents/<id>      — revoke a connected app
+//   GET    /clients/mine, POST /clients
+//   GET, PATCH, DELETE /clients/<id>
+//   POST   /clients/<id>/rotate-secret
 //
 // META:
 //   GET /health  liveness
 //   GET /ready   readiness (deps wired?)
 //
-// `requirePublic` is a no-op wrapper that explicitly marks endpoints
-// as unauthenticated by design (vs. an oversight). `requireBearer`
-// validates the access token + extracts the user UUID.
+// Wrapper semantics (defined in bearer.go):
+//   requirePublic           — no-op; endpoint is intentionally unauth.
+//   requireBearer           — verifies signature + openid scope; any aud.
+//   requireFirstPartyBearer — requireBearer + asserts aud equals the
+//                             session-token audience minted by
+//                             auth-server `/session/token`. Blocks
+//                             third-party OAuth bearers from reaching
+//                             account-mutation surfaces.
 func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// Liveness / readiness.
 	mux.HandleFunc("/health", s.handleHealth)
@@ -41,38 +53,56 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/users/password-policy",
 		requirePublic(s.handlePasswordPolicy))
 
-	// Bearer-authenticated /users/me (method-dispatched).
+	// Bearer-authenticated /users/me. Method-split: GET is open to any
+	// valid bearer (a third-party app the user has consented to may
+	// legitimately want to read profile basics, mirroring /userinfo);
+	// PATCH is first-party only because changing email/display_name is
+	// an account-takeover step (attacker → account-recovery email →
+	// password reset). The audience check is INSIDE the dispatcher
+	// rather than at the wrapper layer because http.ServeMux is one-
+	// handler-per-pattern; we can't have two wrappers on one path.
 	mux.HandleFunc("/users/me",
 		s.requireBearer(func(w http.ResponseWriter, r *http.Request, uid uuid.UUID, claims *oauth.AccessTokenClaims) {
 			switch r.Method {
 			case http.MethodGet:
 				s.handleGetMe(w, r, uid, claims)
 			case http.MethodPatch:
+				if !claims.VerifyAudience(oauth.SessionTokenAudience) {
+					writeBearerError(w, http.StatusForbidden, "insufficient_scope",
+						"PATCH /users/me is restricted to first-party portal sessions")
+					return
+				}
 				s.handlePatchMe(w, r, uid, claims)
 			default:
 				http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			}
 		}))
 	mux.HandleFunc("/users/me/password",
-		s.requireBearer(s.handleChangePassword))
+		s.requireFirstPartyBearer(s.handleChangePassword))
 	mux.HandleFunc("/users/me/uid",
-		s.requireBearer(s.handleChangeUID))
+		s.requireFirstPartyBearer(s.handleChangeUID))
 
 	// Phase 7.5: end-user consent management.
 	//   GET    /users/me/consents       → list active grants
 	//   DELETE /users/me/consents/<id>  → revoke a specific grant
+	// First-party only: the listing discloses *which* third-party apps
+	// the user has connected, and a malicious third-party shouldn't see
+	// other third parties the user uses. Revocation is mutation, also
+	// first-party only.
 	mux.HandleFunc("/users/me/consents",
-		s.requireBearer(s.handleListMyConsents))
+		s.requireFirstPartyBearer(s.handleListMyConsents))
 	mux.HandleFunc("/users/me/consents/",
-		s.requireBearer(s.handleRevokeMyConsent))
+		s.requireFirstPartyBearer(s.handleRevokeMyConsent))
 
-	// Bearer-authenticated /clients/*.
+	// /clients/* — OAuth client registration is a privileged operation
+	// (a malicious app could create a phishing client in the user's
+	// name). All of /clients/* is first-party only.
 	mux.HandleFunc("/clients/mine",
-		s.requireBearer(s.handleListMyClients))
+		s.requireFirstPartyBearer(s.handleListMyClients))
 	mux.HandleFunc("/clients",
-		s.requireBearer(s.handleCreateClient))
+		s.requireFirstPartyBearer(s.handleCreateClient))
 	mux.HandleFunc("/clients/",
-		s.requireBearer(s.handleClientByID))
+		s.requireFirstPartyBearer(s.handleClientByID))
 
 	// Phase 8b: embeddable widget bundle hosting. Public, cacheable
 	// static assets — see widgets_handler.go for the full rationale.
