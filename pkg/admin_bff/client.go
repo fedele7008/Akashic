@@ -602,6 +602,46 @@ func (c *ControlClient) UserDelete(ctx context.Context, userID, callerUserID str
 	return nil
 }
 
+// ResetUserPasswordRequest is the body for POST
+// /users/<id>/reset-password. Only CallerUserID is supplied — the
+// temp password is generated on the control plane.
+type ResetUserPasswordRequest struct {
+	CallerUserID string `json:"caller_user_id,omitempty"`
+}
+
+// ResetUserPasswordResult mirrors the control-plane response. When
+// `Sent` is true the email was delivered and `TempPassword` is
+// empty; when false the operator sees `TempPassword` once (and is
+// expected to deliver it out-of-band).
+type ResetUserPasswordResult struct {
+	Sent         bool   `json:"sent"`
+	Email        string `json:"email,omitempty"`
+	TempPassword string `json:"temp_password,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
+// UserResetPassword triggers an admin temporary-password reset on
+// the control plane. The plaintext password (when returned) is in
+// the response only — never logged, never persisted.
+func (c *ControlClient) UserResetPassword(ctx context.Context, userID string, req *ResetUserPasswordRequest) (*ResetUserPasswordResult, error) {
+	resp, body, err := c.do(ctx, http.MethodPost, "/users/"+userID+"/reset-password", req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var out ResetUserPasswordResult
+	if err := json.Unmarshal(env.Data, &out); err != nil {
+		return nil, fmt.Errorf("malformed reset-password payload: %w", err)
+	}
+	return &out, nil
+}
+
 // ─── Phase 8c.6: tenant policy ────────────────────────────────────
 
 // TenantPolicyView mirrors models.TenantPolicy for the wire. Same

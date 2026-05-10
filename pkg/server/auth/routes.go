@@ -49,6 +49,14 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/forgot-password/reset", s.handleForgotPasswordResetPage)
 	mux.HandleFunc("/forgot-password/reset/submit", s.handleForgotPasswordResetSubmit)
 
+	// Phase 9d: admin-issued temporary-password forced-reset flow.
+	// /login/submit attaches ResetRequired=true to the partial
+	// session and 302s here; /authorize and other gated endpoints
+	// re-check and bounce back. /submit clears the user-level gate
+	// + rotates the session ID + revokes all live RTs.
+	mux.HandleFunc("/forced-password-reset", s.handleForcedPasswordResetPage)
+	mux.HandleFunc("/forced-password-reset/submit", s.handleForcedPasswordResetSubmit)
+
 	// OAuth flow endpoints (Phase 7 Steps 5-7).
 	//
 	// /authorize is a top-level browser navigation (the SPA / portal

@@ -214,6 +214,17 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase 9d: forced-reset gate. A partial session can't drive
+	// /authorize; bounce to the reset page preserving the full
+	// /authorize URL as return_to so the user lands back on the
+	// OAuth flow once they finish picking a new password.
+	if sess.ResetRequired {
+		http.Redirect(w, r,
+			forcedResetURLWithReturnTo(r.URL.RequestURI(), ""),
+			http.StatusSeeOther)
+		return
+	}
+
 	// Phase 7: consent gate. Built-ins and first-party clients
 	// (IsTenantPortal=true) skip; everyone else is prompted unless
 	// the user has previously granted these scopes (or a superset).

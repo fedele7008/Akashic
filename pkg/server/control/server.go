@@ -78,6 +78,15 @@ type Server struct {
 	// emailService backs the Phase 9 GET/PATCH /email-config and
 	// POST /email-config/test endpoints. Same nil-tolerant pattern.
 	emailService *email.Service
+
+	// refreshTokenRepo lets the Phase 9d admin temp-password reset
+	// kill all live RT chains for the target user — without it, an
+	// attacker who already exfiltrated an RT could keep refreshing
+	// sessions even after the admin "reset" their password. Same
+	// nil-tolerant pattern: if not wired, the handler still completes
+	// the LDAP password change and gate flip, but logs a warning that
+	// existing RTs were not revoked.
+	refreshTokenRepo *repository.OAuthRefreshTokenRepository
 }
 
 // SetDB wires the GORM handle into the control server. Called from
@@ -123,6 +132,13 @@ func (s *Server) SetScopeRequestRepo(r *repository.OAuthScopeRequestRepository) 
 // Phase 9 /email-config endpoints.
 func (s *Server) SetEmailService(svc *email.Service) {
 	s.emailService = svc
+}
+
+// SetRefreshTokenRepo wires the OAuth refresh-token repository so
+// the Phase 9d admin temp-password reset can revoke every live RT
+// chain for the target user as part of the reset operation.
+func (s *Server) SetRefreshTokenRepo(repo *repository.OAuthRefreshTokenRepository) {
+	s.refreshTokenRepo = repo
 }
 
 // SetAPIServer wires the API server's state manager into the control

@@ -484,6 +484,12 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// for GET/PATCH /email-config and POST /email-config/test.
 	app.ControlServer.SetEmailService(app.EmailService)
 
+	// Phase 9d: the admin "reset password" endpoint kills all live
+	// RT chains for the target user as part of the reset, so the
+	// control plane needs the same RT repo the auth server already
+	// holds.
+	app.ControlServer.SetRefreshTokenRepo(refreshTokenRepo)
+
 	app.Logger.App.Info("Application initialized successfully")
 	return nil
 }

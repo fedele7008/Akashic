@@ -228,6 +228,54 @@ export class UsersApi {
       throw err;
     }
   }
+
+  /**
+   * POST /api/users/<id>/reset-password — Phase 9d. Issues a
+   * temporary password. The control plane decides whether to mail
+   * it to the user (when SendGrid is configured) or hand the
+   * plaintext back to this caller (for the operator to deliver
+   * out-of-band). The plaintext lives only in this response —
+   * never persist it client-side.
+   */
+  static async resetPassword(id: string): Promise<ResetPasswordResult> {
+    const r = await fetch(`/api/users/${encodeURIComponent(id)}/reset-password`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify({}),
+    });
+    const body: ApiResponse<ResetPasswordResult> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Reset password failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data;
+  }
+}
+
+/** Result of POST /api/users/<id>/reset-password. */
+export interface ResetPasswordResult {
+  /** True when the temp password was emailed; false otherwise. */
+  sent: boolean;
+  /** Recipient email when known; may be empty. */
+  email?: string;
+  /**
+   * The plaintext temporary password. Present ONLY when sent=false
+   * (mailer not configured / no email on LDAP entry / send failed).
+   * Render once in a confirmation modal; never store.
+   */
+  temp_password?: string;
+  /**
+   * Why the operator is seeing a plaintext fallback. One of:
+   *   - "mailer_not_configured"
+   *   - "no_email_on_ldap_entry"
+   *   - "email_send_failed"
+   */
+  reason?: string;
 }
 
 /**

@@ -71,6 +71,17 @@ type User struct {
 	// stay cheap.
 	LastUIDChangedAt *time.Time `gorm:"index" json:"last_uid_changed_at,omitempty"`
 
+	// Phase 9d: admin-initiated temporary-password-reset gate.
+	// When true, the auth-server's /login flow detects the flag
+	// after password verify and routes the user through a forced
+	// password-change page instead of issuing a regular session;
+	// every other user-facing endpoint (re-)redirects there until
+	// the user picks a new password. Cleared on successful reset.
+	//
+	// The set→reset lifecycle is initiated by an admin through
+	// `POST /users/<id>/reset-password` on the control plane.
+	PasswordResetRequired bool `gorm:"default:false;not null;index" json:"password_reset_required"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }

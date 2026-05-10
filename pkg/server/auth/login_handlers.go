@@ -238,6 +238,13 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		Email:    "", // /userinfo will fill this from LDAP if email scope granted
 		UserType: string(user.UserType),
 		IP:       ip,
+		// Phase 9d: an admin may have flagged this user for forced
+		// password reset (POST /users/<id>/reset-password). Carry
+		// the flag onto the session so the post-login redirect
+		// lands on /forced-password-reset instead of returnTo /
+		// /authorize / the signed-in landing page; every other
+		// gated endpoint re-checks and bounces back here.
+		ResetRequired: user.PasswordResetRequired,
 	}
 	if result.LDAPInfo != nil {
 		sess.Username = result.LDAPInfo.Username
@@ -279,6 +286,17 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		zap.String("username", sess.Username),
 		zap.String("user_type", sess.UserType),
 		zap.String("ip", ip))
+
+	// Phase 9d: if an admin flagged this user for a forced reset,
+	// the partial session has ResetRequired=true. Skip both the
+	// returnTo redirect and the signed-in landing — every gated
+	// endpoint would just bounce here anyway. Preserve returnTo
+	// across the reset so the user lands back on the original
+	// destination after picking a new password.
+	if sess.ResetRequired {
+		http.Redirect(w, r, forcedResetURLWithReturnTo(returnTo, ""), http.StatusSeeOther)
+		return
+	}
 
 	// returnTo is empty when the user landed on /login directly
 	// (typed the URL, used a saved bookmark, etc.) rather than via

@@ -96,22 +96,49 @@ func (s *Server) handleUserByID(w http.ResponseWriter, r *http.Request) {
 	if !s.requireAdminSession(w, r) {
 		return
 	}
-	id := strings.TrimPrefix(r.URL.Path, "/api/users/")
-	if id == "" || strings.Contains(id, "/") {
+	rest := strings.TrimPrefix(r.URL.Path, "/api/users/")
+	if rest == "" {
 		writeError(w, http.StatusNotFound, "NOT_FOUND",
 			"No route for this path.")
 		return
 	}
-	switch r.Method {
-	case http.MethodGet:
-		s.proxyGetUser(w, r, id)
-	case http.MethodPatch:
-		s.proxyPatchUser(w, r, id)
-	case http.MethodDelete:
-		s.proxyDeleteUser(w, r, id)
+	// Split id + optional action: `/api/users/<id>` or `/api/users/<id>/<action>`.
+	id := rest
+	action := ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		id = rest[:i]
+		action = strings.TrimSuffix(rest[i+1:], "/")
+	}
+	if id == "" {
+		writeError(w, http.StatusNotFound, "NOT_FOUND",
+			"No route for this path.")
+		return
+	}
+
+	switch action {
+	case "":
+		switch r.Method {
+		case http.MethodGet:
+			s.proxyGetUser(w, r, id)
+		case http.MethodPatch:
+			s.proxyPatchUser(w, r, id)
+		case http.MethodDelete:
+			s.proxyDeleteUser(w, r, id)
+		default:
+			writeError(w, http.StatusMethodNotAllowed,
+				"METHOD_NOT_ALLOWED", "Only GET / PATCH / DELETE on /api/users/<id>.")
+		}
+	case "reset-password":
+		// Phase 9d: admin issues a temporary password.
+		if r.Method != http.MethodPost {
+			writeError(w, http.StatusMethodNotAllowed,
+				"METHOD_NOT_ALLOWED", "Only POST on /api/users/<id>/reset-password.")
+			return
+		}
+		s.proxyResetUserPassword(w, r, id)
 	default:
-		writeError(w, http.StatusMethodNotAllowed,
-			"METHOD_NOT_ALLOWED", "Only GET / PATCH / DELETE on /api/users/<id>.")
+		writeError(w, http.StatusNotFound, "NOT_FOUND",
+			"Unknown action; recognised: 'reset-password'.")
 	}
 }
 
@@ -180,6 +207,29 @@ func (s *Server) proxyDeleteUser(w http.ResponseWriter, r *http.Request, id stri
 	writeJSON(w, http.StatusOK, map[string]any{
 		"success": true,
 		"data":    map[string]any{"deleted": true},
+	})
+}
+
+// proxyResetUserPassword forwards the Phase 9d "admin issues a
+// temporary password" request to the control plane. The plaintext
+// (when returned) flows through the BFF unchanged on the response —
+// it's expected to land in a confirmation modal in the admin web
+// and to never be persisted client-side.
+//
+// The BFF resolves the caller from session itself; we don't trust
+// any caller_user_id the FE may have set on the body (defense
+// against a forged JS request).
+func (s *Server) proxyResetUserPassword(w http.ResponseWriter, r *http.Request, id string) {
+	callerID := s.callerUserIDFromSession(r)
+	req := &ResetUserPasswordRequest{CallerUserID: callerID}
+	result, err := s.controlClient.UserResetPassword(r.Context(), id, req)
+	if err != nil {
+		s.writeControlError(w, err, "resetting user password")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    result,
 	})
 }
 

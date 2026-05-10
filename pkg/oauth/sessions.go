@@ -31,6 +31,17 @@ type AuthSession struct {
 	IssuedAt     time.Time `json:"issued_at"`
 	LastSeenAt   time.Time `json:"last_seen_at"`
 	IP           string    `json:"ip"`
+
+	// Phase 9d: when true, this is a "partial" session — the user
+	// authenticated with an admin-issued temporary password and
+	// MUST complete /forced-password-reset before any other
+	// endpoint accepts the session. /authorize and other flows
+	// check this flag and 302 to the reset page until the user
+	// picks a new password. Cleared (alongside User.PasswordResetRequired)
+	// on successful reset; the session ID is rotated at the same
+	// time so any leak of the partial-session cookie can't ride
+	// the upgrade.
+	ResetRequired bool `json:"reset_required,omitempty"`
 }
 
 // SessionStore manages auth-server sessions in Redis. Two TTLs:

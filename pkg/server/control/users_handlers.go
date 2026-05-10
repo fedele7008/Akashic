@@ -1,12 +1,15 @@
 package control
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"strconv"
 	"strings"
 
+	"akashic/akashic/pkg/auth"
+	"akashic/akashic/pkg/mailer"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/server/response"
 	"akashic/akashic/pkg/usermanagement"
@@ -158,11 +161,18 @@ func (s *Server) handleAdminUserByID(w http.ResponseWriter, r *http.Request) {
 			response.Fail("DB_NOT_READY", "user repository not yet wired", nil))
 		return
 	}
-	idStr := strings.TrimPrefix(r.URL.Path, "/users/")
-	if idStr == "" || strings.Contains(idStr, "/") {
+	rest := strings.TrimPrefix(r.URL.Path, "/users/")
+	if rest == "" {
 		response.WriteJSON(w, http.StatusNotFound,
 			response.Fail("NOT_FOUND", "no route for this path", nil))
 		return
+	}
+	// Split id + optional action: `/users/<id>` or `/users/<id>/<action>`.
+	idStr := rest
+	action := ""
+	if i := strings.IndexByte(rest, '/'); i >= 0 {
+		idStr = rest[:i]
+		action = strings.TrimSuffix(rest[i+1:], "/")
 	}
 	userID, err := uuid.Parse(idStr)
 	if err != nil {
@@ -171,17 +181,33 @@ func (s *Server) handleAdminUserByID(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	switch r.Method {
-	case http.MethodGet:
-		s.adminGetUser(w, r, userID)
-	case http.MethodPatch:
-		s.adminPatchUser(w, r, userID)
-	case http.MethodDelete:
-		s.adminDeleteUser(w, r, userID)
+	switch action {
+	case "":
+		switch r.Method {
+		case http.MethodGet:
+			s.adminGetUser(w, r, userID)
+		case http.MethodPatch:
+			s.adminPatchUser(w, r, userID)
+		case http.MethodDelete:
+			s.adminDeleteUser(w, r, userID)
+		default:
+			response.WriteJSON(w, response.StatusMethodNotAllowed,
+				response.Fail(response.ErrMethodNotAllowed,
+					"GET / PATCH / DELETE only on /users/<id>", nil))
+		}
+	case "reset-password":
+		// Phase 9d: admin-issued temporary-password reset.
+		if r.Method != http.MethodPost {
+			response.WriteJSON(w, response.StatusMethodNotAllowed,
+				response.Fail(response.ErrMethodNotAllowed,
+					"POST only on /users/<id>/reset-password", nil))
+			return
+		}
+		s.adminResetUserPassword(w, r, userID)
 	default:
-		response.WriteJSON(w, response.StatusMethodNotAllowed,
-			response.Fail(response.ErrMethodNotAllowed,
-				"GET / PATCH / DELETE only on /users/<id>", nil))
+		response.WriteJSON(w, http.StatusNotFound,
+			response.Fail("NOT_FOUND",
+				"unknown action; recognised: 'reset-password'", nil))
 	}
 }
 
@@ -321,6 +347,288 @@ func (s *Server) adminDeleteUser(w http.ResponseWriter, r *http.Request, id uuid
 	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
 		"deleted": true,
 	}))
+}
+
+// adminResetUserPasswordRequest is the body for
+// POST /users/<id>/reset-password. CallerUserID is the admin's
+// PG-level user_id, threaded in by the BFF's session-aware proxy
+// so the security audit log can attribute the action; CLI callers
+// omit it (uuid.Nil — the audit row will read "system" for caller).
+type adminResetUserPasswordRequest struct {
+	CallerUserID string `json:"caller_user_id,omitempty"`
+}
+
+// adminResetUserPassword executes the Phase 9d "admin issues a
+// temporary password" flow. The lifecycle is:
+//
+//  1. Generate a strong 24-char password (auth.GenerateTempPassword,
+//     no ambiguous chars, all four character classes guaranteed).
+//  2. Validate it against the live tenant password policy. The
+//     generator is engineered to satisfy any reasonable policy; the
+//     check is a defense-in-depth in case a custom-policy deployment
+//     ever requires something we don't produce.
+//  3. Replace the LDAP userPassword via admin bind (no old-password
+//     check — admin authority).
+//  4. Flip User.PasswordResetRequired = true so the next /login is
+//     intercepted into a forced-reset flow instead of issuing a
+//     normal session.
+//  5. Revoke every live RT chain for the user — without this, an
+//     attacker who already exfiltrated an RT could keep refreshing
+//     sessions even after the password change.
+//  6. If the mailer is configured, render and send the temp_password
+//     email; respond `{sent: true, email: <address>}` without the
+//     plaintext.
+//     If the mailer is NOT configured, respond `{sent: false,
+//     temp_password: <plaintext>}` so the operator can deliver it
+//     out-of-band. The plaintext is only ever in this single
+//     response — never persisted.
+//
+// Self-protection: an admin can reset their own password through
+// this endpoint. We don't block self-reset — it's a legitimate use
+// case ("I'm about to leave my desk, generate me a temp password
+// and email it to me"). Disabled accounts are blocked to avoid the
+// "reset, then can't sign in" trap.
+func (s *Server) adminResetUserPassword(w http.ResponseWriter, r *http.Request, userID uuid.UUID) {
+	if s.userRepo == nil || s.ldapClient == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable,
+			response.Fail("DEPENDENCIES_NOT_READY",
+				"user repo or LDAP client not yet wired", nil))
+		return
+	}
+
+	var req adminResetUserPasswordRequest
+	// Empty body is valid (CLI), so a JSON parse error on a non-empty
+	// body is the only thing we surface; ignore EOF.
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("INVALID_REQUEST", "could not parse body", nil))
+			return
+		}
+	}
+	defer r.Body.Close()
+
+	var callerID uuid.UUID
+	if req.CallerUserID != "" {
+		c, err := uuid.Parse(req.CallerUserID)
+		if err != nil {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("INVALID_REQUEST",
+					"caller_user_id must be a valid uuid", nil))
+			return
+		}
+		callerID = c
+	}
+
+	ctx := r.Context()
+
+	user, err := s.userRepo.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, models.ErrUserNotFound) {
+			response.WriteJSON(w, http.StatusNotFound,
+				response.Fail("USER_NOT_FOUND", "no user with that id", nil))
+			return
+		}
+		s.logger.App.Error("adminResetUserPassword: GetUserByID failed",
+			zap.String("user_id", userID.String()), zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not fetch user", nil))
+		return
+	}
+	if user.IsDisabled {
+		response.WriteJSON(w, http.StatusConflict,
+			response.Fail("USER_DISABLED",
+				"cannot reset password for a disabled user; enable the account first", nil))
+		return
+	}
+	if user.LdapDN == "" {
+		response.WriteJSON(w, http.StatusConflict,
+			response.Fail("NO_LDAP_DN",
+				"user has no LDAP DN; identity is missing or partially provisioned", nil))
+		return
+	}
+
+	tempPassword, err := auth.GenerateTempPassword()
+	if err != nil {
+		s.logger.App.Error("adminResetUserPassword: GenerateTempPassword failed",
+			zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not generate temporary password", nil))
+		return
+	}
+
+	// Defense-in-depth policy validate. The generator is designed to
+	// satisfy any reasonable policy, but a custom-policy deployment
+	// could in theory require characters we don't produce — fail
+	// fast with a clear error rather than silently shipping a
+	// password the user can't actually change to (the forced-reset
+	// page validates the same policy).
+	if s.policySvc != nil {
+		pol, perr := s.policySvc.PasswordPolicy(ctx)
+		if perr != nil {
+			s.logger.App.Warn("adminResetUserPassword: password policy fetch failed; "+
+				"proceeding with generator-only validity",
+				zap.Error(perr))
+		} else if pol != nil {
+			if verr := pol.Validate(tempPassword); verr != nil {
+				s.logger.App.Error("adminResetUserPassword: generated temp password "+
+					"failed policy validation — generator/policy mismatch",
+					zap.Error(verr))
+				response.WriteJSON(w, http.StatusInternalServerError,
+					response.Fail("POLICY_MISMATCH",
+						"generated temporary password does not satisfy current "+
+							"password policy; loosen the policy or contact maintainers",
+						nil))
+				return
+			}
+		}
+	}
+
+	// LDAP first — if this fails, nothing else changes. Order
+	// matters: a flipped PasswordResetRequired without a working
+	// new password would lock the user out at the next sign-in.
+	if err := s.ldapClient.ResetPasswordAsAdmin(user.LdapDN, tempPassword); err != nil {
+		s.logger.Security.Error("adminResetUserPassword: LDAP modify failed",
+			zap.String("user_id", userID.String()),
+			zap.String("user_dn", user.LdapDN),
+			zap.String("caller_user_id", callerID.String()),
+			zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("LDAP_ERROR",
+				"could not update password in directory", nil))
+		return
+	}
+
+	// Flip the gate. If this fails after LDAP succeeded, the user's
+	// password is now the temp one but their next /login won't be
+	// forced through the reset page — they'll get a normal session
+	// with the temp password as their permanent password. We still
+	// attempt the RT revocation and the email; the audit log captures
+	// the inconsistency for operator follow-up.
+	if err := s.userRepo.SetPasswordResetRequired(ctx, userID, true); err != nil {
+		s.logger.Security.Error("adminResetUserPassword: failed to set "+
+			"password_reset_required flag (LDAP password already changed)",
+			zap.String("user_id", userID.String()),
+			zap.Error(err))
+		// Fall through — the password change is the load-bearing
+		// part; the gate-flip is the UX nicety. Operator should
+		// retry or set the flag manually if needed.
+	}
+
+	// Kill all live RTs. Soft-failure: log and continue. The reset
+	// is still useful even if revocation fails — the new password
+	// is in effect, the gate is flipped, and existing access tokens
+	// expire on their own short TTL.
+	if s.refreshTokenRepo != nil {
+		if n, rerr := s.refreshTokenRepo.RevokeAllForUser(ctx, userID,
+			"admin_password_reset"); rerr != nil {
+			s.logger.Security.Warn("adminResetUserPassword: RT revocation failed; "+
+				"existing refresh tokens may remain valid until their natural TTL",
+				zap.String("user_id", userID.String()),
+				zap.Error(rerr))
+		} else {
+			s.logger.Security.Info("adminResetUserPassword: refresh tokens revoked",
+				zap.String("user_id", userID.String()),
+				zap.Int64("count", n))
+		}
+	} else {
+		s.logger.App.Warn("adminResetUserPassword: refreshTokenRepo not wired; " +
+			"skipping refresh-token revocation")
+	}
+
+	// Audit before deciding the response shape — the action happened
+	// regardless of whether the email goes out.
+	s.logger.Security.Warn("admin temporary password reset",
+		zap.String("user_id", userID.String()),
+		zap.String("user_dn", user.LdapDN),
+		zap.String("caller_user_id", callerID.String()))
+
+	// Decide delivery channel.
+	emailAddr := s.lookupEmail(user.LdapDN)
+	mailerReady := s.emailService != nil && s.emailService.IsConfigured()
+
+	if mailerReady && emailAddr != "" {
+		if err := s.sendTempPasswordEmail(ctx, emailAddr, user.LdapDN, tempPassword); err != nil {
+			// Fall through to the "show plaintext to admin" branch.
+			// Better to give the operator the password in the response
+			// than to leave the user locked out with no recovery path.
+			s.logger.App.Warn("adminResetUserPassword: email send failed; "+
+				"returning plaintext to caller as fallback",
+				zap.String("user_id", userID.String()),
+				zap.Error(err))
+			response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
+				"sent":          false,
+				"email":         emailAddr,
+				"temp_password": tempPassword,
+				"reason":        "email_send_failed",
+			}))
+			return
+		}
+		response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
+			"sent":  true,
+			"email": emailAddr,
+		}))
+		return
+	}
+
+	// Mailer not configured (or no email on the LDAP entry). Return
+	// the plaintext exactly once so the admin can deliver it out-of-
+	// band. The UI is expected to render this in a confirmation modal
+	// and not persist it anywhere.
+	reason := "mailer_not_configured"
+	if mailerReady && emailAddr == "" {
+		reason = "no_email_on_ldap_entry"
+	}
+	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
+		"sent":          false,
+		"email":         emailAddr, // may be empty
+		"temp_password": tempPassword,
+		"reason":        reason,
+	}))
+}
+
+// sendTempPasswordEmail renders and dispatches the temp_password
+// template via the cached mailer. Errors propagate so the caller
+// can decide whether to fall back to returning the plaintext.
+//
+// `userDN` is used only to resolve a display name from LDAP for the
+// "Hi <name>," greeting; on lookup failure we fall back to the
+// local-part of the email, mirroring the forgot-password flow.
+func (s *Server) sendTempPasswordEmail(ctx context.Context, emailAddr, userDN, tempPassword string) error {
+	displayName := emailAddr
+	if at := strings.IndexByte(emailAddr, '@'); at > 0 {
+		displayName = emailAddr[:at]
+	}
+	if s.ldapClient != nil {
+		if info, err := s.ldapClient.GetUserByDN(userDN); err == nil &&
+			info != nil && info.DisplayName != "" {
+			displayName = info.DisplayName
+		}
+	}
+
+	loginURL := ""
+	if s.emailService != nil {
+		// VerifyURLBase is the externally-reachable URL prefix; the
+		// auth-server's login page lives at <base>/login. (We reuse
+		// VerifyURLBase here rather than adding a separate
+		// LoginURLBase column — both emails resolve to the same
+		// public host.)
+		if base := s.emailService.VerifyURLBase(ctx); base != "" {
+			loginURL = strings.TrimRight(base, "/") + "/login"
+		}
+	}
+
+	msg, err := mailer.Render("temp_password", map[string]any{
+		"TenantName":   "Akashic",
+		"DisplayName":  displayName,
+		"TempPassword": tempPassword,
+		"LoginURL":     loginURL,
+	})
+	if err != nil {
+		return err
+	}
+	msg.To = emailAddr
+	return s.emailService.Send(ctx, msg)
 }
 
 // parseTriBool returns nil for "" (filter not set), &true for

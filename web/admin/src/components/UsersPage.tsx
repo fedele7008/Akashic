@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import {
   UsersApi,
   type ApiError,
+  type ResetPasswordResult,
   type SessionInfo,
   type UpdateUserRequest,
   type UserListParams,
@@ -218,6 +219,18 @@ export function UsersPage({ session }: { session: SessionInfo }) {
                         </button>
                         <button
                           type="button"
+                          className="secondary"
+                          onClick={() => setEditing({ kind: 'reset', user: u })}
+                          style={{ marginRight: '0.5rem' }}
+                          disabled={u.is_disabled}
+                          title={u.is_disabled
+                            ? 'Re-enable the account before resetting its password.'
+                            : 'Issue a temporary password and force a reset on next sign-in.'}
+                        >
+                          Reset password
+                        </button>
+                        <button
+                          type="button"
                           className="destructive"
                           onClick={() => setEditing({ kind: 'delete', user: u })}
                         >
@@ -285,13 +298,33 @@ export function UsersPage({ session }: { session: SessionInfo }) {
           }}
         />
       )}
+
+      {/* Reset-password confirm */}
+      {editing?.kind === 'reset' && (
+        <ResetPasswordConfirm
+          user={editing.user}
+          onClose={() => setEditing(null)}
+          onDone={(result) => setEditing({ kind: 'reset-result', user: editing.user, result })}
+        />
+      )}
+
+      {/* Reset-password result (success: emailed banner, or plaintext copy) */}
+      {editing?.kind === 'reset-result' && (
+        <ResetPasswordResultModal
+          user={editing.user}
+          result={editing.result}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </>
   );
 }
 
 type EditingState =
   | { kind: 'edit'; user: UserView }
-  | { kind: 'delete'; user: UserView };
+  | { kind: 'delete'; user: UserView }
+  | { kind: 'reset'; user: UserView }
+  | { kind: 'reset-result'; user: UserView; result: ResetPasswordResult };
 
 /**
  * EditUserDialog — change role and/or disabled flag. Submits a PATCH
@@ -439,6 +472,184 @@ function DeleteUserConfirm({
       onConfirm={submit}
       onCancel={onClose}
     />
+  );
+}
+
+/**
+ * ResetPasswordConfirm — confirms intent before issuing a temp
+ * password. Two-step UX (confirm → result modal) is deliberate: the
+ * action is sensitive (revokes every active session for the target
+ * user via RT cascade), and the result modal needs to land on a
+ * different shape depending on whether the mailer is configured.
+ */
+function ResetPasswordConfirm({
+  user,
+  onClose,
+  onDone,
+}: {
+  user: UserView;
+  onClose: () => void;
+  onDone: (result: ResetPasswordResult) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const headline = user.email || extractUid(user.ldap_dn);
+
+  const submit = async () => {
+    setError(null);
+    setBusy(true);
+    try {
+      const result = await UsersApi.resetPassword(user.id);
+      onDone(result);
+    } catch (e) {
+      const err = e as Error & { apiError?: ApiError };
+      setError(err.apiError?.message ?? err.message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <ConfirmModal
+      open={true}
+      title={`Reset password for ${headline}?`}
+      body={
+        <>
+          <p>
+            A new temporary password will be generated and stored
+            in LDAP for <strong>{headline}</strong>. The next time
+            they sign in, they'll be forced to choose a new
+            password before the session begins.
+          </p>
+          <p>
+            All of <strong>{headline}</strong>'s existing refresh
+            tokens will be revoked, so any logged-in sessions will
+            need to re-authenticate.
+          </p>
+          <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+            If email is configured, the temporary password is sent
+            to the user. Otherwise it's shown to you once on the
+            next screen so you can deliver it out-of-band.
+          </p>
+        </>
+      }
+      confirmLabel="Reset password"
+      busy={busy}
+      errorMessage={error}
+      onConfirm={submit}
+      onCancel={onClose}
+    />
+  );
+}
+
+/**
+ * ResetPasswordResultModal — terminal state of the reset flow.
+ * Two visually distinct branches:
+ *   - sent=true   → "emailed to <addr>" success banner, OK button.
+ *   - sent=false  → plaintext password in a copy box, with a
+ *     warning banner explaining why (mailer off / no email / send
+ *     failed) and one-click copy. The plaintext is the source of
+ *     truth here — closing the modal loses it forever.
+ */
+function ResetPasswordResultModal({
+  user,
+  result,
+  onClose,
+}: {
+  user: UserView;
+  result: ResetPasswordResult;
+  onClose: () => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const headline = user.email || extractUid(user.ldap_dn);
+
+  const copy = async () => {
+    if (!result.temp_password) return;
+    try {
+      await navigator.clipboard.writeText(result.temp_password);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // Older browsers / locked-down clipboard. Fall through —
+      // the password is still visible in the dialog so the
+      // operator can hand-copy it.
+    }
+  };
+
+  const reasonLabel = (() => {
+    switch (result.reason) {
+      case 'mailer_not_configured':
+        return 'Email is not configured for this deployment.';
+      case 'no_email_on_ldap_entry':
+        return 'This user has no email address on their LDAP entry.';
+      case 'email_send_failed':
+        return 'The email failed to send.';
+      default:
+        return null;
+    }
+  })();
+
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={(e) => {
+      if (e.target === e.currentTarget) onClose();
+    }}>
+      <div className="modal-dialog" role="dialog" aria-modal="true">
+        <h3 className="modal-title">Password reset for {headline}</h3>
+        <div className="modal-body">
+          {result.sent ? (
+            <>
+              <p className="success" role="status">
+                A temporary password was emailed to{' '}
+                <strong>{result.email}</strong>.
+              </p>
+              <p style={{ color: 'var(--text-muted)', fontSize: '0.875rem' }}>
+                The user will be forced to set a new password the
+                next time they sign in.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="error" role="alert">
+                {reasonLabel ?? 'The temporary password could not be emailed.'}{' '}
+                Hand it to the user over a trusted channel; they'll
+                be forced to change it on next sign-in.
+              </p>
+              <label style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                <span style={{ fontSize: '0.875rem' }}>Temporary password</span>
+                <input
+                  type="text"
+                  readOnly
+                  value={result.temp_password ?? ''}
+                  onFocus={(e) => e.currentTarget.select()}
+                  style={{
+                    fontFamily: 'SF Mono, Menlo, monospace',
+                    fontSize: '0.95rem',
+                    padding: '8px 10px',
+                    width: '100%',
+                  }}
+                />
+              </label>
+              <button
+                type="button"
+                className="secondary"
+                onClick={copy}
+                style={{ marginTop: '8px' }}
+              >
+                {copied ? 'Copied!' : 'Copy to clipboard'}
+              </button>
+              <p style={{ marginTop: '12px', color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+                This is the only time this password will be shown.
+                Closing this dialog discards it.
+              </p>
+            </>
+          )}
+        </div>
+        <div className="modal-actions">
+          <button type="button" className="primary" onClick={onClose}>
+            Done
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }
 

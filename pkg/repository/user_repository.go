@@ -291,6 +291,28 @@ func (r *UserRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error
 	return nil
 }
 
+// SetPasswordResetRequired flips the gate that the auth-server's
+// /login flow checks after a successful password verify. When true,
+// the next sign-in is intercepted into a forced-reset page instead
+// of issuing a regular session; clearing it back to false is the
+// final step of that flow.
+//
+// Phase 9d (admin temporary-password reset) sets it to true; the
+// auth-server's forced-reset handler sets it back to false after a
+// new password is accepted.
+func (r *UserRepository) SetPasswordResetRequired(ctx context.Context, userID uuid.UUID, required bool) error {
+	res := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("password_reset_required", required)
+	if res.Error != nil {
+		return fmt.Errorf("update password_reset_required: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return models.ErrUserNotFound
+	}
+	return nil
+}
+
 // UpdateUserType changes a user's role (root / admin / user). The
 // caller is responsible for any cross-row invariants (e.g., "don't
 // demote the last root") — the repo enforces only the per-row
