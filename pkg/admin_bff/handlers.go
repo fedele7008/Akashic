@@ -826,6 +826,69 @@ func stringContains(haystack, needle string) bool {
 	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
 }
 
+// ─── Phase 9: email config (DB-backed) ──────────────────────────
+
+func (s *Server) handleGetEmailConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	cfg, err := s.controlClient.EmailConfigGet(r.Context())
+	if err != nil {
+		s.writeControlError(w, err, "loading email config")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"email_config": cfg},
+	})
+}
+
+func (s *Server) handlePatchEmailConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	var body UpdateEmailConfigRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"Could not parse request body.")
+		return
+	}
+	defer r.Body.Close()
+	body.CallerUserID = s.callerUserIDFromSession(r)
+
+	cfg, err := s.controlClient.EmailConfigUpdate(r.Context(), &body)
+	if err != nil {
+		s.writeControlError(w, err, "updating email config")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"email_config": cfg},
+	})
+}
+
+func (s *Server) handleTestEmail(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	var body TestEmailRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"Could not parse request body.")
+		return
+	}
+	defer r.Body.Close()
+	result, err := s.controlClient.EmailConfigTest(r.Context(), &body)
+	if err != nil {
+		s.writeControlError(w, err, "sending test email")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    result,
+	})
+}
+
 // ─── Phase B: scope-request workflow ────────────────────────────
 
 func (s *Server) handleListScopeRequests(w http.ResponseWriter, r *http.Request) {

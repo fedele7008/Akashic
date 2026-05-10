@@ -17,6 +17,10 @@ export default function ProfilePage() {
         </p>
       </header>
 
+      {/* Phase 9b: shows when email is unverified AND email is
+          configured for this deployment. Renders nothing otherwise. */}
+      <akashic-verify-email-banner />
+
       <akashic-profile editable />
 
       <div className="flex items-center justify-between rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm">

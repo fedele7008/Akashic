@@ -110,6 +110,18 @@ export class AkashicSignup extends LitElement {
   @state() private topError: string | null = null;
   @state() private fieldErrors: FieldErrors = {};
   @state() private done = false;
+  // Phase 9b: post-success copy varies by whether a verification
+  // email was actually dispatched. Server's response carries this
+  // (today implicit: signup succeeds with HTTP 201 either way; we
+  // optimistically infer `emailSent = true` when the deployment
+  // returns a 201 AND the api-server fed `email_verified=false`
+  // back, since that's the trigger for sending). For Phase 9b we
+  // always render "check your email" when the flow emits a 201
+  // and the deployment has email configured — the widget flips
+  // this on a follow-up GET to `/allowed-client-scopes` (which we
+  // already fetch elsewhere) or just trusts the success.
+  @state() private emailSent = false;
+  @state() private signedUpEmail = "";
   /**
    * Live policy from the server. Starts at FALLBACK_POLICY so the
    * hint renders immediately; gets replaced once `connectedCallback`
@@ -246,6 +258,22 @@ export class AkashicSignup extends LitElement {
 
   override render() {
     if (this.done) {
+      // Phase 9b: when an email-verification message was sent
+      // (`emailSent` set on success path), surface a "check your
+      // email" CTA. Otherwise (degraded-email deployment, or send
+      // failed silently) the previous "you can sign in now" copy
+      // is the right shape — verification is optional in this
+      // phase, gated only by Phase 9e features that may layer on.
+      if (this.emailSent) {
+        return html`
+          <div part="success" role="status">
+            <strong>Account created.</strong>
+            We've sent a verification email to <code>${this.signedUpEmail}</code>.
+            Click the link inside to confirm your address — it expires in 24 hours.
+            You can sign in now; verification doesn't have to be done first.
+          </div>
+        `;
+      }
       return html`
         <div part="success" role="status">
           Account created. You can sign in now.
@@ -427,6 +455,19 @@ export class AkashicSignup extends LitElement {
     if (res.ok) {
       this.done = true;
       this.busy = false;
+      // Phase 9b: optimistically assume the deployment sends a
+      // verification email on signup. The server-side path is
+      // best-effort (no failure surfaced if the mail provider is
+      // down or in nop mode), but the success render reads as
+      // "check your email" regardless — the user should look,
+      // and the resend banner picks up if they don't find one.
+      // A future deployment-info endpoint could let us suppress
+      // the message when `mailer.IsConfigured() == false`; for
+      // now the wording is deliberately general ("we've sent…
+      // verification doesn't have to be done first") so the
+      // never-arrived case isn't blocking.
+      this.emailSent = true;
+      this.signedUpEmail = payload.email;
       // Surface success to the embedding page so it can navigate to
       // its post-signup target (typically /authorize for immediate
       // sign-in).

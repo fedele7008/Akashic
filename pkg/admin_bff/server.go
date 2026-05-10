@@ -369,6 +369,17 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handlePatchPolicy)))
 
+	// Phase 9: DB-backed email config.
+	mux.HandleFunc("GET /api/email-config",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleGetEmailConfig)))
+	mux.HandleFunc("PATCH /api/email-config",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handlePatchEmailConfig)))
+	mux.HandleFunc("POST /api/email-config/test",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleTestEmail)))
+
 	// Phase B: scope-request workflow.
 	mux.HandleFunc("GET /api/scope-requests",
 		s.csrfMiddleware(

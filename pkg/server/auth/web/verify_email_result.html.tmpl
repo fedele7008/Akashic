@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>{{.Title}} — Akashic</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="card">
+    <h1>{{.Title}}</h1>
+    {{if .Success}}
+      <p class="subtitle">Your email is verified.</p>
+      <p>
+        Thanks{{if .DisplayName}}, {{.DisplayName}}{{end}}. Your
+        email address has been confirmed for this Akashic account.
+        You can close this tab and continue where you left off.
+      </p>
+      <p style="margin-top: 16px;">
+        <a href="/login">Go to sign-in →</a>
+      </p>
+    {{else}}
+      <p class="subtitle">Verification didn't work.</p>
+      <p>{{.Message}}</p>
+      <p style="margin-top: 16px; font-size: 0.875rem; color: var(--text-muted);">
+        If your link expired, sign in to your account and request a
+        new verification email from your profile page.
+      </p>
+      <p style="margin-top: 16px;">
+        <a href="/login">Go to sign-in →</a>
+      </p>
+    {{end}}
+  </main>
+</body>
+</html>

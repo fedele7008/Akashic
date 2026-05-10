@@ -16,7 +16,7 @@ import {
  * extending the union, the `NAV_ITEMS` array below, and the
  * page-render switch in `AppShell`.
  */
-export type Page = 'overview' | 'users' | 'clients' | 'policy' | 'scope-requests' | 'server' | 'tools';
+export type Page = 'overview' | 'users' | 'clients' | 'policy' | 'scope-requests' | 'email' | 'server' | 'tools';
 
 interface NavEntry {
   page: Page;
@@ -30,6 +30,7 @@ const NAV_ITEMS: NavEntry[] = [
   { page: 'clients', label: 'OAuth clients', icon: KeyIcon },
   { page: 'policy', label: 'Policy', icon: ShieldIcon },
   { page: 'scope-requests', label: 'Scope requests', icon: ShieldIcon },
+  { page: 'email', label: 'Email', icon: ToolsIcon },
   { page: 'server', label: 'Server', icon: ServerIcon },
   { page: 'tools', label: 'Tools', icon: ToolsIcon },
 ];

@@ -7,6 +7,7 @@ import (
 	"akashic/akashic/pkg/database/akashic_redis"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
+	"akashic/akashic/pkg/email"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/policy"
@@ -69,6 +70,20 @@ type Server struct {
 	// tokens and the `offline_access` scope is treated as a no-op
 	// (rather than failing the auth-code exchange outright).
 	refreshTokenRepo *repository.OAuthRefreshTokenRepository
+
+	// Phase 9 (revised): DB-backed email-config service. Replaces
+	// the prior static mailer + verify-URL fields. The service
+	// satisfies `mailer.Mailer` so handlers that previously called
+	// `s.mailer.Send(...)` now call `s.emailSvc.Send(...)` with no
+	// other change. The verify-URL is read live via
+	// `s.emailSvc.VerifyURLBase(ctx)` so admin edits take effect
+	// immediately (no static field to refresh).
+	emailSvc *email.Service
+
+	// Phase 9: email-verification repository. Read by the
+	// /verify-email landing (Consume); written by signup (Create)
+	// and the resend endpoint (Create — supersedes the prior).
+	emailVerificationRepo *repository.EmailVerificationRepository
 }
 
 // ServerState represents the current state of the server
@@ -150,6 +165,25 @@ func (s *Server) SetRefreshTokenRepo(r *repository.OAuthRefreshTokenRepository) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.refreshTokenRepo = r
+}
+
+// SetEmailService wires the DB-backed email config service. The
+// service implements `mailer.Mailer` (Send + IsConfigured) so
+// handlers can use it where they used to hold a static
+// `mailer.Mailer`. It also exposes `VerifyURLBase(ctx)` for live
+// reads of the verification-link prefix.
+func (s *Server) SetEmailService(svc *email.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emailSvc = svc
+}
+
+// SetEmailVerificationRepo wires the email-verification repository
+// (Phase 9b). Required for the /verify-email landing endpoint.
+func (s *Server) SetEmailVerificationRepo(r *repository.EmailVerificationRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emailVerificationRepo = r
 }
 
 // bootstrapBlocked returns true iff the deployment is still in

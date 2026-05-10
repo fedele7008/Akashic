@@ -29,6 +29,7 @@ declare module "react" {
       "akashic-profile": WidgetProps;
       "akashic-change-password": WidgetProps;
       "akashic-change-id": WidgetProps;
+      "akashic-verify-email-banner": WidgetProps;
       "akashic-clients": WidgetProps;
       "akashic-connected-apps": WidgetProps;
     }
@@ -44,6 +45,7 @@ declare global {
       "akashic-profile": WidgetProps;
       "akashic-change-password": WidgetProps;
       "akashic-change-id": WidgetProps;
+      "akashic-verify-email-banner": WidgetProps;
       "akashic-clients": WidgetProps;
       "akashic-connected-apps": WidgetProps;
     }

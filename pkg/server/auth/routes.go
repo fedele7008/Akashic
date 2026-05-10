@@ -33,6 +33,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/consent", s.handleConsentPage)
 	mux.HandleFunc("/consent/submit", s.handleConsentSubmit)
 
+	// Phase 9b: email-verification landing. Click target for the
+	// link in verification emails. GET-only and idempotent (the
+	// token IS the proof; no CSRF needed for a one-shot consume).
+	mux.HandleFunc("/verify-email", s.handleVerifyEmail)
+
 	// OAuth flow endpoints (Phase 7 Steps 5-7).
 	//
 	// /authorize is a top-level browser navigation (the SPA / portal

@@ -778,6 +778,100 @@ func (c *ControlClient) do(ctx context.Context, method, path string, body any) (
 	return resp, respBody, nil
 }
 
+// ─── Phase 9: email config (DB-backed) ──────────────────────────
+
+type EmailConfigView struct {
+	Provider          string `json:"provider"`
+	FromAddress       string `json:"from_address"`
+	FromName          string `json:"from_name"`
+	SendGridAPIKey    string `json:"sendgrid_api_key"`
+	SendGridAPIKeySet bool   `json:"sendgrid_api_key_set"`
+	VerifyURLBase     string `json:"verify_url_base"`
+	UpdatedAt         string `json:"updated_at"`
+	UpdatedBy         string `json:"updated_by,omitempty"`
+	IsConfigured      bool   `json:"is_configured"`
+}
+
+type UpdateEmailConfigRequest struct {
+	Provider       *string `json:"provider,omitempty"`
+	FromAddress    *string `json:"from_address,omitempty"`
+	FromName       *string `json:"from_name,omitempty"`
+	SendGridAPIKey *string `json:"sendgrid_api_key,omitempty"`
+	VerifyURLBase  *string `json:"verify_url_base,omitempty"`
+	CallerUserID   string  `json:"caller_user_id,omitempty"`
+}
+
+type TestEmailRequest struct {
+	To string `json:"to"`
+}
+
+type TestEmailResult struct {
+	Sent  bool   `json:"sent"`
+	To    string `json:"to,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+func (c *ControlClient) EmailConfigGet(ctx context.Context) (*EmailConfigView, error) {
+	resp, body, err := c.do(ctx, http.MethodGet, "/email-config", nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		EmailConfig EmailConfigView `json:"email_config"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed email-config payload: %w", err)
+	}
+	return &wrap.EmailConfig, nil
+}
+
+func (c *ControlClient) EmailConfigUpdate(ctx context.Context, req *UpdateEmailConfigRequest) (*EmailConfigView, error) {
+	resp, body, err := c.do(ctx, http.MethodPatch, "/email-config", req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		EmailConfig EmailConfigView `json:"email_config"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed email-config payload: %w", err)
+	}
+	return &wrap.EmailConfig, nil
+}
+
+func (c *ControlClient) EmailConfigTest(ctx context.Context, req *TestEmailRequest) (*TestEmailResult, error) {
+	resp, body, err := c.do(ctx, http.MethodPost, "/email-config/test", req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var result TestEmailResult
+	if err := json.Unmarshal(env.Data, &result); err != nil {
+		return nil, fmt.Errorf("malformed test-email payload: %w", err)
+	}
+	return &result, nil
+}
+
 // ─── Phase B: scope requests ────────────────────────────────────
 
 type ScopeRequestView struct {

@@ -303,6 +303,13 @@ type Config struct {
 	OAuth OAuthConfig `mapstructure:"oauth" yaml:"oauth"`
 	// Tenant-portal configuration (Phase 8)
 	Portal PortalConfig `mapstructure:"portal" yaml:"portal"`
+
+	// Note: outbound-email configuration is NOT in this struct.
+	// Phase 9 makes email config DB-backed + admin-web-editable
+	// (see pkg/email.Service + pkg/models/email_config.go).
+	// Operators configure provider + sender + API key + verify-
+	// URL through the admin web's "Email" page; values take effect
+	// immediately on save with no server restart.
 }
 
 // PortalConfig holds Phase 8 settings for the public portal.

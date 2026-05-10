@@ -261,6 +261,25 @@ func (s *Server) handleSignupSubmit(w http.ResponseWriter, r *http.Request) {
 		zap.String("ldap_dn", user.LdapDN),
 		zap.String("email", email))
 
+	// Phase 9b: best-effort verification email. Signup completes
+	// regardless — if SendGrid is down or the mailer is in nop
+	// mode, the user can resend from their profile banner. We
+	// don't block the redirect on the send.
+	if s.MailerConfigured() {
+		dn := displayName
+		if dn == "" {
+			if at := strings.IndexByte(email, '@'); at > 0 {
+				dn = email[:at]
+			}
+		}
+		if err := s.SendVerificationEmail(r.Context(), user.ID, email, dn); err != nil {
+			s.logger.App.Warn("signup: verification email send failed (best-effort)",
+				zap.String("user_id", user.ID.String()),
+				zap.String("email", email),
+				zap.Error(err))
+		}
+	}
+
 	// Success: redirect to /login with email pre-filled and the
 	// original return_to preserved. UserLoginFilter accepts email
 	// or uid, so the user types the email they just registered.

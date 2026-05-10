@@ -281,3 +281,9 @@ ldap:
     root_deletion_threshold: "0s"     # Root accounts deleted immediately
     admin_deletion_threshold: "720h"  # Admin accounts after 30 days
     user_deletion_threshold: "2160h"  # Regular users after 90 days
+
+# Note: outbound-email configuration lives in the database
+# (`email_configs` singleton row), edited via the admin web's
+# "Email" page. Provider, sender address + name, SendGrid API key,
+# and verification-URL base are all set there — no env vars or
+# YAML keys to maintain. Edits take effect immediately on save.

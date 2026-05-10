@@ -15,6 +15,7 @@ import (
 	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/models"
+	"akashic/akashic/pkg/email"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/policy"
 	"akashic/akashic/pkg/pki"
@@ -50,6 +51,7 @@ type AkashicApp struct {
 	ControlServer         *control.Server
 	OAuthKeyStore         *oauth.KeyStore // Phase 7: JWT signing keys
 	PolicyService         *policy.Service // Phase 8c.6: DB-backed tenant policy
+	EmailService          *email.Service  // Phase 9 (revised): DB-backed mailer config
 	closerFns             []func()
 	verbose               bool
 	bootstrapToken        string // Stored for console display
@@ -203,6 +205,28 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// client-write paths (gate special scopes); read+written by the
 	// /scope-requests admin endpoints.
 	scopeRequestRepo := repository.NewOAuthScopeRequestRepository(app.DB.DB)
+	// Phase 9: email-verification repo. Read+written by signup
+	// (initial send), the auth-server's verify-email landing, and
+	// the api-server's resend endpoint.
+	emailVerificationRepo := repository.NewEmailVerificationRepository(app.DB.DB)
+
+	// Phase 9 (revised): DB-backed email-config service. The
+	// service satisfies `mailer.Mailer` so existing call sites
+	// (`s.mailer.Send(...)`, `s.mailer.IsConfigured()`) work
+	// unchanged when handed a `*email.Service`.
+	//
+	// EnsureSingleton creates an empty row on first run; the
+	// deployment starts in degraded-email mode and operators
+	// configure the provider + credentials via the admin web's
+	// "Email" page. Edits take effect immediately on save.
+	app.EmailService = email.NewService(app.DB.DB, app.Logger.App)
+	if err := app.EmailService.EnsureSingleton(app.ctx); err != nil {
+		// Soft-fail: log + continue. The service is constructed but
+		// not reloaded — Send will return ErrNotConfigured until
+		// an admin successfully PATCHes the config.
+		app.Logger.App.Warn("email config seed/reload failed; running in degraded mode",
+			zap.Error(err))
+	}
 
 	// Initialize OAuth signing-key store (Phase 7).
 	// On first-ever startup the directory is empty and we generate a
@@ -352,6 +376,13 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// no-op (granted but doesn't materialize an RT in the response).
 	app.AuthServer.SetRefreshTokenRepo(refreshTokenRepo)
 
+	// Phase 9 (revised): hand the auth server the email service.
+	// The service satisfies `mailer.Mailer` so existing call sites
+	// keep working; in addition, the verify-URL is read live from
+	// the service so admin edits via UI take effect immediately.
+	app.AuthServer.SetEmailService(app.EmailService)
+	app.AuthServer.SetEmailVerificationRepo(emailVerificationRepo)
+
 	// Built-in OAuth client registration. After Phase 8b's tenant-
 	// client registration roadmap landed, akashic-admin is the only
 	// server-managed built-in — every other client (tenant portals,
@@ -396,6 +427,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// source of truth for grant rows.
 	app.APIServer.SetConsentRepo(consentRepo)
 	app.APIServer.SetScopeRequestRepo(scopeRequestRepo)
+	// Phase 9 (revised): same email service + verification repo on
+	// the api-server side. Used by the bearer-auth resend endpoint.
+	app.APIServer.SetEmailService(app.EmailService)
+	app.APIServer.SetEmailVerificationRepo(emailVerificationRepo)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(
@@ -438,6 +473,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// the /scope-requests endpoints + the client-write special-scope
 	// gate can both reach it.
 	app.ControlServer.SetScopeRequestRepo(scopeRequestRepo)
+
+	// Phase 9 (revised): hand the control plane the email service
+	// for GET/PATCH /email-config and POST /email-config/test.
+	app.ControlServer.SetEmailService(app.EmailService)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil

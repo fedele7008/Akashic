@@ -86,6 +86,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		s.requireFirstPartyBearer(s.handleChangePassword))
 	mux.HandleFunc("/users/me/uid",
 		s.requireFirstPartyBearer(s.handleChangeUID))
+	// Phase 9b: resend a verification email to the user's current
+	// LDAP-stored email. First-party only (the regular bearer-
+	// audience gate); refuses with EMAIL_NOT_AVAILABLE when the
+	// mailer is in nop mode.
+	mux.HandleFunc("/users/me/send-verification-email",
+		s.requireFirstPartyBearer(s.handleSendVerificationEmail))
 
 	// Phase 7.5: end-user consent management.
 	//   GET    /users/me/consents       → list active grants

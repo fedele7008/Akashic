@@ -187,6 +187,28 @@ func (s *Server) handleRegisterUser(w http.ResponseWriter, r *http.Request) {
 		zap.String("uid", storedUsername),
 		zap.String("ldap_dn", user.LdapDN))
 
+	// Phase 9b: best-effort verification email. Same posture as
+	// the auth-server signup — failures don't block registration;
+	// the user can resend from their profile banner.
+	s.mu.RLock()
+	emailSvc := s.emailSvc
+	s.mu.RUnlock()
+	if emailSvc != nil && emailSvc.IsConfigured() {
+		dn := req.DisplayName
+		if dn == "" {
+			if at := strings.IndexByte(req.Email, '@'); at > 0 {
+				dn = req.Email[:at]
+			}
+		}
+		verifyBase := emailSvc.VerifyURLBase(r.Context())
+		if err := s.sendVerificationEmail(r.Context(), user.ID, req.Email, dn, verifyBase); err != nil {
+			s.logger.App.Warn("register: verification email send failed (best-effort)",
+				zap.String("user_id", user.ID.String()),
+				zap.String("email", req.Email),
+				zap.Error(err))
+		}
+	}
+
 	var resp registerUserResponse
 	resp.User.ID = user.ID.String()
 	resp.User.Username = storedUsername

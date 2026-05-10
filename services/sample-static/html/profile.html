@@ -15,6 +15,10 @@
 </head>
 <body>
   <h1>Your profile</h1>
+  <!-- Phase 9b: surfaces "verify your email" only when the user's
+       account is unverified AND the deployment has email configured.
+       Hidden otherwise (no banner clutter). -->
+  <akashic-verify-email-banner></akashic-verify-email-banner>
   <!--
     The widget uses the bearer set by _oauth.js
     (AkashicOAuth.applyToWidgets() on DOMContentLoaded → calls

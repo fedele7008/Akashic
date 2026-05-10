@@ -140,4 +140,12 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/scope-requests/",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
 			s.requireBootstrapComplete(s.handleAdminScopeRequestByID)))
+
+	// Phase 9 (revised): DB-backed email config + test send.
+	mux.HandleFunc("/email-config",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.handleAdminEmailConfig))
+	mux.HandleFunc("/email-config/test",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.handleAdminTestEmail))
 }

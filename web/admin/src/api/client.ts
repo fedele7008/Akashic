@@ -765,6 +765,92 @@ export class BootstrapApi {
   }
 }
 
+// ─── Phase 9: email config (DB-backed) ──────────────────────────
+
+export interface EmailConfig {
+  provider: string;
+  from_address: string;
+  from_name: string;
+  // Returned as the masked placeholder (••••••••) when set,
+  // empty string when not. Send back unedited to preserve the
+  // stored key when patching unrelated fields.
+  sendgrid_api_key: string;
+  sendgrid_api_key_set: boolean;
+  verify_url_base: string;
+  updated_at: string;
+  updated_by?: string;
+  is_configured: boolean;
+}
+
+export interface UpdateEmailConfigRequest {
+  provider?: string;
+  from_address?: string;
+  from_name?: string;
+  sendgrid_api_key?: string;
+  verify_url_base?: string;
+}
+
+export interface TestEmailResult {
+  sent: boolean;
+  to?: string;
+  error?: string;
+}
+
+export class EmailConfigApi {
+  static async get(): Promise<EmailConfig> {
+    const r = await fetch('/api/email-config', {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ email_config: EmailConfig }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Get failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.email_config;
+  }
+
+  static async update(req: UpdateEmailConfigRequest): Promise<EmailConfig> {
+    const r = await fetch('/api/email-config', {
+      method: 'PATCH',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify(req),
+    });
+    const body: ApiResponse<{ email_config: EmailConfig }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Update failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.email_config;
+  }
+
+  static async test(to: string): Promise<TestEmailResult> {
+    const r = await fetch('/api/email-config/test', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify({ to }),
+    });
+    const body: ApiResponse<TestEmailResult> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Test failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data;
+  }
+}
+
 // ─── Phase B: scope-request workflow ─────────────────────────────
 
 export interface ScopeRequestView {

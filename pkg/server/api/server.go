@@ -27,6 +27,7 @@ import (
 	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
+	"akashic/akashic/pkg/email"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/policy"
@@ -100,6 +101,16 @@ type Server struct {
 	// written by `/clients/<id>/scope-requests` for owner-side
 	// submission and status display.
 	scopeRequestRepo *repository.OAuthScopeRequestRepository
+
+	// Phase 9 (revised): DB-backed email-config service. Replaces
+	// the prior static mailer + verify-URL fields. Same shape as
+	// the auth-server side — see pkg/server/auth/server.go for
+	// the longer rationale.
+	emailSvc *email.Service
+
+	// Phase 9b: email-verification repo. Read+written by the
+	// resend endpoint.
+	emailVerificationRepo *repository.EmailVerificationRepository
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -155,6 +166,23 @@ func (s *Server) SetScopeRequestRepo(r *repository.OAuthScopeRequestRepository) 
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.scopeRequestRepo = r
+}
+
+// SetEmailService wires the DB-backed email config service
+// (Phase 9 revised). Implements `mailer.Mailer` and exposes
+// `VerifyURLBase` for live reads.
+func (s *Server) SetEmailService(svc *email.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emailSvc = svc
+}
+
+// SetEmailVerificationRepo wires the email-verification repo
+// (Phase 9b). Required for `/users/me/send-verification-email`.
+func (s *Server) SetEmailVerificationRepo(r *repository.EmailVerificationRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emailVerificationRepo = r
 }
 
 // SetBootstrapManager wires the bootstrap-state checker so signup

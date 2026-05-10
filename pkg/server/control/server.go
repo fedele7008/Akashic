@@ -7,6 +7,7 @@ import (
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/pki"
+	"akashic/akashic/pkg/email"
 	"akashic/akashic/pkg/policy"
 	"akashic/akashic/pkg/repository"
 	"akashic/akashic/pkg/server/api"
@@ -73,6 +74,10 @@ type Server struct {
 	// list/submit/approve/reject endpoints. Same nil-tolerant
 	// pattern.
 	scopeRequestRepo *repository.OAuthScopeRequestRepository
+
+	// emailService backs the Phase 9 GET/PATCH /email-config and
+	// POST /email-config/test endpoints. Same nil-tolerant pattern.
+	emailService *email.Service
 }
 
 // SetDB wires the GORM handle into the control server. Called from
@@ -112,6 +117,12 @@ func (s *Server) SetPolicyService(p *policy.Service) {
 // — special scopes can't be set without it.
 func (s *Server) SetScopeRequestRepo(r *repository.OAuthScopeRequestRepository) {
 	s.scopeRequestRepo = r
+}
+
+// SetEmailService wires the DB-backed email-config service for the
+// Phase 9 /email-config endpoints.
+func (s *Server) SetEmailService(svc *email.Service) {
+	s.emailService = svc
 }
 
 // SetAPIServer wires the API server's state manager into the control

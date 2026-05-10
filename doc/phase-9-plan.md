@@ -167,10 +167,11 @@ text template (Go's stdlib mail convention). Both are loaded via
 
 ## Sub-phase split
 
-| Phase | Feature | Roughly |
-|---|---|---|
-| **9a** | Mailer foundation + templates infrastructure | ~500 LOC (scaffolded) |
-| **9b** | Email verification (send-on-signup + landing + resend + banner) | ~700 LOC |
+| Phase | Feature | Roughly | Status |
+|---|---|---|---|
+| **9a** | Mailer foundation + templates infrastructure | ~500 LOC | ✅ shipped |
+| **9a-revised** | DB-backed email config service + admin web "Email" page | ~900 LOC | ✅ shipped |
+| **9b** | Email verification (send-on-signup + landing + resend + banner) | ~700 LOC | ✅ shipped |
 | **9c** | Forgot-password code flow (login-page link + 6-digit + reset) | ~600 LOC |
 | **9d** | Admin temporary password reset (admin button + force-reset flow) | ~600 LOC |
 | **9e** | Client-registration qualification (verified-email gate + approval workflow) | ~1000 LOC |
