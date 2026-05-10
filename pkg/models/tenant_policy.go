@@ -87,6 +87,22 @@ type TenantPolicy struct {
 	RefreshTokenSlidingTTLSeconds  int `gorm:"not null;default:2592000" json:"refresh_token_sliding_ttl_seconds"`
 	RefreshTokenAbsoluteTTLSeconds int `gorm:"not null;default:7776000" json:"refresh_token_absolute_ttl_seconds"`
 
+	// ─── Scope policy ─────────────────────────────────────────
+	// AllowedClientScopes is the operator's tenant-wide ceiling
+	// on scopes any client may request. Per-client RequiredScopes
+	// + OptionalScopes must each be a subset of this set.
+	//
+	// Default: "openid profile email" — the OIDC standard set.
+	// `offline_access` is intentionally NOT in the default; it's
+	// a "special scope" that requires per-client approval via the
+	// scope-request workflow (Phase B). Operators who explicitly
+	// allow it tenant-wide can add it here, but the per-client
+	// approval step is still recommended for audit.
+	//
+	// Format: space-separated. Validated to non-empty + every
+	// token URL-safe at write time.
+	AllowedClientScopes string `gorm:"type:text;not null;default:'openid profile email'" json:"allowed_client_scopes"`
+
 	UpdatedAt time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
 	UpdatedBy *uuid.UUID `gorm:"type:uuid" json:"updated_by,omitempty"`
 }

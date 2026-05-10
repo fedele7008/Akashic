@@ -91,13 +91,21 @@ func NewServer(feAssets fs.FS) (*Server, error) {
 	// Two rate-limit buckets:
 	//   - bootstrapLimiter: tight cap on /api/bootstrap/create-root,
 	//     mirrors the control-plane per-CN limit (5/min)
-	//   - rateLimiter: looser cap on idempotent reads (status, health)
-	//     to keep abusive scanning out of the logs
+	//   - rateLimiter: looser cap shared across the rest of /api/*.
+	//     Per-IP, so a single admin's interactive use shares the
+	//     budget with nothing else. Defaults to cfg.AdminRateLimit
+	//     (240/min) — generous for a multi-fetch SPA dashboard load.
+	//     Defensive fallback to 240 when cfg lacks the field (older
+	//     config files predating Phase D).
+	adminCap := cfg.AdminRateLimit
+	if adminCap <= 0 {
+		adminCap = 240
+	}
 	s := &Server{
 		cfg:              cfg,
 		controlClient:    cc,
 		bootstrapLimiter: newRateLimiter(cfg.BootstrapRateLimit, time.Minute, cfg.TrustedProxies),
-		rateLimiter:      newRateLimiter(30, time.Minute, cfg.TrustedProxies),
+		rateLimiter:      newRateLimiter(adminCap, time.Minute, cfg.TrustedProxies),
 		audit:            newAuditWriter(),
 		feAssets:         feAssets,
 		sessions:         sess,
@@ -360,6 +368,20 @@ func (s *Server) buildMux() http.Handler {
 	mux.HandleFunc("PATCH /api/policy",
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handlePatchPolicy)))
+
+	// Phase B: scope-request workflow.
+	mux.HandleFunc("GET /api/scope-requests",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleListScopeRequests)))
+	mux.HandleFunc("POST /api/scope-requests",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleSubmitScopeRequest)))
+	mux.HandleFunc("POST /api/scope-requests/{id}/approve",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleApproveScopeRequest)))
+	mux.HandleFunc("POST /api/scope-requests/{id}/reject",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleRejectScopeRequest)))
 
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie

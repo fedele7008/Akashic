@@ -5,8 +5,8 @@ import (
 	"net/url"
 	"strings"
 
-	"akashic/akashic/pkg/consent"
 	"akashic/akashic/pkg/models"
+	"akashic/akashic/pkg/oauth"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -118,16 +118,45 @@ func (s *Server) handleConsentPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase C: split the requested scope set into required (locked
+	// in the consent UI) and optional (user-toggleable). The client
+	// row's RequiredScopes is the authority for the split. Legacy
+	// rows (empty RequiredScopes) fall back to "everything in
+	// AllowedScopes is required" for backward compat — same fallback
+	// `/authorize` and `oauth.EffectiveRequiredScopes` use.
+	effRequired := oauth.EffectiveRequiredScopes(client.RequiredScopes, client.AllowedScopes)
+	requestedSet := oauth.ParseScopeSet(scope)
+	requiredSet := oauth.ParseScopeSet(effRequired)
+	optionalSet := oauth.ParseScopeSet(client.OptionalScopes)
+
+	requiredRows := []scopeRow{}
+	optionalRows := []scopeRow{}
+	for _, t := range requestedSet.Tokens() {
+		row := scopeRow{Code: t, Description: humanScopeDescription(t)}
+		if requiredSet.Contains(t) {
+			requiredRows = append(requiredRows, row)
+		} else if optionalSet.Contains(t) {
+			optionalRows = append(optionalRows, row)
+		} else {
+			// Scope is requested AND in client.AllowedScopes but
+			// neither required nor optional. Shouldn't happen given
+			// the AllowedScopes invariant (= union), but defensively
+			// treat as optional so the user can opt in or not.
+			optionalRows = append(optionalRows, row)
+		}
+	}
+
 	csrf := s.ensureLoginCSRF(w, r)
 	renderTemplate(w, "consent.html.tmpl", http.StatusOK, map[string]any{
-		"CSRFToken":   csrf,
-		"ReturnTo":    returnTo,
-		"ClientName":  client.Name,
-		"ClientID":    client.ClientID,
-		"HomepageURL": client.HomepageURL,
-		"Description": client.Description,
-		"Scopes":      humanScopes(scope),
-		"RawScope":    scope,
+		"CSRFToken":      csrf,
+		"ReturnTo":       returnTo,
+		"ClientName":     client.Name,
+		"ClientID":       client.ClientID,
+		"HomepageURL":    client.HomepageURL,
+		"Description":    client.Description,
+		"RequiredScopes": requiredRows,
+		"OptionalScopes": optionalRows,
+		"RawScope":       scope,
 	})
 }
 
@@ -215,8 +244,9 @@ func (s *Server) handleConsentSubmit(w http.ResponseWriter, r *http.Request) {
 		s.mu.RLock()
 		sessionStore := s.sessionStore
 		consentRepo := s.consentRepo
+		db := s.db
 		s.mu.RUnlock()
-		if sessionStore == nil {
+		if sessionStore == nil || db == nil {
 			s.renderConsentError(w, http.StatusServiceUnavailable,
 				"Server not ready",
 				"The auth server is not yet fully initialized.")
@@ -251,11 +281,51 @@ func (s *Server) handleConsentSubmit(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// Phase C: granted scope = required ∪ user-checked optionals.
+		// Required scopes are non-toggleable in the form so they
+		// always come back as part of the granted set. User-toggled
+		// optionals come in as `optional_scope` form values (one per
+		// checked checkbox). Anything outside the original requested
+		// set is ignored (defensive — the form shouldn't produce it).
+		var client models.ClientService
+		if err := db.WithContext(r.Context()).
+			Where("client_id = ?", clientID).First(&client).Error; err != nil {
+			s.logger.App.Error("consent submit: client lookup", zap.Error(err))
+			s.renderConsentError(w, http.StatusInternalServerError,
+				"Server error", "Could not load client metadata.")
+			return
+		}
+		effRequired := oauth.EffectiveRequiredScopes(client.RequiredScopes, client.AllowedScopes)
+		requestedSet := oauth.ParseScopeSet(scope)
+		requiredSet := oauth.ParseScopeSet(effRequired)
+		grantedTokens := []string{}
+		for _, t := range requiredSet.Tokens() {
+			if requestedSet.Contains(t) {
+				grantedTokens = append(grantedTokens, t)
+			}
+		}
+		// User's checked optionals — only include those that are in
+		// the client's optional set AND in the request.
+		optionalSet := oauth.ParseScopeSet(client.OptionalScopes)
+		seen := map[string]bool{}
+		for _, t := range grantedTokens {
+			seen[t] = true
+		}
+		for _, picked := range r.PostForm["optional_scope"] {
+			t := strings.TrimSpace(picked)
+			if t == "" || seen[t] {
+				continue
+			}
+			if optionalSet.Contains(t) && requestedSet.Contains(t) {
+				grantedTokens = append(grantedTokens, t)
+				seen[t] = true
+			}
+		}
+		grantedScope := oauth.ParseScopeSet(strings.Join(grantedTokens, " ")).String()
+
 		// Synchronous write before the redirect so a fast browser
 		// re-arriving at /authorize finds the row already present.
-		// Without this, a tight loop could see no consent row yet
-		// and bounce back to /consent again.
-		if _, err := consentRepo.Upsert(r.Context(), userID, clientID, consent.NormalizeScopes(scope)); err != nil {
+		if _, err := consentRepo.Upsert(r.Context(), userID, clientID, grantedScope); err != nil {
 			s.logger.App.Error("consent upsert failed",
 				zap.String("client_id", clientID),
 				zap.String("user_id", sess.UserID), zap.Error(err))
@@ -266,8 +336,19 @@ func (s *Server) handleConsentSubmit(w http.ResponseWriter, r *http.Request) {
 		s.logger.Security.Info("consent granted",
 			zap.String("client_id", clientID),
 			zap.String("user_id", sess.UserID),
-			zap.String("scope", scope))
-		http.Redirect(w, r, returnTo, http.StatusFound)
+			zap.String("requested_scope", scope),
+			zap.String("granted_scope", grantedScope))
+
+		// Phase C: rewrite the return_to URL's `scope` parameter to
+		// reflect the user's granted set. /authorize will re-evaluate
+		// consent against this narrower scope, find the upserted row
+		// covers it, and mint a code with that scope. Without this
+		// rewrite, /authorize would see the original (pre-narrow)
+		// scope and bounce back to /consent in a loop.
+		newQ := authParams.Query()
+		newQ.Set("scope", grantedScope)
+		authParams.RawQuery = newQ.Encode()
+		http.Redirect(w, r, authParams.String(), http.StatusFound)
 		return
 
 	default:
@@ -289,26 +370,27 @@ func (s *Server) renderConsentError(w http.ResponseWriter, status int, title, ms
 	})
 }
 
-// humanScopes turns a space-separated scope string into a slice of
-// {Code, Description} pairs for the template. Unknown scopes are
-// shown by their code with no description — better than hiding them.
-//
-// Centralised here so the table can grow without touching the
-// template; in a future cleanup the descriptions could come from a
-// per-deployment config so operators localise.
-func humanScopes(s string) []scopeRow {
-	desc := map[string]string{
-		"openid":  "Sign you in (your account ID).",
-		"profile": "Your basic profile (display name, username).",
-		"email":   "Your email address.",
-		"address": "Your address, when present in the directory.",
-		"phone":   "Your phone number, when present in the directory.",
+// humanScopeDescription returns a human-readable description for a
+// single OAuth scope token, or empty string if the scope is
+// unknown. Used by the consent handler to populate scope rows for
+// the template. Could grow into a per-deployment config so
+// operators localise; for now hardcoded.
+func humanScopeDescription(scope string) string {
+	switch scope {
+	case "openid":
+		return "Sign you in (your account ID)."
+	case "profile":
+		return "Your basic profile (display name, username)."
+	case "email":
+		return "Your email address."
+	case "address":
+		return "Your address, when present in the directory."
+	case "phone":
+		return "Your phone number, when present in the directory."
+	case "offline_access":
+		return "Stay signed in via this app even when you're not actively using it."
 	}
-	out := []scopeRow{}
-	for _, tok := range strings.Fields(s) {
-		out = append(out, scopeRow{Code: tok, Description: desc[tok]})
-	}
-	return out
+	return ""
 }
 
 type scopeRow struct {

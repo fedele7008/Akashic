@@ -57,6 +57,11 @@ export interface TenantPolicy {
   access_token_ttl_seconds: number;
   refresh_token_sliding_ttl_seconds: number;
   refresh_token_absolute_ttl_seconds: number;
+  // Phase A: tenant-wide ceiling on scopes any client may request.
+  // Per-client `required_scopes` ∪ `optional_scopes` must be a
+  // subset. Special scopes (e.g. `offline_access`) bypass this and
+  // require admin approval via the scope-request workflow.
+  allowed_client_scopes: string;
   updated_at: string;
   updated_by?: string;
 }
@@ -71,6 +76,7 @@ export interface UpdatePolicyRequest {
   access_token_ttl_seconds?: number;
   refresh_token_sliding_ttl_seconds?: number;
   refresh_token_absolute_ttl_seconds?: number;
+  allowed_client_scopes?: string;
 }
 
 export class PolicyApi {
@@ -471,6 +477,11 @@ export interface UpdateClientRequest {
   homepage_url?: string;
   redirect_uris?: string;
   allowed_scopes?: string;
+  // Phase A: split scope fields. Send these instead of (not
+  // alongside) allowed_scopes — mixing the legacy and new shapes
+  // in one PATCH is rejected with VALIDATION_FAILED.
+  required_scopes?: string;
+  optional_scopes?: string;
   role_allowlist?: string;
   require_pkce?: boolean;
   is_tenant_portal?: boolean;
@@ -497,6 +508,13 @@ export interface CreateClientRequest {
   redirect_uris: string;
   description?: string;
   homepage_url?: string;
+  // Phase A: required vs optional scope split. Either may be
+  // empty — when both are empty the control plane defaults to
+  // `required_scopes = "openid profile email"`. Special scopes
+  // (e.g. `offline_access`) get rejected here with the dedicated
+  // SPECIAL_SCOPE_REQUIRES_REQUEST error code.
+  required_scopes?: string;
+  optional_scopes?: string;
   /**
    * WEB clients only — operator-configurable. Default true. Ignored
    * for SPA (always-true is enforced server-side regardless).
@@ -520,6 +538,8 @@ export interface ClientView {
   public: boolean;
   redirect_uris: string;
   allowed_scopes: string;
+  required_scopes: string;
+  optional_scopes: string;
   auth_types: string;
   built_in: boolean;
   require_pkce: boolean;
@@ -742,5 +762,99 @@ export class BootstrapApi {
       throw err;
     }
     return body.data!;
+  }
+}
+
+// ─── Phase B: scope-request workflow ─────────────────────────────
+
+export interface ScopeRequestView {
+  id: string;
+  client_id: string;
+  scope: string;
+  reason: string;
+  proposed_access_token_ttl_seconds?: number;
+  proposed_refresh_token_sliding_ttl_seconds?: number;
+  proposed_refresh_token_absolute_ttl_seconds?: number;
+  status: 'pending' | 'approved' | 'rejected';
+  submitted_by?: string;
+  submitted_at: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  decision_note?: string;
+}
+
+export interface SubmitScopeRequestBody {
+  client_id: string;
+  scope: string;
+  reason: string;
+  proposed_access_token_ttl_seconds?: number;
+  proposed_refresh_token_sliding_ttl_seconds?: number;
+  proposed_refresh_token_absolute_ttl_seconds?: number;
+}
+
+export class ScopeRequestsApi {
+  static async list(status?: 'pending' | 'approved' | 'rejected'): Promise<ScopeRequestView[]> {
+    const q = status ? '?status=' + encodeURIComponent(status) : '';
+    const r = await fetch('/api/scope-requests' + q, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ scope_requests: ScopeRequestView[] }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `List failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.scope_requests;
+  }
+
+  static async submit(req: SubmitScopeRequestBody): Promise<ScopeRequestView> {
+    const r = await fetch('/api/scope-requests', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify(req),
+    });
+    const body: ApiResponse<{ scope_request: ScopeRequestView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Submit failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.scope_request;
+  }
+
+  static async approve(id: string, decisionNote?: string): Promise<ScopeRequestView> {
+    return this.review(id, 'approve', decisionNote);
+  }
+  static async reject(id: string, decisionNote?: string): Promise<ScopeRequestView> {
+    return this.review(id, 'reject', decisionNote);
+  }
+
+  private static async review(
+    id: string,
+    action: 'approve' | 'reject',
+    decisionNote?: string,
+  ): Promise<ScopeRequestView> {
+    const r = await fetch(`/api/scope-requests/${encodeURIComponent(id)}/${action}`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify({ decision_note: decisionNote ?? '' }),
+    });
+    const body: ApiResponse<{ scope_request: ScopeRequestView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `${action} failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.scope_request;
   }
 }

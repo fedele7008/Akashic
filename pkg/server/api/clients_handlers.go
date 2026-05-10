@@ -50,6 +50,8 @@ type clientView struct {
 	Public         bool    `json:"public"`
 	RedirectURIs   string  `json:"redirect_uris"`
 	AllowedScopes  string  `json:"allowed_scopes"`
+	RequiredScopes string  `json:"required_scopes"`
+	OptionalScopes string  `json:"optional_scopes"`
 	AuthTypes      string  `json:"auth_types"`
 	BuiltIn        bool    `json:"built_in"`
 	RoleAllowlist  string  `json:"role_allowlist,omitempty"`
@@ -84,6 +86,8 @@ func toClientView(c *models.ClientService) clientView {
 		Public:         c.Public,
 		RedirectURIs:   c.RedirectURIs,
 		AllowedScopes:  c.AllowedScopes,
+		RequiredScopes: c.RequiredScopes,
+		OptionalScopes: c.OptionalScopes,
 		AuthTypes:      c.AuthTypes,
 		BuiltIn:        c.BuiltIn,
 		RoleAllowlist:  c.RoleAllowlist,
@@ -196,6 +200,14 @@ type createClientRequest struct {
 	// field" (→ default true) from "operator explicitly set false."
 	RequirePKCE   *bool  `json:"require_pkce,omitempty"`
 	AllowedScopes string `json:"allowed_scopes"`
+	// Phase A scope split. Either may be empty; when both are
+	// empty AND `allowed_scopes` is empty too, defaults to
+	// required = "openid profile email". Mixing legacy
+	// `allowed_scopes` with the split fields is rejected.
+	// Special scopes (e.g. `offline_access`) are rejected at
+	// create time — they require the scope-request workflow.
+	RequiredScopes string `json:"required_scopes,omitempty"`
+	OptionalScopes string `json:"optional_scopes,omitempty"`
 }
 
 type createClientResponse struct {
@@ -257,9 +269,59 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 				"client_type must be 'WEB' or 'SPA'", nil))
 		return
 	}
-	if req.AllowedScopes == "" {
-		req.AllowedScopes = "openid profile email"
+	// Phase A: resolve required/optional scopes. Three accepted
+	// caller shapes (mixing them is rejected):
+	//   1. (legacy) allowed_scopes only       → required = allowed
+	//   2. required_scopes / optional_scopes  → use as given
+	//   3. nothing                            → required = "openid profile email"
+	if req.AllowedScopes != "" && (req.RequiredScopes != "" || req.OptionalScopes != "") {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED",
+				"send either allowed_scopes (legacy) OR required_scopes/optional_scopes — not both", nil))
+		return
 	}
+	required := req.RequiredScopes
+	optional := req.OptionalScopes
+	if required == "" && optional == "" {
+		if req.AllowedScopes != "" {
+			required = req.AllowedScopes
+		} else {
+			required = "openid profile email"
+		}
+	}
+	required = oauth.ParseScopeSet(required).String()
+	optional = oauth.ParseScopeSet(optional).String()
+
+	// Special scopes can't be set at create time — they need an
+	// approved scope-request, which requires the client to exist
+	// first. Surface the workflow.
+	for _, t := range oauth.ParseScopes(required + " " + optional) {
+		if oauth.IsSpecialScope(t) {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("SPECIAL_SCOPE_REQUIRES_REQUEST",
+					"scope '"+t+"' requires admin approval — register the client first, then submit a scope request", nil))
+			return
+		}
+	}
+	// Validate against tenant ceiling.
+	if s.policySvc == nil {
+		response.WriteJSON(w, http.StatusServiceUnavailable,
+			response.Fail("API_NOT_READY", "policy service not yet wired", nil))
+		return
+	}
+	policyRow, err := s.policySvc.Get(r.Context())
+	if err != nil {
+		s.logger.App.Error("createClient: read policy", zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not read tenant policy", nil))
+		return
+	}
+	if err := oauth.ValidateClientScopeSplit(required, optional, policyRow.AllowedClientScopes); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED", err.Error(), nil))
+		return
+	}
+	allowed := oauth.UnionScopes(required, optional)
 
 	// Decide on PKCE: SPA always-true (model invariant); BFF
 	// operator-configurable, default true.
@@ -270,14 +332,16 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 
 	owner := uid
 	result, err := clientservice.Create(r.Context(), s.db.DB, clientservice.CreateParams{
-		Name:          req.Name,
-		Description:   req.Description,
-		HomepageURL:   req.HomepageURL,
-		Public:        public,
-		RequirePKCE:   requirePKCE,
-		RedirectURIs:  req.RedirectURIs,
-		AllowedScopes: req.AllowedScopes,
-		OwnerUserID:   &owner,
+		Name:           req.Name,
+		Description:    req.Description,
+		HomepageURL:    req.HomepageURL,
+		Public:         public,
+		RequirePKCE:    requirePKCE,
+		RedirectURIs:   req.RedirectURIs,
+		AllowedScopes:  allowed,
+		RequiredScopes: required,
+		OptionalScopes: optional,
+		OwnerUserID:    &owner,
 	})
 	if err != nil {
 		s.logger.App.Error("createClient: clientservice.Create", zap.Error(err))
@@ -356,6 +420,10 @@ func (s *Server) handleClientByID(w http.ResponseWriter, r *http.Request, uid uu
 			return
 		}
 		s.handleRotateSecret(w, r, ctx)
+	case "scope-requests":
+		// /clients/<id>/scope-requests — owner-scoped GET (list)
+		// + POST (submit). Special-scope approval workflow.
+		s.handleClientScopeRequests(w, r, ctx)
 	default:
 		response.WriteJSON(w, http.StatusNotFound,
 			response.Fail("NOT_FOUND", "no route for this path", nil))
@@ -372,6 +440,12 @@ type patchClientRequest struct {
 	HomepageURL   *string `json:"homepage_url,omitempty"`
 	RedirectURIs  *string `json:"redirect_uris,omitempty"`
 	AllowedScopes *string `json:"allowed_scopes,omitempty"`
+	// Phase A: required/optional scope split. Same accept rules as
+	// the create path — mixing legacy `allowed_scopes` with split
+	// fields is rejected. Special scopes here go through the gate:
+	// allowed iff an approved `oauth_scope_requests` row exists.
+	RequiredScopes *string `json:"required_scopes,omitempty"`
+	OptionalScopes *string `json:"optional_scopes,omitempty"`
 }
 
 func (s *Server) handlePatchClient(w http.ResponseWriter, r *http.Request, ctx *clientCtx) {
@@ -402,8 +476,79 @@ func (s *Server) handlePatchClient(w http.ResponseWriter, r *http.Request, ctx *
 	if req.RedirectURIs != nil {
 		updates["redirect_uris"] = strings.TrimSpace(*req.RedirectURIs)
 	}
-	if req.AllowedScopes != nil {
-		updates["allowed_scopes"] = strings.TrimSpace(*req.AllowedScopes)
+	// Scope handling — three caller shapes (legacy, split, none).
+	// Mirrors the control plane's adminPatchClient logic so the
+	// same invariants apply on the developer-side surface.
+	scopeMode1 := req.AllowedScopes != nil
+	scopeMode2 := req.RequiredScopes != nil || req.OptionalScopes != nil
+	if scopeMode1 && scopeMode2 {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED",
+				"send either allowed_scopes (legacy) OR required_scopes/optional_scopes — not both", nil))
+		return
+	}
+	if scopeMode1 || scopeMode2 {
+		if s.policySvc == nil {
+			response.WriteJSON(w, http.StatusServiceUnavailable,
+				response.Fail("API_NOT_READY", "policy service not yet wired", nil))
+			return
+		}
+		policyRow, err := s.policySvc.Get(r.Context())
+		if err != nil {
+			s.logger.App.Error("patchClient: read policy", zap.Error(err))
+			response.WriteJSON(w, http.StatusInternalServerError,
+				response.Fail("INTERNAL", "could not read tenant policy", nil))
+			return
+		}
+		var newRequired, newOptional string
+		if scopeMode1 {
+			newRequired = oauth.ParseScopeSet(*req.AllowedScopes).String()
+			newOptional = ""
+		} else {
+			if req.RequiredScopes != nil {
+				newRequired = oauth.ParseScopeSet(*req.RequiredScopes).String()
+			} else {
+				newRequired = ctx.client.RequiredScopes
+			}
+			if req.OptionalScopes != nil {
+				newOptional = oauth.ParseScopeSet(*req.OptionalScopes).String()
+			} else {
+				newOptional = ctx.client.OptionalScopes
+			}
+		}
+		// Special-scope gate: allowed iff approved.
+		for _, t := range oauth.ParseScopes(newRequired + " " + newOptional) {
+			if !oauth.IsSpecialScope(t) {
+				continue
+			}
+			if s.scopeRequestRepo == nil {
+				response.WriteJSON(w, http.StatusServiceUnavailable,
+					response.Fail("API_NOT_READY",
+						"scope-request repository not yet wired", nil))
+				return
+			}
+			has, err := s.scopeRequestRepo.HasApproved(r.Context(), ctx.client.ClientID, t)
+			if err != nil {
+				s.logger.App.Error("patchClient: HasApproved", zap.Error(err))
+				response.WriteJSON(w, http.StatusInternalServerError,
+					response.Fail("INTERNAL", "could not check scope approvals", nil))
+				return
+			}
+			if !has {
+				response.WriteJSON(w, http.StatusBadRequest,
+					response.Fail("SPECIAL_SCOPE_REQUIRES_REQUEST",
+						"scope '"+t+"' requires an approved scope-request for this client", nil))
+				return
+			}
+		}
+		if err := oauth.ValidateClientScopeSplit(newRequired, newOptional, policyRow.AllowedClientScopes); err != nil {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED", err.Error(), nil))
+			return
+		}
+		updates["required_scopes"] = newRequired
+		updates["optional_scopes"] = newOptional
+		updates["allowed_scopes"] = oauth.UnionScopes(newRequired, newOptional)
 	}
 	if len(updates) == 0 {
 		response.WriteJSON(w, http.StatusBadRequest,

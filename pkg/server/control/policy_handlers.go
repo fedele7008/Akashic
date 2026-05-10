@@ -59,16 +59,17 @@ func (s *Server) adminGetPolicy(w http.ResponseWriter, r *http.Request) {
 // Pointer fields preserve the "leave unchanged" / "set to false"
 // distinction the policy.Service.Update method needs.
 type adminPatchPolicyRequest struct {
-	PasswordMinLength              *int   `json:"password_min_length,omitempty"`
-	PasswordRequireUppercase       *bool  `json:"password_require_uppercase,omitempty"`
-	PasswordRequireNumber          *bool  `json:"password_require_number,omitempty"`
-	PasswordRequireSpecial         *bool  `json:"password_require_special,omitempty"`
-	SignupEnabled                  *bool  `json:"signup_enabled,omitempty"`
-	UIDChangeCooldownDays          *int   `json:"uid_change_cooldown_days,omitempty"`
-	AccessTokenTTLSeconds          *int   `json:"access_token_ttl_seconds,omitempty"`
-	RefreshTokenSlidingTTLSeconds  *int   `json:"refresh_token_sliding_ttl_seconds,omitempty"`
-	RefreshTokenAbsoluteTTLSeconds *int   `json:"refresh_token_absolute_ttl_seconds,omitempty"`
-	CallerUserID                   string `json:"caller_user_id,omitempty"`
+	PasswordMinLength              *int    `json:"password_min_length,omitempty"`
+	PasswordRequireUppercase       *bool   `json:"password_require_uppercase,omitempty"`
+	PasswordRequireNumber          *bool   `json:"password_require_number,omitempty"`
+	PasswordRequireSpecial         *bool   `json:"password_require_special,omitempty"`
+	SignupEnabled                  *bool   `json:"signup_enabled,omitempty"`
+	UIDChangeCooldownDays          *int    `json:"uid_change_cooldown_days,omitempty"`
+	AccessTokenTTLSeconds          *int    `json:"access_token_ttl_seconds,omitempty"`
+	RefreshTokenSlidingTTLSeconds  *int    `json:"refresh_token_sliding_ttl_seconds,omitempty"`
+	RefreshTokenAbsoluteTTLSeconds *int    `json:"refresh_token_absolute_ttl_seconds,omitempty"`
+	AllowedClientScopes            *string `json:"allowed_client_scopes,omitempty"`
+	CallerUserID                   string  `json:"caller_user_id,omitempty"`
 }
 
 func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
@@ -91,6 +92,7 @@ func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
 		AccessTokenTTLSeconds:          req.AccessTokenTTLSeconds,
 		RefreshTokenSlidingTTLSeconds:  req.RefreshTokenSlidingTTLSeconds,
 		RefreshTokenAbsoluteTTLSeconds: req.RefreshTokenAbsoluteTTLSeconds,
+		AllowedClientScopes:            req.AllowedClientScopes,
 	}
 	if req.CallerUserID != "" {
 		callerID, err := uuid.Parse(req.CallerUserID)
@@ -153,6 +155,9 @@ func changedPolicyFields(req adminPatchPolicyRequest) []string {
 	}
 	if req.RefreshTokenAbsoluteTTLSeconds != nil {
 		out = append(out, "refresh_token_absolute_ttl_seconds")
+	}
+	if req.AllowedClientScopes != nil {
+		out = append(out, "allowed_client_scopes")
 	}
 	return out
 }

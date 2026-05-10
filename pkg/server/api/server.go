@@ -94,6 +94,12 @@ type Server struct {
 	// the auth-server uses for /authorize gating; co-locating the
 	// reads/writes here keeps audit trails consistent.
 	consentRepo *repository.OAuthConsentRepository
+
+	// Phase B portal-side scope-request workflow. Read by client
+	// write paths (gate special scopes against approval); read +
+	// written by `/clients/<id>/scope-requests` for owner-side
+	// submission and status display.
+	scopeRequestRepo *repository.OAuthScopeRequestRepository
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -139,6 +145,16 @@ func (s *Server) SetConsentRepo(r *repository.OAuthConsentRepository) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.consentRepo = r
+}
+
+// SetScopeRequestRepo wires the special-scope approval-workflow
+// repository. Used by the api-server's `/clients/<id>/scope-requests`
+// list + submit endpoints (owner-scoped) and by the client write
+// paths' special-scope gate.
+func (s *Server) SetScopeRequestRepo(r *repository.OAuthScopeRequestRepository) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.scopeRequestRepo = r
 }
 
 // SetBootstrapManager wires the bootstrap-state checker so signup

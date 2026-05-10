@@ -26,7 +26,7 @@
 import { LitElement, css, html } from "lit";
 import { customElement, state } from "lit/decorators.js";
 
-import { apiCall, type ApiResult } from "../lib/api";
+import { apiCall, apiCallPublic, type ApiResult } from "../lib/api";
 import { dispatchNeedsSignin, renderNeedsSignin } from "../lib/needs-signin";
 
 interface ClientView {
@@ -38,6 +38,8 @@ interface ClientView {
   public: boolean;
   redirect_uris: string;
   allowed_scopes: string;
+  required_scopes: string;
+  optional_scopes: string;
   auth_types: string;
   built_in: boolean;
   require_pkce: boolean;
@@ -45,6 +47,27 @@ interface ClientView {
   created_at: string;
   updated_at: string;
 }
+
+interface AllowedClientScopes {
+  allowed_client_scopes: string;
+  special_scopes: string[];
+}
+
+interface ScopeRequestView {
+  id: string;
+  client_id: string;
+  scope: string;
+  reason: string;
+  proposed_access_token_ttl_seconds?: number;
+  proposed_refresh_token_sliding_ttl_seconds?: number;
+  proposed_refresh_token_absolute_ttl_seconds?: number;
+  status: "pending" | "approved" | "rejected";
+  submitted_at: string;
+  reviewed_at?: string;
+  decision_note?: string;
+}
+
+type ScopeMode = "disabled" | "required" | "optional";
 
 interface CreatedClient {
   client: ClientView;
@@ -66,7 +89,10 @@ type View =
   | { kind: "create" }
   | { kind: "created"; result: CreatedClient }
   | { kind: "rotate-confirm"; target: ClientView }
-  | { kind: "rotated"; client: ClientView; result: RotateSecretResult };
+  | { kind: "rotated"; client: ClientView; result: RotateSecretResult }
+  // Phase B portal-side: per-client scope management — required/optional
+  // matrix + special-scope request submission + history.
+  | { kind: "scopes"; client: ClientView };
 
 @customElement("akashic-clients")
 export class AkashicClients extends LitElement {
@@ -88,10 +114,36 @@ export class AkashicClients extends LitElement {
     redirectURI: "",
     description: "",
     requirePKCE: true,
+    // Phase B: scope tristate map. openid is always required at
+    // start (OIDC mandatory); other scopes default to optional so
+    // the developer opts them in explicitly.
+    scopeModes: {} as Record<string, ScopeMode>,
   };
   @state() private formError: string | null = null;
   @state() private fieldErrors: Record<string, string> = {};
   @state() private submitting = false;
+
+  // Phase B: tenant scope policy. Fetched once on mount via the
+  // public /allowed-client-scopes endpoint; used by the create form
+  // and the per-client scopes view to render the matrix.
+  @state() private allowedScopes: AllowedClientScopes | null = null;
+
+  // Per-client scope-management state (the `scopes` view).
+  @state() private scopesForm = {
+    modes: {} as Record<string, ScopeMode>,
+  };
+  @state() private scopesSaving = false;
+  @state() private scopesError: string | null = null;
+  @state() private scopeRequests: ScopeRequestView[] = [];
+  @state() private requestForm = {
+    showing: false,
+    reason: "",
+    accessTTL: "",
+    refreshSlidingTTL: "",
+    refreshAbsoluteTTL: "",
+    submitting: false,
+    error: null as string | null,
+  };
 
   // Rotate-flow state.
   @state() private rotating = false;
@@ -349,6 +401,18 @@ export class AkashicClients extends LitElement {
   override connectedCallback(): void {
     super.connectedCallback();
     void this.loadClients();
+    void this.loadAllowedScopes();
+  }
+
+  // Fetch the tenant-allowed scope policy. Public endpoint — no
+  // bearer needed. Failure is non-fatal: the create form falls
+  // back to "openid profile email" so a brief network blip
+  // doesn't block registration.
+  private async loadAllowedScopes() {
+    const res = await apiCallPublic<AllowedClientScopes>("/allowed-client-scopes");
+    if (res.ok) {
+      this.allowedScopes = res.data;
+    }
   }
 
   // ─── data ────────────────────────────────────────────────────────
@@ -394,6 +458,8 @@ export class AkashicClients extends LitElement {
         return this.renderRotateConfirm(this.view.target);
       case "rotated":
         return this.renderRotated(this.view.client, this.view.result);
+      case "scopes":
+        return this.renderScopes(this.view.client);
     }
   }
 
@@ -464,6 +530,9 @@ export class AkashicClients extends LitElement {
             : deleting
               ? this.renderDeleteConfirm(c)
               : html`
+                  <button
+                    @click=${() => this.startScopes(c)}
+                  >Scopes</button>
                   ${!c.public
                     ? html`<button
                         @click=${() => this.startRotate(c)}
@@ -549,12 +618,27 @@ export class AkashicClients extends LitElement {
   // ─── create view ─────────────────────────────────────────────────
 
   private startCreate() {
+    // Seed scope modes: openid required (OIDC mandatory), email +
+    // profile optional. Other tenant-allowed scopes default to
+    // "disabled" so the developer opts them in explicitly. Special
+    // scopes (e.g. offline_access) are NOT in the matrix — they
+    // require the post-creation scope-request workflow.
+    const seed: Record<string, ScopeMode> = {};
+    const allowed = this.allowedScopes?.allowed_client_scopes ?? "openid profile email";
+    const specials = new Set(this.allowedScopes?.special_scopes ?? ["offline_access"]);
+    for (const tok of allowed.split(/\s+/).filter(Boolean)) {
+      if (specials.has(tok)) continue;
+      if (tok === "openid") seed[tok] = "required";
+      else if (tok === "email" || tok === "profile") seed[tok] = "optional";
+      else seed[tok] = "disabled";
+    }
     this.form = {
       name: "",
       clientType: "WEB",
       redirectURI: "",
       description: "",
       requirePKCE: true,
+      scopeModes: seed,
     };
     this.formError = null;
     this.fieldErrors = {};
@@ -683,6 +767,21 @@ export class AkashicClients extends LitElement {
             `
           : ""}
 
+        <fieldset part="radio-group">
+          <legend part="field-label">Scopes</legend>
+          <p part="field-hint" style="margin-top: 0;">
+            Per scope, pick how this client uses it. <strong>Required</strong>
+            (always requested; consent locks it on) ·
+            <strong>Optional</strong> (consent shows a user-toggleable
+            checkbox) · <strong>Disabled</strong> (this client doesn't
+            request it). Special scopes like
+            <code>offline_access</code> need admin approval — request
+            them after registering.
+          </p>
+          ${this.renderScopeMatrix(f.scopeModes, (next) =>
+            (this.form = { ...f, scopeModes: next }))}
+        </fieldset>
+
         <div part="actions">
           <button
             type="submit"
@@ -719,6 +818,22 @@ export class AkashicClients extends LitElement {
     if (this.form.clientType === "WEB" && !this.form.requirePKCE) {
       payload.require_pkce = false;
     }
+    // Phase B: pack the scope tristate map into the split fields.
+    // Empty "" is a valid value; the server's create defaults only
+    // kick in when BOTH split fields are empty AND legacy
+    // `allowed_scopes` is absent — which we never send here.
+    const required = Object.entries(this.form.scopeModes)
+      .filter(([, m]) => m === "required")
+      .map(([s]) => s)
+      .sort()
+      .join(" ");
+    const optional = Object.entries(this.form.scopeModes)
+      .filter(([, m]) => m === "optional")
+      .map(([s]) => s)
+      .sort()
+      .join(" ");
+    payload.required_scopes = required;
+    payload.optional_scopes = optional;
 
     const res = await apiCall<CreatedClient>("/clients", {
       method: "POST",
@@ -765,6 +880,346 @@ export class AkashicClients extends LitElement {
   private async refreshListSilent() {
     const res = await apiCall<{ clients: ClientView[] }>("/clients/mine");
     if (res.ok) this.clients = res.data.clients;
+  }
+
+  // ─── scope matrix (shared by create + scopes view) ──────────────
+
+  /**
+   * Render the per-scope tristate selector. Used by both the create
+   * form and the post-creation `scopes` view. The list of scopes
+   * comes from the tenant policy's `allowed_client_scopes`, minus
+   * any special scopes (those go through the request workflow).
+   */
+  private renderScopeMatrix(
+    modes: Record<string, ScopeMode>,
+    onChange: (next: Record<string, ScopeMode>) => void,
+  ) {
+    const allowed = this.allowedScopes?.allowed_client_scopes ?? "";
+    const specials = new Set(this.allowedScopes?.special_scopes ?? []);
+    const tokens = allowed
+      .split(/\s+/)
+      .filter(Boolean)
+      .filter((t) => !specials.has(t))
+      .sort();
+
+    if (tokens.length === 0) {
+      return html`<p part="field-hint">
+        Tenant policy doesn't allow any non-special scopes yet —
+        contact the operator.
+      </p>`;
+    }
+
+    const setMode = (scope: string, mode: ScopeMode) => {
+      onChange({ ...modes, [scope]: mode });
+    };
+
+    return html`
+      <div part="scope-matrix">
+        ${tokens.map((scope) => {
+          const mode = modes[scope] ?? "disabled";
+          const isOpenID = scope === "openid";
+          // openid is OIDC-mandatory: the consent screen + auth-server
+          // both require it. Lock it on Required so a developer can't
+          // accidentally disable it. Server would reject the disabled
+          // form anyway with `invalid_scope` at /authorize, but
+          // disabling the radio is sharper UX.
+          return html`
+            <div part="scope-row" data-scope=${scope}>
+              <code part="scope-name">${scope}</code>
+              ${(["disabled", "required", "optional"] as ScopeMode[]).map(
+                (opt) => html`
+                  <label part="scope-mode">
+                    <input
+                      type="radio"
+                      name="scope-${scope}"
+                      value=${opt}
+                      .checked=${mode === opt}
+                      ?disabled=${isOpenID && opt !== "required"}
+                      @change=${() => setMode(scope, opt)}
+                    />
+                    <span>${opt}</span>
+                  </label>
+                `,
+              )}
+            </div>
+          `;
+        })}
+      </div>
+    `;
+  }
+
+  // ─── scopes view (per-client) ────────────────────────────────────
+
+  private async startScopes(client: ClientView) {
+    // Seed modes from the row's stored required+optional. Legacy
+    // rows fall back to allowed_scopes as required.
+    const seed: Record<string, ScopeMode> = {};
+    const required = client.required_scopes || client.allowed_scopes;
+    for (const tok of required.split(/\s+/).filter(Boolean)) {
+      seed[tok] = "required";
+    }
+    for (const tok of (client.optional_scopes ?? "").split(/\s+/).filter(Boolean)) {
+      seed[tok] = "optional";
+    }
+    this.scopesForm = { modes: seed };
+    this.scopesError = null;
+    this.scopesSaving = false;
+    this.scopeRequests = [];
+    this.requestForm = {
+      showing: false,
+      reason: "",
+      accessTTL: "",
+      refreshSlidingTTL: "",
+      refreshAbsoluteTTL: "",
+      submitting: false,
+      error: null,
+    };
+    this.view = { kind: "scopes", client };
+    void this.loadScopeRequests(client.client_id);
+  }
+
+  private async loadScopeRequests(clientID: string) {
+    const res = await apiCall<{ scope_requests: ScopeRequestView[] }>(
+      `/clients/${encodeURIComponent(clientID)}/scope-requests`,
+    );
+    if (res.ok) {
+      this.scopeRequests = res.data.scope_requests;
+    }
+  }
+
+  private renderScopes(client: ClientView) {
+    const f = this.scopesForm;
+    const reqForm = this.requestForm;
+    const specials = this.allowedScopes?.special_scopes ?? ["offline_access"];
+    const hasPendingSpecial = this.scopeRequests.some(
+      (r) => r.status === "pending" && specials.includes(r.scope),
+    );
+
+    return html`
+      <div part="header">
+        <div part="header-text">
+          <h2 part="header-title">Scopes for ${client.name}</h2>
+          <p part="header-sub">
+            <code>${client.client_id}</code> · choose required vs.
+            optional, or request a special scope.
+          </p>
+        </div>
+      </div>
+
+      ${this.scopesError
+        ? html`<p part="error" role="alert">${this.scopesError}</p>`
+        : ""}
+
+      <fieldset part="radio-group">
+        <legend part="field-label">Standard scopes</legend>
+        ${this.renderScopeMatrix(f.modes, (next) =>
+          (this.scopesForm = { modes: next }))}
+        <div part="actions">
+          <button
+            part="button-primary"
+            ?disabled=${this.scopesSaving}
+            @click=${() => void this.saveScopes(client)}
+          >
+            ${this.scopesSaving ? "Saving…" : "Save scopes"}
+          </button>
+          <button
+            type="button"
+            ?disabled=${this.scopesSaving}
+            @click=${() => (this.view = { kind: "list" })}
+          >Back</button>
+        </div>
+      </fieldset>
+
+      <fieldset part="radio-group" style="margin-top: 1.5rem;">
+        <legend part="field-label">Special-scope requests</legend>
+        <p part="field-hint">
+          Special scopes need admin approval. Submit a request with
+          your reason and (optionally) proposed token-lifetime
+          policy. Once approved, the scope unlocks above.
+        </p>
+
+        ${this.scopeRequests.length === 0
+          ? html`<p part="field-hint">
+              No requests submitted for this client yet.
+            </p>`
+          : html`
+              <ul part="scope-request-list">
+                ${this.scopeRequests.map(
+                  (r) => html`
+                    <li part="scope-request-row" data-status=${r.status}>
+                      <code>${r.scope}</code> · <strong>${r.status}</strong>
+                      <span part="field-hint">
+                        submitted ${new Date(r.submitted_at).toLocaleString()}
+                      </span>
+                      ${r.decision_note
+                        ? html`<div part="field-hint">
+                            Note: ${r.decision_note}
+                          </div>`
+                        : ""}
+                    </li>
+                  `,
+                )}
+              </ul>
+            `}
+
+        ${reqForm.showing
+          ? this.renderScopeRequestForm(client)
+          : hasPendingSpecial
+            ? html`<p part="field-hint">
+                A pending special-scope request exists. Wait for
+                operator review before submitting another.
+              </p>`
+            : html`<button
+                @click=${() =>
+                  (this.requestForm = { ...reqForm, showing: true })}
+              >Request offline_access</button>`}
+      </fieldset>
+    `;
+  }
+
+  private renderScopeRequestForm(client: ClientView) {
+    const f = this.requestForm;
+    const update = (patch: Partial<typeof this.requestForm>) =>
+      (this.requestForm = { ...f, ...patch });
+    return html`
+      <div part="scope-request-form">
+        <label part="field">
+          <span part="field-label">Reason (required)</span>
+          <textarea
+            part="field-input"
+            rows="3"
+            .value=${f.reason}
+            @input=${(e: Event) =>
+              update({ reason: (e.target as HTMLTextAreaElement).value })}
+            placeholder="e.g. background sync of documents while user is offline"
+          ></textarea>
+        </label>
+        <label part="field">
+          <span part="field-label">Proposed access-token TTL (optional)</span>
+          <input
+            part="field-input"
+            type="text"
+            .value=${f.accessTTL}
+            @input=${(e: Event) =>
+              update({ accessTTL: (e.target as HTMLInputElement).value })}
+            placeholder="e.g. 30s, 5m, 1h"
+          />
+        </label>
+        <label part="field">
+          <span part="field-label">Proposed refresh sliding TTL (optional)</span>
+          <input
+            part="field-input"
+            type="text"
+            .value=${f.refreshSlidingTTL}
+            @input=${(e: Event) =>
+              update({ refreshSlidingTTL: (e.target as HTMLInputElement).value })}
+            placeholder="e.g. 7d"
+          />
+        </label>
+        <label part="field">
+          <span part="field-label">Proposed refresh absolute TTL (optional)</span>
+          <input
+            part="field-input"
+            type="text"
+            .value=${f.refreshAbsoluteTTL}
+            @input=${(e: Event) =>
+              update({ refreshAbsoluteTTL: (e.target as HTMLInputElement).value })}
+            placeholder="e.g. 30d"
+          />
+        </label>
+        ${f.error ? html`<p part="error">${f.error}</p>` : ""}
+        <div part="actions">
+          <button
+            part="button-primary"
+            ?disabled=${f.submitting}
+            @click=${() => void this.submitScopeRequest(client.client_id)}
+          >${f.submitting ? "Submitting…" : "Submit request"}</button>
+          <button
+            ?disabled=${f.submitting}
+            @click=${() =>
+              (this.requestForm = { ...f, showing: false, error: null })}
+          >Cancel</button>
+        </div>
+      </div>
+    `;
+  }
+
+  private async saveScopes(client: ClientView) {
+    this.scopesSaving = true;
+    this.scopesError = null;
+    const required = Object.entries(this.scopesForm.modes)
+      .filter(([, m]) => m === "required")
+      .map(([s]) => s)
+      .sort()
+      .join(" ");
+    const optional = Object.entries(this.scopesForm.modes)
+      .filter(([, m]) => m === "optional")
+      .map(([s]) => s)
+      .sort()
+      .join(" ");
+    const res = await apiCall<{ updated: boolean }>(
+      `/clients/${encodeURIComponent(client.client_id)}`,
+      {
+        method: "PATCH",
+        json: { required_scopes: required, optional_scopes: optional },
+      },
+    );
+    this.scopesSaving = false;
+    if (!res.ok) {
+      this.scopesError = res.message;
+      return;
+    }
+    // Refresh the list so the next time we hit the row's button
+    // we see the saved state. Then go back to list.
+    await this.refreshListSilent();
+    this.view = { kind: "list" };
+  }
+
+  private async submitScopeRequest(clientID: string) {
+    const f = this.requestForm;
+    if (!f.reason.trim()) {
+      this.requestForm = { ...f, error: "Reason is required." };
+      return;
+    }
+    this.requestForm = { ...f, submitting: true, error: null };
+    const body: Record<string, unknown> = {
+      scope: "offline_access",
+      reason: f.reason.trim(),
+    };
+    const parsedAccess = parseDurationStr(f.accessTTL);
+    const parsedSliding = parseDurationStr(f.refreshSlidingTTL);
+    const parsedAbsolute = parseDurationStr(f.refreshAbsoluteTTL);
+    if (parsedAccess === null || parsedSliding === null || parsedAbsolute === null) {
+      this.requestForm = {
+        ...f,
+        submitting: false,
+        error: "Bad duration. Use forms like 30s, 5m, 7d.",
+      };
+      return;
+    }
+    if (parsedAccess > 0) body.proposed_access_token_ttl_seconds = parsedAccess;
+    if (parsedSliding > 0) body.proposed_refresh_token_sliding_ttl_seconds = parsedSliding;
+    if (parsedAbsolute > 0) body.proposed_refresh_token_absolute_ttl_seconds = parsedAbsolute;
+
+    const res = await apiCall<{ scope_request: ScopeRequestView }>(
+      `/clients/${encodeURIComponent(clientID)}/scope-requests`,
+      { method: "POST", json: body },
+    );
+    if (!res.ok) {
+      this.requestForm = { ...f, submitting: false, error: res.message };
+      return;
+    }
+    // Reload history + collapse the form.
+    await this.loadScopeRequests(clientID);
+    this.requestForm = {
+      showing: false,
+      reason: "",
+      accessTTL: "",
+      refreshSlidingTTL: "",
+      refreshAbsoluteTTL: "",
+      submitting: false,
+      error: null,
+    };
   }
 
   // ─── created (post-create result) ────────────────────────────────
@@ -930,6 +1385,32 @@ export class AkashicClients extends LitElement {
       // operator can still triple-click the monospace value to select.
     }
   }
+}
+
+/**
+ * parseDurationStr parses single-unit Go-style durations: 30s, 5m,
+ * 2h, 30d. Returns seconds. Empty string returns 0 (caller treats
+ * 0 as "field not supplied"). Returns null on parse failure so the
+ * caller can surface a typed error.
+ */
+function parseDurationStr(raw: string): number | null {
+  const trimmed = raw.trim();
+  if (trimmed === "") return 0;
+  const m = /^(\d+)\s*([smhd])$/i.exec(trimmed);
+  if (!m) return null;
+  const n = parseInt(m[1], 10);
+  if (!Number.isFinite(n) || n <= 0) return null;
+  switch (m[2].toLowerCase()) {
+    case "s":
+      return n;
+    case "m":
+      return n * 60;
+    case "h":
+      return n * 60 * 60;
+    case "d":
+      return n * 24 * 60 * 60;
+  }
+  return null;
 }
 
 declare global {

@@ -66,6 +66,13 @@ type Server struct {
 	// policySvc backs the Phase 8c.6 GET/PATCH /policy endpoints.
 	// Same nil-tolerant pattern as the other Set* fields.
 	policySvc *policy.Service
+
+	// scopeRequestRepo backs the Phase B special-scope approval
+	// workflow: clients_handlers reads it to gate special scopes
+	// against approval, and scope_requests_handlers exposes the
+	// list/submit/approve/reject endpoints. Same nil-tolerant
+	// pattern.
+	scopeRequestRepo *repository.OAuthScopeRequestRepository
 }
 
 // SetDB wires the GORM handle into the control server. Called from
@@ -97,6 +104,14 @@ func (s *Server) SetUserRepo(repo *repository.UserRepository) {
 // the Phase 8c.6 GET/PATCH /policy endpoints.
 func (s *Server) SetPolicyService(p *policy.Service) {
 	s.policySvc = p
+}
+
+// SetScopeRequestRepo wires the special-scope approval-workflow
+// repository (Phase B). When nil, special-scope endpoints return
+// 503 and the client-write path's special-scope gate fails closed
+// — special scopes can't be set without it.
+func (s *Server) SetScopeRequestRepo(r *repository.OAuthScopeRequestRepository) {
+	s.scopeRequestRepo = r
 }
 
 // SetAPIServer wires the API server's state manager into the control

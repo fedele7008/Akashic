@@ -47,8 +47,15 @@ type CreateParams struct {
 	// /authorize.
 	RedirectURIs string
 	// Space-separated scope allowlist. Pass "" to use the model's
-	// default of "openid profile email".
+	// default of "openid profile email". Maintained as the union of
+	// `RequiredScopes` and `OptionalScopes` for the post-Phase-A
+	// callers that supply both.
 	AllowedScopes string
+	// Phase A: required vs optional scope split. Either or both may
+	// be empty for legacy calls; in that case the consent screen
+	// treats AllowedScopes as required (see oauth.EffectiveRequiredScopes).
+	RequiredScopes string
+	OptionalScopes string
 	// Owner-scoping. Set for tenant-developer-side calls (api-server
 	// /clients with bearer auth — token's `sub` is the owner). Leave
 	// nil for operator-side calls (control-plane /clients with mTLS —
@@ -121,6 +128,8 @@ func Create(ctx context.Context, db *gorm.DB, p CreateParams) (*CreateResult, er
 		HomepageURL:      p.HomepageURL,
 		RedirectURIs:     p.RedirectURIs,
 		AllowedScopes:    scopes,
+		RequiredScopes:   p.RequiredScopes,
+		OptionalScopes:   p.OptionalScopes,
 		AuthTypes:        string(models.AuthTypeAuthorizationCode),
 		BuiltIn:          false,
 		Public:           p.Public,

@@ -200,6 +200,13 @@ type CreateClientRequest struct {
 	// (→ default true) from "operator explicitly set false". Forced
 	// true for SPA regardless.
 	RequirePKCE *bool `json:"require_pkce,omitempty"`
+	// Phase A: required/optional scope split. Either may be empty;
+	// when both empty the control plane defaults to
+	// `required_scopes = "openid profile email"`. Special scopes
+	// (e.g. `offline_access`) are rejected here — they must be
+	// requested via the scope-request workflow (Phase B).
+	RequiredScopes string `json:"required_scopes,omitempty"`
+	OptionalScopes string `json:"optional_scopes,omitempty"`
 	// IsTenantPortal marks this client as first-party (operator-
 	// owned). Any number of rows may carry the flag — operators
 	// flag each first-party app they register. Operator-only (the
@@ -222,6 +229,8 @@ type ClientView struct {
 	Public         bool   `json:"public"`
 	RedirectURIs   string `json:"redirect_uris"`
 	AllowedScopes  string `json:"allowed_scopes"`
+	RequiredScopes string `json:"required_scopes"`
+	OptionalScopes string `json:"optional_scopes"`
 	AuthTypes      string `json:"auth_types"`
 	BuiltIn        bool   `json:"built_in"`
 	RequirePKCE    bool   `json:"require_pkce"`
@@ -331,6 +340,8 @@ type UpdateClientRequest struct {
 	HomepageURL    *string `json:"homepage_url,omitempty"`
 	RedirectURIs   *string `json:"redirect_uris,omitempty"`
 	AllowedScopes  *string `json:"allowed_scopes,omitempty"`
+	RequiredScopes *string `json:"required_scopes,omitempty"`
+	OptionalScopes *string `json:"optional_scopes,omitempty"`
 	RoleAllowlist  *string `json:"role_allowlist,omitempty"`
 	RequirePKCE    *bool   `json:"require_pkce,omitempty"`
 	IsTenantPortal *bool   `json:"is_tenant_portal,omitempty"`
@@ -606,6 +617,7 @@ type TenantPolicyView struct {
 	AccessTokenTTLSeconds          int     `json:"access_token_ttl_seconds"`
 	RefreshTokenSlidingTTLSeconds  int     `json:"refresh_token_sliding_ttl_seconds"`
 	RefreshTokenAbsoluteTTLSeconds int     `json:"refresh_token_absolute_ttl_seconds"`
+	AllowedClientScopes            string  `json:"allowed_client_scopes"`
 	UpdatedAt                      string  `json:"updated_at"`
 	UpdatedBy                      *string `json:"updated_by,omitempty"`
 }
@@ -618,10 +630,11 @@ type UpdatePolicyRequest struct {
 	PasswordRequireSpecial         *bool  `json:"password_require_special,omitempty"`
 	SignupEnabled                  *bool  `json:"signup_enabled,omitempty"`
 	UIDChangeCooldownDays          *int   `json:"uid_change_cooldown_days,omitempty"`
-	AccessTokenTTLSeconds          *int   `json:"access_token_ttl_seconds,omitempty"`
-	RefreshTokenSlidingTTLSeconds  *int   `json:"refresh_token_sliding_ttl_seconds,omitempty"`
-	RefreshTokenAbsoluteTTLSeconds *int   `json:"refresh_token_absolute_ttl_seconds,omitempty"`
-	CallerUserID                   string `json:"caller_user_id,omitempty"`
+	AccessTokenTTLSeconds          *int    `json:"access_token_ttl_seconds,omitempty"`
+	RefreshTokenSlidingTTLSeconds  *int    `json:"refresh_token_sliding_ttl_seconds,omitempty"`
+	RefreshTokenAbsoluteTTLSeconds *int    `json:"refresh_token_absolute_ttl_seconds,omitempty"`
+	AllowedClientScopes            *string `json:"allowed_client_scopes,omitempty"`
+	CallerUserID                   string  `json:"caller_user_id,omitempty"`
 }
 
 func (c *ControlClient) PolicyGet(ctx context.Context) (*TenantPolicyView, error) {
@@ -763,6 +776,114 @@ func (c *ControlClient) do(ctx context.Context, method, path string, body any) (
 		return nil, nil, fmt.Errorf("read response: %w", err)
 	}
 	return resp, respBody, nil
+}
+
+// ─── Phase B: scope requests ────────────────────────────────────
+
+type ScopeRequestView struct {
+	ID                                     string  `json:"id"`
+	ClientID                               string  `json:"client_id"`
+	Scope                                  string  `json:"scope"`
+	Reason                                 string  `json:"reason"`
+	ProposedAccessTokenTTLSeconds          *int    `json:"proposed_access_token_ttl_seconds,omitempty"`
+	ProposedRefreshTokenSlidingTTLSeconds  *int    `json:"proposed_refresh_token_sliding_ttl_seconds,omitempty"`
+	ProposedRefreshTokenAbsoluteTTLSeconds *int    `json:"proposed_refresh_token_absolute_ttl_seconds,omitempty"`
+	Status                                 string  `json:"status"`
+	SubmittedBy                            *string `json:"submitted_by,omitempty"`
+	SubmittedAt                            string  `json:"submitted_at"`
+	ReviewedBy                             *string `json:"reviewed_by,omitempty"`
+	ReviewedAt                             *string `json:"reviewed_at,omitempty"`
+	DecisionNote                           string  `json:"decision_note,omitempty"`
+}
+
+type SubmitScopeRequestRequest struct {
+	ClientID                               string `json:"client_id"`
+	Scope                                  string `json:"scope"`
+	Reason                                 string `json:"reason"`
+	ProposedAccessTokenTTLSeconds          *int   `json:"proposed_access_token_ttl_seconds,omitempty"`
+	ProposedRefreshTokenSlidingTTLSeconds  *int   `json:"proposed_refresh_token_sliding_ttl_seconds,omitempty"`
+	ProposedRefreshTokenAbsoluteTTLSeconds *int   `json:"proposed_refresh_token_absolute_ttl_seconds,omitempty"`
+	SubmittedBy                            string `json:"submitted_by,omitempty"`
+}
+
+type ReviewScopeRequestRequest struct {
+	ReviewerUserID string `json:"reviewer_user_id"`
+	DecisionNote   string `json:"decision_note,omitempty"`
+}
+
+func (c *ControlClient) ScopeRequestList(ctx context.Context, status string) ([]ScopeRequestView, error) {
+	path := "/scope-requests"
+	if status != "" {
+		path += "?status=" + url.QueryEscape(status)
+	}
+	resp, body, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		ScopeRequests []ScopeRequestView `json:"scope_requests"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed scope-requests payload: %w", err)
+	}
+	return wrap.ScopeRequests, nil
+}
+
+func (c *ControlClient) ScopeRequestSubmit(ctx context.Context, req *SubmitScopeRequestRequest) (*ScopeRequestView, error) {
+	resp, body, err := c.do(ctx, http.MethodPost, "/scope-requests", req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusCreated {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		ScopeRequest ScopeRequestView `json:"scope_request"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed scope-request payload: %w", err)
+	}
+	return &wrap.ScopeRequest, nil
+}
+
+func (c *ControlClient) ScopeRequestApprove(ctx context.Context, id string, req *ReviewScopeRequestRequest) (*ScopeRequestView, error) {
+	return c.scopeRequestReview(ctx, id, "approve", req)
+}
+
+func (c *ControlClient) ScopeRequestReject(ctx context.Context, id string, req *ReviewScopeRequestRequest) (*ScopeRequestView, error) {
+	return c.scopeRequestReview(ctx, id, "reject", req)
+}
+
+func (c *ControlClient) scopeRequestReview(ctx context.Context, id, action string, req *ReviewScopeRequestRequest) (*ScopeRequestView, error) {
+	resp, body, err := c.do(ctx, http.MethodPost, "/scope-requests/"+id+"/"+action, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		ScopeRequest ScopeRequestView `json:"scope_request"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed scope-request payload: %w", err)
+	}
+	return &wrap.ScopeRequest, nil
 }
 
 // parseControlError extracts the {error: {code, message, details}}

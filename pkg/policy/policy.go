@@ -137,6 +137,12 @@ type UpdateParams struct {
 	RefreshTokenSlidingTTLSeconds  *int
 	RefreshTokenAbsoluteTTLSeconds *int
 
+	// AllowedClientScopes is the tenant-wide ceiling on what scopes
+	// any client may request. Per-client `RequiredScopes` +
+	// `OptionalScopes` must each be a subset. Validated at write
+	// time as a non-empty space-separated set of valid scope tokens.
+	AllowedClientScopes *string
+
 	CallerID uuid.UUID
 }
 
@@ -193,6 +199,27 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 		}
 	}
 
+	if p.AllowedClientScopes != nil {
+		// Validate the proposed ceiling.  Empty is rejected — a
+		// tenant with no allowed scopes is a stuck deployment.
+		trimmed := *p.AllowedClientScopes
+		if oauth.ParseScopeSet(trimmed).IsEmpty() {
+			return nil, fmt.Errorf("%w: allowed_client_scopes cannot be empty",
+				ErrInvalidPolicy)
+		}
+		if err := oauth.ValidateScopeString(trimmed); err != nil {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidPolicy, err.Error())
+		}
+		// `openid` MUST be in the allowed set — Akashic is an OIDC
+		// IDP, and dropping it would render every client unable to
+		// request an id_token. Surface the issue with a clear message
+		// rather than letting clients fail at /authorize time.
+		if !oauth.ParseScopeSet(trimmed).Contains("openid") {
+			return nil, fmt.Errorf("%w: allowed_client_scopes must include 'openid'",
+				ErrInvalidPolicy)
+		}
+	}
+
 	updates := map[string]any{}
 	if p.PasswordMinLength != nil {
 		updates["password_min_length"] = *p.PasswordMinLength
@@ -220,6 +247,11 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 	}
 	if p.RefreshTokenAbsoluteTTLSeconds != nil {
 		updates["refresh_token_absolute_ttl_seconds"] = *p.RefreshTokenAbsoluteTTLSeconds
+	}
+	if p.AllowedClientScopes != nil {
+		// Canonicalise on write so the stored form is sorted +
+		// deduped — saves comparison churn on subsequent reads.
+		updates["allowed_client_scopes"] = oauth.ParseScopeSet(*p.AllowedClientScopes).String()
 	}
 	if p.CallerID != uuid.Nil {
 		updates["updated_by"] = p.CallerID

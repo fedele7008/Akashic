@@ -3,6 +3,7 @@ import type { SessionInfo } from '../api/client';
 import { ClientsPage } from './ClientsPage';
 import { OverviewPage } from './OverviewPage';
 import { PolicyPage } from './PolicyPage';
+import { ScopeRequestsPage } from './ScopeRequestsPage';
 import { ServerPage } from './ServerPage';
 import { SetupStatusBanner } from './SetupStatusBanner';
 import { Sidebar, type Page } from './Sidebar';
@@ -72,6 +73,7 @@ export function Dashboard({ session }: { session: SessionInfo }) {
           {page === 'users' && <UsersPage session={session} />}
           {page === 'clients' && <ClientsPage session={session} />}
           {page === 'policy' && <PolicyPage />}
+          {page === 'scope-requests' && <ScopeRequestsPage />}
           {page === 'server' && <ServerPage />}
           {page === 'tools' && <ToolsPage />}
         </div>
@@ -90,6 +92,8 @@ function pageTitleFor(page: Page): string {
       return 'OAuth clients';
     case 'policy':
       return 'Policy';
+    case 'scope-requests':
+      return 'Scope requests';
     case 'server':
       return 'Server';
     case 'tools':

@@ -842,3 +842,30 @@ details[open] summary {
 .tool-card:hover .tool-card-external {
   opacity: 1;
 }
+
+/* Phase B: scope-request status badges */
+.badge {
+  display: inline-block;
+  padding: 0.125rem 0.5rem;
+  border-radius: 4px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.025em;
+}
+.badge.pending {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+}
+.badge.approved {
+  background: rgba(22, 163, 74, 0.15);
+  color: #16a34a;
+}
+.badge.rejected {
+  background: rgba(220, 38, 38, 0.15);
+  color: #dc2626;
+}
+.btn.small {
+  font-size: 0.85rem;
+  padding: 0.375rem 0.75rem;
+}

@@ -825,3 +825,93 @@ func writeError(w http.ResponseWriter, status int, code, message string) {
 func stringContains(haystack, needle string) bool {
 	return strings.Contains(strings.ToLower(haystack), strings.ToLower(needle))
 }
+
+// ─── Phase B: scope-request workflow ────────────────────────────
+
+func (s *Server) handleListScopeRequests(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	status := r.URL.Query().Get("status")
+	rows, err := s.controlClient.ScopeRequestList(r.Context(), status)
+	if err != nil {
+		s.writeControlError(w, err, "listing scope requests")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"scope_requests": rows},
+	})
+}
+
+func (s *Server) handleSubmitScopeRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	var body SubmitScopeRequestRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		writeError(w, http.StatusBadRequest, "INVALID_REQUEST",
+			"Could not parse request body.")
+		return
+	}
+	defer r.Body.Close()
+	// Stamp the submitter via the session so audit history shows
+	// who actually clicked the button.
+	body.SubmittedBy = s.callerUserIDFromSession(r)
+
+	row, err := s.controlClient.ScopeRequestSubmit(r.Context(), &body)
+	if err != nil {
+		s.writeControlError(w, err, "submitting scope request")
+		return
+	}
+	writeJSON(w, http.StatusCreated, map[string]any{
+		"success": true,
+		"data":    map[string]any{"scope_request": row},
+	})
+}
+
+func (s *Server) handleApproveScopeRequest(w http.ResponseWriter, r *http.Request) {
+	s.scopeRequestReview(w, r, "approve")
+}
+
+func (s *Server) handleRejectScopeRequest(w http.ResponseWriter, r *http.Request) {
+	s.scopeRequestReview(w, r, "reject")
+}
+
+func (s *Server) scopeRequestReview(w http.ResponseWriter, r *http.Request, action string) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED",
+			"Missing scope-request id in path.")
+		return
+	}
+	var body ReviewScopeRequestRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		// Empty body is OK for reviews — decision_note is optional.
+		// Treat any decode error other than EOF as user error.
+		body = ReviewScopeRequestRequest{}
+	}
+	defer r.Body.Close()
+	body.ReviewerUserID = s.callerUserIDFromSession(r)
+
+	var (
+		row *ScopeRequestView
+		err error
+	)
+	if action == "approve" {
+		row, err = s.controlClient.ScopeRequestApprove(r.Context(), id, &body)
+	} else {
+		row, err = s.controlClient.ScopeRequestReject(r.Context(), id, &body)
+	}
+	if err != nil {
+		s.writeControlError(w, err, action+"ing scope request")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"scope_request": row},
+	})
+}

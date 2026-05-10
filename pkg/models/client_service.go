@@ -127,7 +127,35 @@ type ClientService struct {
 	// OIDC minimum. Tenant clients can request only what's listed
 	// here; scopes outside this set get filtered (or rejected at
 	// /authorize per the spec).
+	//
+	// **Maintained as the union of `RequiredScopes` and
+	// `OptionalScopes`** by the create/update path — readers can
+	// continue using this field as the legacy "all permitted scopes"
+	// list while new code that cares about the required-vs-optional
+	// distinction reads the split fields directly. See
+	// `oauth.UnionScopes` for the helper.
 	AllowedScopes string `gorm:"type:text;not null;default:'openid profile email'" json:"allowed_scopes"`
+
+	// RequiredScopes is the subset of scopes this client ALWAYS
+	// requests at /authorize, AND that the consent screen renders
+	// as locked checkboxes (the user must grant them to sign in).
+	// Empty in legacy rows → the consent rework treats AllowedScopes
+	// as required for backwards compatibility.
+	//
+	// Invariant: RequiredScopes ⊆ tenant policy `AllowedClientScopes`.
+	// Validated at create/update time; mid-flight policy tightening
+	// doesn't auto-clamp existing rows but new /authorize calls do
+	// re-check.
+	RequiredScopes string `gorm:"type:text;not null;default:''" json:"required_scopes"`
+
+	// OptionalScopes is the subset of scopes the client requests AND
+	// the consent screen renders as user-toggleable checkboxes.
+	// Granted scope set per-user = required ∪ user-checked optionals.
+	//
+	// Invariant: OptionalScopes ⊆ tenant `AllowedClientScopes`,
+	// AND RequiredScopes ∩ OptionalScopes = ∅ (a scope is either
+	// mandatory or à-la-carte; never both).
+	OptionalScopes string `gorm:"type:text;not null;default:''" json:"optional_scopes"`
 
 	// AuthTypes is the space-separated list of grant types this
 	// client service is authorized to use (corresponds to OAuth's

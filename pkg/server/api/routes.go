@@ -52,6 +52,11 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 		requirePublic(s.handleForgotPasswordHelp))
 	mux.HandleFunc("/users/password-policy",
 		requirePublic(s.handlePasswordPolicy))
+	// Phase B portal-side: tenant-allowed-client-scopes is read by
+	// the <akashic-clients> widget at register/edit time so the
+	// scope matrix renders against the tenant's ceiling.
+	mux.HandleFunc("/allowed-client-scopes",
+		requirePublic(s.handleAllowedClientScopes))
 
 	// Bearer-authenticated /users/me. Method-split: GET is open to any
 	// valid bearer (a third-party app the user has consented to may

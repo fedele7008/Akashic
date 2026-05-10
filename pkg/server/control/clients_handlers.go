@@ -53,6 +53,14 @@ type adminCreateClientRequest struct {
 	ClientType    string `json:"client_type"`
 	RedirectURIs  string `json:"redirect_uris"`
 	AllowedScopes string `json:"allowed_scopes,omitempty"`
+	// Phase A: split scope fields. Same accept rules as
+	// adminPatchClientRequest — supplying both `allowed_scopes`
+	// (legacy) and `required_scopes`/`optional_scopes` is rejected.
+	// On legacy input we map allowed_scopes → required_scopes (+
+	// empty optional). When neither side is supplied, defaults to
+	// `required_scopes = "openid profile email"`.
+	RequiredScopes string `json:"required_scopes,omitempty"`
+	OptionalScopes string `json:"optional_scopes,omitempty"`
 	// RequirePKCE: WEB clients only — operator-configurable, default
 	// true. Pointer (*bool) so we can distinguish "operator omitted"
 	// (→ default true) from "operator explicitly set false". Forced
@@ -76,6 +84,8 @@ type adminClientView struct {
 	Public         bool   `json:"public"`
 	RedirectURIs   string `json:"redirect_uris"`
 	AllowedScopes  string `json:"allowed_scopes"`
+	RequiredScopes string `json:"required_scopes"`
+	OptionalScopes string `json:"optional_scopes"`
 	AuthTypes      string `json:"auth_types"`
 	BuiltIn        bool   `json:"built_in"`
 	RequirePKCE    bool   `json:"require_pkce"`
@@ -114,6 +124,8 @@ func toAdminClientView(c *models.ClientService) adminClientView {
 		Public:                                 c.Public,
 		RedirectURIs:                           c.RedirectURIs,
 		AllowedScopes:                          c.AllowedScopes,
+		RequiredScopes:                         c.RequiredScopes,
+		OptionalScopes:                         c.OptionalScopes,
 		AuthTypes:                              c.AuthTypes,
 		BuiltIn:                                c.BuiltIn,
 		RequirePKCE:                            c.RequirePKCE,
@@ -280,6 +292,14 @@ type adminPatchClientRequest struct {
 	HomepageURL    *string `json:"homepage_url,omitempty"`
 	RedirectURIs   *string `json:"redirect_uris,omitempty"`
 	AllowedScopes  *string `json:"allowed_scopes,omitempty"`
+	// Phase A: required/optional scope split. Either field may be
+	// supplied; if EITHER is supplied, the server ALSO rebuilds
+	// `allowed_scopes = required ∪ optional` to maintain the
+	// legacy column's invariant. If `allowed_scopes` is supplied
+	// alongside (back-compat path), the server treats it as "all
+	// required" and zeroes optional — matches the pre-split shape.
+	RequiredScopes *string `json:"required_scopes,omitempty"`
+	OptionalScopes *string `json:"optional_scopes,omitempty"`
 	RoleAllowlist  *string `json:"role_allowlist,omitempty"`
 	RequirePKCE    *bool   `json:"require_pkce,omitempty"`
 	IsTenantPortal *bool   `json:"is_tenant_portal,omitempty"`
@@ -356,8 +376,86 @@ func (s *Server) handleAdminPatchClient(w http.ResponseWriter, r *http.Request, 
 		}
 		updates["redirect_uris"] = trimmed
 	}
-	if req.AllowedScopes != nil {
-		updates["allowed_scopes"] = strings.TrimSpace(*req.AllowedScopes)
+	// Scope handling — Phase A. Three input shapes accepted:
+	//   1. (legacy)  allowed_scopes only          → required = allowed, optional = ""
+	//   2. (Phase A) required_scopes / optional   → write the split + rebuild allowed_scopes
+	//   3. nothing                                → no scope updates
+	// Mixing #1 with #2 in the same request is rejected (operator
+	// must pick a model — we don't try to merge across them).
+	scopeMode1 := req.AllowedScopes != nil
+	scopeMode2 := req.RequiredScopes != nil || req.OptionalScopes != nil
+	if scopeMode1 && scopeMode2 {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED",
+				"send either allowed_scopes (legacy) OR required_scopes/optional_scopes — not both", nil))
+		return
+	}
+	if scopeMode1 || scopeMode2 {
+		// Need the live tenant ceiling for both branches.
+		var policyRow models.TenantPolicy
+		if err := s.db.WithContext(r.Context()).Where("id = ?", 1).First(&policyRow).Error; err != nil {
+			s.logger.App.Error("adminPatchClient: read policy for scopes", zap.Error(err))
+			response.WriteJSON(w, http.StatusInternalServerError,
+				response.Fail("INTERNAL", "could not read tenant policy", nil))
+			return
+		}
+		var newRequired, newOptional string
+		if scopeMode1 {
+			// Legacy: caller supplied allowed_scopes — interpret as
+			// "all required, no optional." This preserves the pre-
+			// Phase-A semantics for older callers.
+			newRequired = oauth.ParseScopeSet(*req.AllowedScopes).String()
+			newOptional = ""
+		} else {
+			if req.RequiredScopes != nil {
+				newRequired = oauth.ParseScopeSet(*req.RequiredScopes).String()
+			} else {
+				newRequired = c.RequiredScopes
+			}
+			if req.OptionalScopes != nil {
+				newOptional = oauth.ParseScopeSet(*req.OptionalScopes).String()
+			} else {
+				newOptional = c.OptionalScopes
+			}
+		}
+		// Special-scope gate: a special scope (e.g. `offline_access`)
+		// may appear in required/optional ONLY IF an approved
+		// scope-request row exists for (client_id, scope). Without
+		// that approval, reject with a dedicated error so the
+		// operator knows to submit a request via the Scope-requests
+		// admin page.
+		for _, t := range oauth.ParseScopes(newRequired + " " + newOptional) {
+			if !oauth.IsSpecialScope(t) {
+				continue
+			}
+			if s.scopeRequestRepo == nil {
+				response.WriteJSON(w, http.StatusServiceUnavailable,
+					response.Fail("API_NOT_READY",
+						"scope-request repository not yet wired", nil))
+				return
+			}
+			has, err := s.scopeRequestRepo.HasApproved(r.Context(), c.ClientID, t)
+			if err != nil {
+				s.logger.App.Error("adminPatchClient: HasApproved", zap.Error(err))
+				response.WriteJSON(w, http.StatusInternalServerError,
+					response.Fail("INTERNAL", "could not check scope approvals", nil))
+				return
+			}
+			if !has {
+				response.WriteJSON(w, http.StatusBadRequest,
+					response.Fail("SPECIAL_SCOPE_REQUIRES_REQUEST",
+						"scope '"+t+"' requires an approved scope-request for this client", nil))
+				return
+			}
+		}
+		if err := oauth.ValidateClientScopeSplit(newRequired, newOptional, policyRow.AllowedClientScopes); err != nil {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("VALIDATION_FAILED", err.Error(), nil))
+			return
+		}
+		updates["required_scopes"] = newRequired
+		updates["optional_scopes"] = newOptional
+		updates["allowed_scopes"] = oauth.UnionScopes(newRequired, newOptional)
 	}
 	if req.RoleAllowlist != nil {
 		updates["role_allowlist"] = strings.TrimSpace(*req.RoleAllowlist)
@@ -638,9 +736,54 @@ func (s *Server) handleAdminCreateClient(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	if req.AllowedScopes == "" {
-		req.AllowedScopes = "openid profile email"
+	// Resolve the required/optional/allowed scope triple. Three
+	// caller shapes accepted (matches PATCH semantics):
+	//   - required+optional supplied      → use them
+	//   - allowed_scopes supplied (legacy)→ map to required, empty optional
+	//   - nothing supplied                → default required="openid profile email"
+	// Mixing legacy `allowed_scopes` with split fields is rejected.
+	if req.AllowedScopes != "" && (req.RequiredScopes != "" || req.OptionalScopes != "") {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED",
+				"send either allowed_scopes (legacy) OR required_scopes/optional_scopes — not both", nil))
+		return
 	}
+	required := req.RequiredScopes
+	optional := req.OptionalScopes
+	if required == "" && optional == "" {
+		if req.AllowedScopes != "" {
+			required = req.AllowedScopes
+		} else {
+			required = "openid profile email"
+		}
+	}
+	required = oauth.ParseScopeSet(required).String()
+	optional = oauth.ParseScopeSet(optional).String()
+
+	// Reject special scopes via this path — they need the request
+	// workflow (Phase B).
+	for _, t := range oauth.ParseScopes(required + " " + optional) {
+		if oauth.IsSpecialScope(t) {
+			response.WriteJSON(w, http.StatusBadRequest,
+				response.Fail("SPECIAL_SCOPE_REQUIRES_REQUEST",
+					"scope '"+t+"' requires admin approval — submit a scope request rather than including it at create time", nil))
+			return
+		}
+	}
+	// Validate against the live tenant ceiling.
+	var policyRow models.TenantPolicy
+	if err := s.db.WithContext(r.Context()).Where("id = ?", 1).First(&policyRow).Error; err != nil {
+		s.logger.App.Error("adminCreateClient: read policy for scopes", zap.Error(err))
+		response.WriteJSON(w, http.StatusInternalServerError,
+			response.Fail("INTERNAL", "could not read tenant policy", nil))
+		return
+	}
+	if err := oauth.ValidateClientScopeSplit(required, optional, policyRow.AllowedClientScopes); err != nil {
+		response.WriteJSON(w, http.StatusBadRequest,
+			response.Fail("VALIDATION_FAILED", err.Error(), nil))
+		return
+	}
+	allowed := oauth.UnionScopes(required, optional)
 
 	requirePKCE := true
 	if !public && req.RequirePKCE != nil {
@@ -658,7 +801,9 @@ func (s *Server) handleAdminCreateClient(w http.ResponseWriter, r *http.Request)
 		Public:         public,
 		RequirePKCE:    requirePKCE,
 		RedirectURIs:   req.RedirectURIs,
-		AllowedScopes:  req.AllowedScopes,
+		AllowedScopes:  allowed,
+		RequiredScopes: required,
+		OptionalScopes: optional,
 		OwnerUserID:    nil,
 		IsTenantPortal: req.IsTenantPortal,
 	})

@@ -16,28 +16,63 @@
     <p class="policy-hint">{{.Description}}</p>
     {{end}}
 
-    <p style="margin: 16px 0 8px 0; color: var(--text);">
-      <strong>{{.ClientName}}</strong> would like to:
-    </p>
-    <ul class="scope-list">
-      {{range .Scopes}}
-      <li>
-        <code class="scope-code">{{.Code}}</code>
-        {{if .Description}}<span class="scope-desc">— {{.Description}}</span>{{end}}
-      </li>
-      {{end}}
-    </ul>
-
-    {{if .HomepageURL}}
-    <p class="cancel">
-      Learn more: <a href="{{.HomepageURL}}" target="_blank" rel="noopener noreferrer">{{.HomepageURL}}</a>
-    </p>
-    {{end}}
-
     <form method="POST" action="/consent/submit" autocomplete="off" style="margin-top: 24px;">
       <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
       <input type="hidden" name="return_to" value="{{.ReturnTo}}">
-      <div style="display: flex; gap: 12px; flex-direction: column;">
+
+      {{if .RequiredScopes}}
+      <p style="margin: 16px 0 8px 0; color: var(--text);">
+        <strong>{{.ClientName}}</strong> requires:
+      </p>
+      <ul class="scope-list">
+        {{range .RequiredScopes}}
+        <li>
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: not-allowed; opacity: 0.85;">
+            <input type="checkbox" checked disabled style="margin-top: 4px;">
+            <span>
+              <code class="scope-code">{{.Code}}</code>
+              {{if .Description}}<span class="scope-desc">— {{.Description}}</span>{{end}}
+            </span>
+          </label>
+        </li>
+        {{end}}
+      </ul>
+      <p class="policy-hint" style="font-size: 0.85em; margin-top: 4px;">
+        These are required for {{.ClientName}} to function. Approving
+        below grants them all.
+      </p>
+      {{end}}
+
+      {{if .OptionalScopes}}
+      <p style="margin: 20px 0 8px 0; color: var(--text);">
+        <strong>{{.ClientName}}</strong> also requests (optional):
+      </p>
+      <ul class="scope-list">
+        {{range .OptionalScopes}}
+        <li>
+          <label style="display: flex; align-items: flex-start; gap: 8px; cursor: pointer;">
+            <input type="checkbox" name="optional_scope" value="{{.Code}}" checked style="margin-top: 4px;">
+            <span>
+              <code class="scope-code">{{.Code}}</code>
+              {{if .Description}}<span class="scope-desc">— {{.Description}}</span>{{end}}
+            </span>
+          </label>
+        </li>
+        {{end}}
+      </ul>
+      <p class="policy-hint" style="font-size: 0.85em; margin-top: 4px;">
+        Uncheck any of these you don't want to share. Approving below
+        grants the required items plus whatever you've kept checked.
+      </p>
+      {{end}}
+
+      {{if .HomepageURL}}
+      <p class="cancel" style="margin-top: 16px;">
+        Learn more: <a href="{{.HomepageURL}}" target="_blank" rel="noopener noreferrer">{{.HomepageURL}}</a>
+      </p>
+      {{end}}
+
+      <div style="display: flex; gap: 12px; flex-direction: column; margin-top: 20px;">
         <button type="submit" name="decision" value="approve">
           Approve
         </button>

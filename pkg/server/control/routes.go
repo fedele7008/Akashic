@@ -128,4 +128,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/policy",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
 			s.handleAdminPolicy))
+
+	// Phase B: special-scope approval workflow.
+	//   GET  /scope-requests              → list (with optional ?status=)
+	//   POST /scope-requests              → submit a new pending request
+	//   POST /scope-requests/<id>/approve → approve (id-tail dispatched)
+	//   POST /scope-requests/<id>/reject  → reject
+	mux.HandleFunc("/scope-requests",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.requireBootstrapComplete(s.handleAdminScopeRequests)))
+	mux.HandleFunc("/scope-requests/",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.requireBootstrapComplete(s.handleAdminScopeRequestByID)))
 }

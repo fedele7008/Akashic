@@ -147,6 +147,10 @@ func (db *DB) AutoMigrate() error {
 		// the `offline_access` scope. See the model doc for the
 		// rotation invariant + chain-revocation-on-replay design.
 		&models.OAuthRefreshToken{},
+		// Phase B of scope policy: special-scope (e.g. offline_access)
+		// approval workflow. Pending → approved/rejected, with
+		// partial-unique constraint on (client, scope, pending).
+		&models.OAuthScopeRequest{},
 	}
 
 	if err := db.DB.AutoMigrate(modelList...); err != nil {

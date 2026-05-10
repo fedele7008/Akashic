@@ -65,6 +65,19 @@ type Config struct {
 	// per-CN rate limit so the user-visible behavior aligns.
 	BootstrapRateLimit int
 
+	// AdminRateLimit is the per-source-IP requests/minute cap on the
+	// general /api/* surface (everything except /api/bootstrap/*).
+	// The cap is shared across endpoints — a single page load that
+	// fans out to setup-status + session + policy + scope-requests
+	// + clients consumes one token per request. Default 240 (=4/sec
+	// sustained) is generous for a single admin's interactive use
+	// while still throttling abusive scanning. Operators with many
+	// concurrent admins behind a shared corporate proxy NAT may
+	// want to bump this; per-admin scoping happens automatically
+	// when X-Forwarded-For honors the real client IP via the
+	// `TrustedProxies` allowlist.
+	AdminRateLimit int
+
 	// RequestTimeout caps the duration of the BFF's outbound call to
 	// the control plane. Bootstrap is a single, blocking action; if
 	// it takes longer than this, something has gone wrong upstream.
@@ -194,6 +207,7 @@ func LoadConfig() (*Config, error) {
 	v.SetDefault("cert_watcher_debounce", "500ms")
 	v.SetDefault("trusted_proxies", "172.0.0.0/8")
 	v.SetDefault("bootstrap_rate_limit", 5)
+	v.SetDefault("admin_rate_limit", 240)
 	v.SetDefault("request_timeout", "10s")
 
 	// Phase 7: OAuth + sessions. These defaults assume the
@@ -234,6 +248,7 @@ func LoadConfig() (*Config, error) {
 		// trusted_proxies is comma-separated when supplied via env
 		TrustedProxies:     splitCSV(v.GetString("trusted_proxies")),
 		BootstrapRateLimit: v.GetInt("bootstrap_rate_limit"),
+		AdminRateLimit:     v.GetInt("admin_rate_limit"),
 		RequestTimeout:     v.GetDuration("request_timeout"),
 
 		OAuthIssuer:           v.GetString("oauth_issuer"),

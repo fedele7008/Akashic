@@ -132,6 +132,17 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 	if scope == "" {
 		scope = "openid"
 	}
+	// Phase C: auto-include the client's RequiredScopes if any are
+	// missing from the request. The client owner declared these as
+	// mandatory at registration time; the consent screen will lock
+	// their checkboxes so the user must grant them. Auto-adding
+	// here keeps sloppy client SDKs working — they'd otherwise need
+	// to list every required scope explicitly to avoid silently
+	// missing them. Legacy rows where RequiredScopes is empty fall
+	// back to the legacy AllowedScopes (everything required) per
+	// `oauth.EffectiveRequiredScopes`.
+	effectiveRequired := oauth.EffectiveRequiredScopes(client.RequiredScopes, client.AllowedScopes)
+	scope = oauth.UnionScopes(scope, effectiveRequired)
 
 	// Grant-type check: the client must be authorized to use
 	// authorization_code (its AuthTypes column must include it).

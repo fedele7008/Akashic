@@ -179,6 +179,12 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		AccessTokenTTLSeconds:          900,
 		RefreshTokenSlidingTTLSeconds:  30 * 24 * 60 * 60,
 		RefreshTokenAbsoluteTTLSeconds: 90 * 24 * 60 * 60,
+		// Default tenant-allowed scopes — the OIDC standard set.
+		// `offline_access` is intentionally absent from the default;
+		// it's a special scope that requires per-client approval via
+		// the scope-request workflow (Phase B). Operators who want
+		// to allow it tenant-wide can edit this on the Policy page.
+		AllowedClientScopes: "openid profile email",
 	}); err != nil {
 		return fmt.Errorf("seed tenant policy: %v", err)
 	}
@@ -193,6 +199,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// /token mints initial RTs on `offline_access` and rotates on
 	// `grant_type=refresh_token`.
 	refreshTokenRepo := repository.NewOAuthRefreshTokenRepository(app.DB.DB)
+	// Phase B: special-scope approval workflow repo. Read by
+	// client-write paths (gate special scopes); read+written by the
+	// /scope-requests admin endpoints.
+	scopeRequestRepo := repository.NewOAuthScopeRequestRepository(app.DB.DB)
 
 	// Initialize OAuth signing-key store (Phase 7).
 	// On first-ever startup the directory is empty and we generate a
@@ -385,6 +395,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// repo the auth-server uses for /authorize gating — single
 	// source of truth for grant rows.
 	app.APIServer.SetConsentRepo(consentRepo)
+	app.APIServer.SetScopeRequestRepo(scopeRequestRepo)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(
@@ -422,6 +433,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// service across all surfaces — operator edits via /policy
 	// and any signup/register call read the same row.
 	app.ControlServer.SetPolicyService(app.PolicyService)
+
+	// Phase B: hand the control plane the scope-request repo so
+	// the /scope-requests endpoints + the client-write special-scope
+	// gate can both reach it.
+	app.ControlServer.SetScopeRequestRepo(scopeRequestRepo)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil

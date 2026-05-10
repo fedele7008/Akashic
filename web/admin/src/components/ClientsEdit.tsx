@@ -1,11 +1,19 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ClientsApi,
+  PolicyApi,
+  ScopeRequestsApi,
   type ApiError,
   type ClientView,
+  type ScopeRequestView,
+  type TenantPolicy,
   type UpdateClientRequest,
 } from '../api/client';
-import { parseDurationToSeconds, formatSecondsAsDuration } from './PolicyPage';
+import {
+  canonicaliseScopes,
+  formatSecondsAsDuration,
+  parseDurationToSeconds,
+} from './PolicyPage';
 
 /**
  * ClientsEdit — Phase 8c.4.
@@ -37,9 +45,38 @@ export function ClientsEdit({
   const [description, setDescription] = useState(client.description ?? '');
   const [homepageURL, setHomepageURL] = useState(client.homepage_url ?? '');
   const [redirectURIs, setRedirectURIs] = useState(client.redirect_uris);
-  const [allowedScopes, setAllowedScopes] = useState(client.allowed_scopes);
   const [requirePKCE, setRequirePKCE] = useState(client.require_pkce);
   const [isTenantPortal, setIsTenantPortal] = useState(client.is_tenant_portal);
+
+  // Phase A scope split. The map is keyed by scope name → "required"
+  // | "optional" | "disabled". We fetch the tenant policy once on
+  // mount to know which scopes are even ALLOWED to appear in the
+  // selector; the row's existing required/optional values seed the
+  // initial state. Legacy rows (empty required + populated allowed)
+  // are migrated forward by treating allowed_scopes as required —
+  // mirrors the server-side `oauth.EffectiveRequiredScopes` fallback.
+  type ScopeMode = 'disabled' | 'required' | 'optional';
+  const [scopeModes, setScopeModes] = useState<Record<string, ScopeMode>>(() => {
+    const seed: Record<string, ScopeMode> = {};
+    const required = client.required_scopes || client.allowed_scopes;
+    for (const tok of required.split(/\s+/)) if (tok) seed[tok] = 'required';
+    for (const tok of (client.optional_scopes ?? '').split(/\s+/)) {
+      if (tok) seed[tok] = 'optional';
+    }
+    return seed;
+  });
+  const [tenantPolicy, setTenantPolicy] = useState<TenantPolicy | null>(null);
+  const [policyErr, setPolicyErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        setTenantPolicy(await PolicyApi.get());
+      } catch (e) {
+        setPolicyErr((e as Error).message);
+      }
+    })();
+  }, []);
 
   // Per-client TTL overrides — three-state UI per row:
   //   "<inherited>" (empty input)  → row uses tenant ceiling
@@ -107,9 +144,27 @@ export function ClientsEdit({
     if (redirectURIs.trim() !== client.redirect_uris) {
       req.redirect_uris = redirectURIs.trim();
     }
-    if (allowedScopes.trim() !== client.allowed_scopes) {
-      req.allowed_scopes = allowedScopes.trim();
-    }
+    // Build the canonical required/optional strings from the
+    // tristate map and diff against the row's stored values.
+    // Send only when something changed, in the new (Phase A) shape.
+    const newRequired = canonicaliseScopes(
+      Object.entries(scopeModes)
+        .filter(([, mode]) => mode === 'required')
+        .map(([s]) => s)
+        .join(' ')
+    );
+    const newOptional = canonicaliseScopes(
+      Object.entries(scopeModes)
+        .filter(([, mode]) => mode === 'optional')
+        .map(([s]) => s)
+        .join(' ')
+    );
+    const storedRequired = canonicaliseScopes(
+      client.required_scopes || client.allowed_scopes
+    );
+    const storedOptional = canonicaliseScopes(client.optional_scopes ?? '');
+    if (newRequired !== storedRequired) req.required_scopes = newRequired;
+    if (newOptional !== storedOptional) req.optional_scopes = newOptional;
     if (!client.public && requirePKCE !== client.require_pkce) {
       // SPA stays forced-true server-side regardless; only WEB
       // clients can toggle, so we only send for WEB.
@@ -254,16 +309,38 @@ export function ClientsEdit({
             />
           </label>
 
-          <label>
-            <div>Allowed scopes <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(space-separated)</span></div>
-            <input
-              type="text"
-              value={allowedScopes}
-              onChange={(e) => setAllowedScopes(e.target.value)}
-              disabled={submitting}
-              style={{ width: '100%' }}
-            />
-          </label>
+          <div className="panel" style={{ padding: '12px 16px' }}>
+            <div style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '6px' }}>
+              Scopes (per-client policy)
+            </div>
+            <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0, marginBottom: '12px' }}>
+              For each scope the tenant allows, pick how this client uses it:
+              <strong> Required</strong> (always requested; consent locks it
+              on) · <strong>Optional</strong> (consent renders a togglable
+              checkbox) · <strong>Disabled</strong> (this client doesn't
+              request it). Special scopes like <code>offline_access</code>
+              are gated by the scope-request workflow and don't appear
+              here even if listed in the tenant ceiling.
+            </p>
+            {policyErr && (
+              <p className="error" style={{ fontSize: '0.8125rem' }}>
+                Could not load tenant policy: {policyErr}
+              </p>
+            )}
+            {!tenantPolicy && !policyErr && (
+              <p className="hint" style={{ fontSize: '0.8125rem' }}>Loading tenant policy…</p>
+            )}
+            {tenantPolicy && (
+              <ScopeMatrix
+                allowed={tenantPolicy.allowed_client_scopes}
+                modes={scopeModes}
+                onChange={setScopeModes}
+                disabled={submitting}
+              />
+            )}
+          </div>
+
+          <SpecialScopesPanel clientID={client.client_id} />
 
           {!client.public && (
             <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '0.5rem' }}>
@@ -409,4 +486,178 @@ function diffTTLOverride(
   if (parsed !== stored) {
     setOverride(parsed);
   }
+}
+
+/**
+ * SpecialScopesPanel — Phase B (admin-side, READ-ONLY).
+ *
+ * Shows the scope-request history for the client being edited.
+ * Submission is intentionally NOT here — special-scope requests
+ * are submitted by client owners through the portal-side
+ * `<akashic-clients>` widget, where the developer with operational
+ * context lives. The admin web's role is review (the dedicated
+ * Scope&nbsp;requests page in the sidebar).
+ *
+ * This panel exists in the operator-side ClientsEdit so the admin
+ * has at-a-glance context: when reviewing or operationally
+ * troubleshooting a client, "what scope requests has it submitted"
+ * is right next to the rest of the client config.
+ */
+function SpecialScopesPanel({ clientID }: { clientID: string }) {
+  const [history, setHistory] = useState<ScopeRequestView[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const all = await ScopeRequestsApi.list();
+        setHistory(all.filter((r) => r.client_id === clientID));
+      } catch (e) {
+        setErr((e as Error).message);
+      }
+    })();
+  }, [clientID]);
+
+  const specialHistory = (history ?? []).filter((r) => SPECIAL_SCOPES.has(r.scope));
+
+  return (
+    <div className="panel" style={{ padding: '12px 16px' }}>
+      <div style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '6px' }}>
+        Special-scope requests (history)
+      </div>
+      <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0, marginBottom: '12px' }}>
+        Submission lives in the portal-side <code>&lt;akashic-clients&gt;</code>{' '}
+        widget — the client owner (developer) submits with their reason and
+        proposed TTL policy. Review pending requests on the{' '}
+        <strong>Scope&nbsp;requests</strong> page.
+      </p>
+
+      {err && <p className="error" style={{ fontSize: '0.8125rem' }}>{err}</p>}
+      {history === null && !err && (
+        <p className="hint" style={{ fontSize: '0.8125rem' }}>Loading history…</p>
+      )}
+      {history !== null && specialHistory.length === 0 && (
+        <p className="hint" style={{ fontSize: '0.8125rem' }}>
+          No special-scope requests have been submitted for this client.
+        </p>
+      )}
+      {history !== null && specialHistory.length > 0 && (
+        <ul style={{ listStyle: 'none', padding: 0, margin: 0, fontSize: '0.8125rem' }}>
+          {specialHistory.map((r) => (
+            <li key={r.id} style={{ padding: '0.25rem 0' }}>
+              <code>{r.scope}</code> · <span className={`badge ${r.status}`}>{r.status}</span>
+              {' · '}
+              <span style={{ color: 'var(--text-muted)' }}>
+                submitted {new Date(r.submitted_at).toLocaleString()}
+              </span>
+              {r.decision_note && (
+                <span style={{ display: 'block', marginLeft: '1rem', fontStyle: 'italic', color: 'var(--text-muted)' }}>
+                  Note: {r.decision_note}
+                </span>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+// SPECIAL_SCOPES is the set of scope names that bypass the regular
+// "tenant ceiling allows it" gate and require admin approval via
+// the scope-request workflow. Mirrors `oauth.SpecialScopes` on the
+// server. The ScopeMatrix filters these out of its rendered list so
+// operators don't accidentally try to set them directly (server
+// would reject with SPECIAL_SCOPE_REQUIRES_REQUEST anyway, but
+// hiding them from the UI is a cleaner UX).
+const SPECIAL_SCOPES = new Set(['offline_access']);
+
+type ScopeMode = 'disabled' | 'required' | 'optional';
+
+/**
+ * ScopeMatrix renders one row per tenant-allowed scope. Each row is
+ * a 3-radio (Disabled / Required / Optional) toggle group. Special
+ * scopes (e.g. `offline_access`) are filtered out — they go through
+ * the scope-request workflow rather than this form.
+ *
+ * Stateless wrt the tenant policy fetch: the parent owns the
+ * `allowed` string + `modes` map and drives this component's value.
+ * That keeps the rendering logic pure and easy to test.
+ */
+export function ScopeMatrix({
+  allowed,
+  modes,
+  onChange,
+  disabled,
+}: {
+  allowed: string;
+  modes: Record<string, ScopeMode>;
+  onChange: (next: Record<string, ScopeMode>) => void;
+  disabled?: boolean;
+}) {
+  const tenantTokens = allowed
+    .split(/\s+/)
+    .filter(Boolean)
+    .filter((t) => !SPECIAL_SCOPES.has(t))
+    .sort();
+
+  if (tenantTokens.length === 0) {
+    return (
+      <p className="hint" style={{ fontSize: '0.8125rem' }}>
+        Tenant policy doesn't allow any non-special scopes. Edit the
+        Policy page to add scopes before configuring this client.
+      </p>
+    );
+  }
+
+  const setMode = (scope: string, mode: ScopeMode) => {
+    onChange({ ...modes, [scope]: mode });
+  };
+
+  return (
+    <div className="scope-matrix" style={{ display: 'flex', flexDirection: 'column', gap: '0.375rem' }}>
+      {tenantTokens.map((scope) => {
+        const mode = modes[scope] ?? 'disabled';
+        return (
+          <div
+            key={scope}
+            style={{
+              display: 'grid',
+              gridTemplateColumns: '11rem repeat(3, auto)',
+              alignItems: 'center',
+              gap: '0.5rem',
+              padding: '0.25rem 0.5rem',
+              borderRadius: '4px',
+              background: mode === 'disabled' ? 'transparent' : 'var(--surface)',
+            }}
+          >
+            <code style={{ fontSize: '0.85rem' }}>{scope}</code>
+            {(['disabled', 'required', 'optional'] as ScopeMode[]).map((opt) => (
+              <label
+                key={opt}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: '0.25rem',
+                  fontSize: '0.8125rem',
+                  cursor: disabled ? 'not-allowed' : 'pointer',
+                  opacity: disabled ? 0.6 : 1,
+                }}
+              >
+                <input
+                  type="radio"
+                  name={`scope-${scope}`}
+                  value={opt}
+                  checked={mode === opt}
+                  onChange={() => setMode(scope, opt)}
+                  disabled={disabled}
+                />
+                <span style={{ textTransform: 'capitalize' }}>{opt}</span>
+              </label>
+            ))}
+          </div>
+        );
+      })}
+    </div>
+  );
 }

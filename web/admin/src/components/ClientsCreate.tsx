@@ -1,10 +1,14 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ClientsApi,
+  PolicyApi,
   type ApiError,
   type CreateClientRequest,
   type CreateClientResponse,
+  type TenantPolicy,
 } from '../api/client';
+import { canonicaliseScopes } from './PolicyPage';
+import { ScopeMatrix } from './ClientsEdit';
 
 /**
  * ClientsCreate — registration form for a new OAuth client.
@@ -32,6 +36,29 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
   const [requirePKCE, setRequirePKCE] = useState(true);
   const [isTenantPortal, setIsTenantPortal] = useState(false);
 
+  // Phase A scope split. Same tristate map shape as ClientsEdit.
+  // Defaults: openid + email + profile all set as required (the
+  // pre-Phase-A "everything" default — matches what the server
+  // would have populated for a no-scope-input create).
+  type ScopeMode = 'disabled' | 'required' | 'optional';
+  const [scopeModes, setScopeModes] = useState<Record<string, ScopeMode>>({
+    openid: 'required',
+    email: 'required',
+    profile: 'required',
+  });
+  const [tenantPolicy, setTenantPolicy] = useState<TenantPolicy | null>(null);
+  const [policyErr, setPolicyErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        setTenantPolicy(await PolicyApi.get());
+      } catch (e) {
+        setPolicyErr((e as Error).message);
+      }
+    })();
+  }, []);
+
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<CreateClientResponse | null>(null);
@@ -57,6 +84,22 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
       if (isTenantPortal) {
         req.is_tenant_portal = true;
       }
+      // Pack the tristate map into the new split payload. Empty
+      // strings are valid — the server defaults to
+      // `openid profile email` required only when both fields are
+      // empty, but we always send the user's chosen split.
+      req.required_scopes = canonicaliseScopes(
+        Object.entries(scopeModes)
+          .filter(([, m]) => m === 'required')
+          .map(([s]) => s)
+          .join(' ')
+      );
+      req.optional_scopes = canonicaliseScopes(
+        Object.entries(scopeModes)
+          .filter(([, m]) => m === 'optional')
+          .map(([s]) => s)
+          .join(' ')
+      );
       const resp = await ClientsApi.create(req);
       setResult(resp);
       // Notify any listeners that setup-relevant state may have
@@ -285,6 +328,37 @@ export function ClientsCreate({ onClose }: { onClose: () => void }) {
               </span>
             </label>
           )}
+
+          <div className="panel" style={{ padding: '12px 16px' }}>
+            <div style={{ fontSize: '0.875rem', fontWeight: 500, marginBottom: '6px' }}>
+              Scopes (per-client policy)
+            </div>
+            <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0, marginBottom: '12px' }}>
+              For each scope your tenant allows, mark whether this client
+              <strong> requires</strong> it (consent locks it on),
+              treats it as <strong>optional</strong> (consent renders a
+              user-toggleable checkbox), or <strong>doesn't request it</strong>.
+              Special scopes like <code>offline_access</code> need admin
+              approval through the scope-request workflow and don't appear
+              here.
+            </p>
+            {policyErr && (
+              <p className="error" style={{ fontSize: '0.8125rem' }}>
+                Could not load tenant policy: {policyErr}
+              </p>
+            )}
+            {!tenantPolicy && !policyErr && (
+              <p className="hint" style={{ fontSize: '0.8125rem' }}>Loading tenant policy…</p>
+            )}
+            {tenantPolicy && (
+              <ScopeMatrix
+                allowed={tenantPolicy.allowed_client_scopes}
+                modes={scopeModes}
+                onChange={setScopeModes}
+                disabled={submitting}
+              />
+            )}
+          </div>
 
           <label style={{ display: 'flex', flexDirection: 'row', alignItems: 'flex-start', gap: '0.5rem' }}>
             <input

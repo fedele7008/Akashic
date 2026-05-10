@@ -44,6 +44,10 @@ export function PolicyPage() {
   const [accessTTL, setAccessTTL] = useState('15m');
   const [refreshSlidingTTL, setRefreshSlidingTTL] = useState('30d');
   const [refreshAbsoluteTTL, setRefreshAbsoluteTTL] = useState('90d');
+  // Tenant-allowed scope ceiling. Edited as a space-separated
+  // string in a textarea; the parser canonicalises (sorts +
+  // dedupes) on submit so save round-trips don't churn the column.
+  const [allowedClientScopes, setAllowedClientScopes] = useState('openid profile email');
 
   const [submitting, setSubmitting] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -63,6 +67,7 @@ export function PolicyPage() {
       setAccessTTL(formatSecondsAsDuration(p.access_token_ttl_seconds));
       setRefreshSlidingTTL(formatSecondsAsDuration(p.refresh_token_sliding_ttl_seconds));
       setRefreshAbsoluteTTL(formatSecondsAsDuration(p.refresh_token_absolute_ttl_seconds));
+      setAllowedClientScopes(p.allowed_client_scopes);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -105,6 +110,14 @@ export function PolicyPage() {
     if (accessSec !== policy.access_token_ttl_seconds) req.access_token_ttl_seconds = accessSec;
     if (slidingSec !== policy.refresh_token_sliding_ttl_seconds) req.refresh_token_sliding_ttl_seconds = slidingSec;
     if (absoluteSec !== policy.refresh_token_absolute_ttl_seconds) req.refresh_token_absolute_ttl_seconds = absoluteSec;
+
+    // Canonicalise the allowed-scopes string (sort + dedupe + trim)
+    // before comparing to the loaded value. Avoids false-positive
+    // "changed" diffs from whitespace edits.
+    const canonScopes = canonicaliseScopes(allowedClientScopes);
+    if (canonScopes !== canonicaliseScopes(policy.allowed_client_scopes)) {
+      req.allowed_client_scopes = canonScopes;
+    }
 
     if (Object.keys(req).length === 0) {
       setSubmitErr('No changes to save.');
@@ -237,6 +250,36 @@ export function PolicyPage() {
               (id + tag) again. <strong>0</strong> disables the cooldown.
               <strong>30</strong> is the default — discourages
               rotation-as-impersonation. Server caps the value at 365.
+            </div>
+          </label>
+        </div>
+
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Allowed client scopes</h3>
+          <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0 }}>
+            Tenant-wide ceiling on what scopes any registered client may
+            request. Per-client required + optional scopes must each be a
+            subset of this set. <code>openid</code> is mandatory — Akashic
+            is an OIDC IDP and clients need it to obtain id_tokens.
+          </p>
+          <p className="hint" style={{ fontSize: '0.8125rem' }}>
+            <strong>Special scopes</strong> — currently <code>offline_access</code> —
+            require per-client approval through the scope-request workflow.
+            Even if listed here, special scopes need an approved request
+            before a client may include them in a request.
+          </p>
+          <label>
+            <div>Allowed scopes <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>(space-separated)</span></div>
+            <input
+              type="text"
+              value={allowedClientScopes}
+              onChange={(e) => setAllowedClientScopes(e.target.value)}
+              disabled={submitting}
+              style={{ width: '100%', fontFamily: 'monospace' }}
+              placeholder="openid profile email"
+            />
+            <div className="hint" style={{ fontSize: '0.75rem', padding: 0, background: 'transparent', border: 'none' }}>
+              Saved value is canonicalised — sorted + deduplicated.
             </div>
           </label>
         </div>
@@ -409,6 +452,19 @@ export function parseDurationToSeconds(raw: string, fieldLabel: string): number 
       // happy and surfaces a clear error if the regex ever evolves.
       throw new Error(`${fieldLabel}: unknown unit ${match[2]}.`);
   }
+}
+
+// canonicaliseScopes mirrors the server's `oauth.ParseScopeSet`
+// helper: tokens split on whitespace, deduped, sorted, joined by
+// single spaces. Exported so the Client edit page can use the same
+// canonical form when diffing against stored values (avoids false-
+// positive "changed" detections from whitespace edits).
+export function canonicaliseScopes(s: string): string {
+  const seen = new Set<string>();
+  for (const tok of s.split(/\s+/)) {
+    if (tok) seen.add(tok);
+  }
+  return Array.from(seen).sort().join(' ');
 }
 
 // formatSecondsAsDuration is the round-trip companion to
