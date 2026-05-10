@@ -20,7 +20,7 @@ import Link from "next/link";
 
 export default function ConnectedAppsPage() {
   return (
-    <section className="mx-auto flex max-w-3xl flex-col gap-6 px-4 py-12">
+    <section className="mx-auto flex max-w-5xl flex-col gap-6 px-4 py-12">
       <header className="flex flex-col gap-1">
         <h1 className="text-2xl font-semibold">Connected apps</h1>
         <p className="text-sm text-[var(--text-muted)]">

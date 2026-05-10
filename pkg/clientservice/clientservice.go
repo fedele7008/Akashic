@@ -171,8 +171,16 @@ func RotateSecret(ctx context.Context, db *gorm.DB, c *models.ClientService) (st
 	if err != nil {
 		return "", fmt.Errorf("hash secret: %w", err)
 	}
+	// Phase 9e v2: clear `secret_reset_required` alongside the hash
+	// update. The flag distinguishes "approval-minted, not yet
+	// surfaced" from "ready to rotate normally"; once the user has
+	// the plaintext in hand (this call's return value), the
+	// distinction collapses.
 	if err := db.WithContext(ctx).Model(c).
-		Update("client_secret_hash", string(hash)).Error; err != nil {
+		Updates(map[string]any{
+			"client_secret_hash":    string(hash),
+			"secret_reset_required": false,
+		}).Error; err != nil {
 		return "", fmt.Errorf("db update: %w", err)
 	}
 	return secret, nil

@@ -626,6 +626,18 @@ services:
       # appear at ./logs/ on the host — operators can `tail -f` them
       # alongside `docker compose logs akashic` for stdout streams.
       - ./logs:/app/logs
+      # Dev-iteration override for the widget bundle. The Dockerfile
+      # bakes `web/widgets/dist/` into `/usr/local/share/akashic-widgets/`
+      # at IMAGE BUILD time, which means a `docker compose up` without
+      # a rebuild keeps serving stale widget code. Mounting the host's
+      # `web/widgets/dist/` over that path lets every `npm run build`
+      # in the widgets package propagate to the running container on
+      # the next request — no `docker compose build akashic` needed.
+      # Read-only because the api-server only reads it; never writes.
+      # Production deployments (where the host directory may not exist)
+      # should remove this mount; the baked path takes over and keeps
+      # the deploy reproducible.
+      - ./web/widgets/dist:/usr/local/share/akashic-widgets:ro
     networks:
       default:
         aliases:

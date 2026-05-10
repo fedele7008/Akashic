@@ -300,6 +300,22 @@ type ClientService struct {
 	RefreshTokenSlidingTTLSecondsOverride  *int `gorm:"" json:"refresh_token_sliding_ttl_seconds_override,omitempty"`
 	RefreshTokenAbsoluteTTLSecondsOverride *int `gorm:"" json:"refresh_token_absolute_ttl_seconds_override,omitempty"`
 
+	// SecretResetRequired is true when the row was created with a
+	// confidential secret the requester has never seen plaintext for.
+	// Phase 9e v2: approval-gated registration mints the secret at
+	// approve-time inside `clientregistration.Approve`; the plaintext
+	// can't be surfaced to the reviewer (it belongs to the requester),
+	// so the requester needs to obtain it via the rotate-secret
+	// endpoint after approval. This flag drives the widget's button
+	// label switch ("Get client secret" vs "Rotate secret") and a
+	// contextual hint on the clients list. Cleared on the first
+	// successful rotate (the user has now seen a usable secret).
+	//
+	// Always false for SPA/public clients (no secret exists) and for
+	// clients created via the direct POST /clients path (the secret
+	// is shown on the response, so the user already saw it).
+	SecretResetRequired bool `gorm:"not null;default:false" json:"secret_reset_required"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }

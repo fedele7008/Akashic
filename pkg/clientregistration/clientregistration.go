@@ -378,6 +378,25 @@ func (s *Service) Approve(ctx context.Context, p ApproveParams) (*models.ClientR
 		return nil, fmt.Errorf("materialize client from request: %w", err)
 	}
 
+	// Phase 9e v2: confidential clients minted via approval have a
+	// secret the requester has never seen. Flag the row so the
+	// widget renders a "Get client secret" hint + button label until
+	// they obtain it via the rotate-secret endpoint. SPA/public
+	// clients have no secret to obtain, so we leave the flag false.
+	if !created.Client.Public {
+		if err := s.db.WithContext(ctx).
+			Model(&models.ClientService{}).
+			Where("client_id = ?", created.Client.ClientID).
+			Update("secret_reset_required", true).Error; err != nil {
+			// Best-effort: an unset flag means the user just sees
+			// "Rotate secret" instead of "Get client secret" — same
+			// underlying action either way. Log but don't fail.
+			s.logger.Warn("approve: failed to set secret_reset_required",
+				zap.String("client_id", created.Client.ClientID),
+				zap.Error(err))
+		}
+	}
+
 	row, err := s.requests.ApprovePending(ctx, p.RequestID, p.ReviewerID,
 		p.DecisionNote, created.Client.ClientID)
 	if err != nil {

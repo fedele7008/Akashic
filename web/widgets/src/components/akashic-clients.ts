@@ -44,8 +44,29 @@ interface ClientView {
   built_in: boolean;
   require_pkce: boolean;
   is_tenant_portal: boolean;
+  /** Phase 9e v2: true on confidential clients minted via approval
+   *  whose secret has never been surfaced to the requester. The
+   *  widget switches the rotate-button label to "Get client secret"
+   *  and shows a contextual hint until the user clicks it. */
+  secret_reset_required: boolean;
   created_at: string;
   updated_at: string;
+}
+
+/** Phase 9e v2: pending client-registration request — surfaced in
+ *  the list view alongside live clients with a "pending" badge. */
+interface PendingClientRequest {
+  id: string;
+  user_id: string;
+  reason: string;
+  name: string;
+  client_type: "WEB" | "SPA";
+  redirect_uris: string;
+  status: "pending" | "approved" | "rejected";
+  submitted_at: string;
+  reviewed_at?: string;
+  decision_note?: string;
+  created_client_id?: string;
 }
 
 interface AllowedClientScopes {
@@ -184,9 +205,33 @@ export class AkashicClients extends LitElement {
   // create form only when `eligibility.approval_required` is true.
   @state() private reason = "";
 
+  // Phase 9e v2 polish: full request history (any status) for the
+  // current user. The list view always renders pending rows inline
+  // with a "pending" badge; rejected/approved-elsewhere rows are
+  // shown only when the user expands the optional history panel.
+  @state() private myRequests: PendingClientRequest[] = [];
+  @state() private historyOpen = false;
+
   static override styles = css`
     :host {
       display: block;
+      /* Defensive sizing for hosts placed in flex/grid layouts.
+         Three rules play together:
+           - width: 100% — fill the parent's available width.
+             display:block alone isn't always enough; a custom
+             element inside a flex column with no width hint can
+             pick up its intrinsic content width instead of the
+             parent's offered width.
+           - max-width: 100% — never push past the parent (defends
+             against overflow when the host has unusual padding).
+           - min-width: 0 — defeats the implicit min-width:auto on
+             flex/grid items that would otherwise expand the host
+             to fit its widest non-shrinkable child, defeating the
+             inner wrap's overflow-x:auto. */
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      box-sizing: border-box;
       color: var(--akashic-text, inherit);
       font-family: var(--akashic-font-family, inherit);
     }
@@ -292,6 +337,82 @@ export class AkashicClients extends LitElement {
       border-radius: 0.25rem;
       background: var(--akashic-success-soft, rgba(22, 163, 74, 0.18));
       color: var(--akashic-success, #16a34a);
+    }
+    /* Phase 9e v2 polish: status-column badges. Three states:
+         "Active"          → muted gray (steady-state, low-noise)
+         "Pending review"  → blue (informational; waiting on admin)
+         "Action required" → amber (the user needs to act)
+       Each carries a title tooltip when there's secondary info to
+       expose (submission time on pending; "click X to obtain
+       credentials" on action-required). cursor:help where a
+       tooltip exists, default cursor where not. nowrap so they
+       never break across lines. */
+    [part="badge-status"] {
+      display: inline-block;
+      padding: 0.125rem 0.5rem;
+      font-size: 0.6875rem;
+      font-weight: 500;
+      border-radius: 999px;
+      white-space: nowrap;
+      line-height: 1.4;
+    }
+    [part="badge-status"][data-status="active"] {
+      background: var(--akashic-success-soft, rgba(22, 163, 74, 0.18));
+      color: var(--akashic-success, #16a34a);
+    }
+    [part="badge-status"][data-status="pending"] {
+      background: var(--akashic-accent-soft, rgba(79, 140, 255, 0.15));
+      color: var(--akashic-accent, #4f8cff);
+      cursor: help;
+    }
+    [part="badge-status"][data-status="action-required"] {
+      background: var(--akashic-warning-soft, rgba(245, 158, 11, 0.18));
+      color: var(--akashic-warning, #f59e0b);
+      cursor: help;
+    }
+    /* Table layout. The wrap is the scroll viewport: it always
+       fits the host's content-box, and any time the inner table
+       exceeds its width, a horizontal scrollbar appears. The
+       table itself is left unsized so it sizes to its natural
+       content — NOT width:100%, which would force the table to
+       push past the wrap whenever a single nowrap cell can't
+       shrink (every cell except Name and Redirect URIs has
+       white-space:nowrap). */
+    [part="table-wrap"] {
+      width: 100%;
+      max-width: 100%;
+      min-width: 0;
+      overflow-x: auto;
+    }
+    [part="table"] th {
+      white-space: nowrap;
+    }
+    /* Modest name-column floor so single-character names don't
+       collapse to a 1ch column. Lower than before so the
+       right-side columns can claim the rest of the row. */
+    [part="table"] th:nth-child(1),
+    [part="table"] td:nth-child(1) {
+      min-width: 120px;
+    }
+    /* Status / Client ID / Type / Actions stay on one line. */
+    [part="table"] td:nth-child(2),
+    [part="table"] td:nth-child(3),
+    [part="table"] td:nth-child(4),
+    [part="table"] td[part="row-actions"] {
+      white-space: nowrap;
+    }
+    /* Redirect URIs cell — clamp visible width and truncate with
+       an ellipsis when a URL is too long. The full value is still
+       reachable via the title tooltip. Without this, a single
+       long URL was driving the row wider than the host container
+       and pushing the Actions column off-screen. */
+    [part="redirect-uris"] {
+      display: inline-block;
+      max-width: 22ch;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      vertical-align: middle;
     }
     [part="row-actions"] {
       text-align: right;
@@ -464,7 +585,25 @@ export class AkashicClients extends LitElement {
       return;
     }
     this.clients = res.data.clients;
+    // Phase 9e v2 polish: fetch the user's request history
+    // alongside the clients list so the list view can render
+    // pending rows inline. Soft-failure: empty history if the
+    // endpoint isn't reachable (e.g., service not wired during
+    // partial deploys) — the list still renders with confirmed
+    // clients only.
+    void this.loadMyRequests();
     this.view = { kind: "list" };
+  }
+
+  private async loadMyRequests() {
+    const res = await apiCall<{ requests: PendingClientRequest[] }>(
+      "/client-registration-requests/mine",
+    );
+    if (res.ok) {
+      this.myRequests = res.data.requests ?? [];
+    } else {
+      this.myRequests = [];
+    }
   }
 
   // ─── render dispatch ─────────────────────────────────────────────
@@ -504,6 +643,9 @@ export class AkashicClients extends LitElement {
   // ─── list view ───────────────────────────────────────────────────
 
   private renderList() {
+    const pending = this.myRequests.filter((r) => r.status === "pending");
+    const reviewed = this.myRequests.filter((r) => r.status !== "pending");
+    const empty = this.clients.length === 0 && pending.length === 0;
     return html`
       <div part="header">
         <div part="header-text">
@@ -520,7 +662,7 @@ export class AkashicClients extends LitElement {
         </button>
       </div>
 
-      ${this.clients.length === 0
+      ${empty
         ? html`
             <div part="empty">
               No clients yet. Click "Register a new client" to add your first
@@ -528,26 +670,84 @@ export class AkashicClients extends LitElement {
             </div>
           `
         : html`
-            <table part="table">
-              <thead>
-                <tr>
-                  <th>Name</th>
-                  <th>Client ID</th>
-                  <th>Type</th>
-                  <th>Redirect URIs</th>
-                  <th part="row-actions">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                ${this.clients.map((c) => this.renderRow(c))}
-              </tbody>
-            </table>
+            <div part="table-wrap">
+              <table part="table">
+                <thead>
+                  <tr>
+                    <th>Name</th>
+                    <th>Status</th>
+                    <th>Client ID</th>
+                    <th>Type</th>
+                    <th>Redirect URIs</th>
+                    <th part="row-actions">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  ${this.clients.map((c) => this.renderRow(c))}
+                  ${pending.map((r) => this.renderPendingRow(r))}
+                </tbody>
+              </table>
+            </div>
           `}
+
+      ${reviewed.length > 0
+        ? html`
+            <div part="history" style="margin-top: 1rem;">
+              <button
+                @click=${() => (this.historyOpen = !this.historyOpen)}
+                aria-expanded=${this.historyOpen ? "true" : "false"}
+              >
+                ${this.historyOpen ? "▾" : "▸"} Request history
+                (${reviewed.length})
+              </button>
+              ${this.historyOpen
+                ? html`
+                    <ul part="history-list" style="margin-top: 0.5rem;">
+                      ${reviewed.map(
+                        (r) => html`
+                          <li part="history-item" style="margin-bottom: 0.5rem;">
+                            <strong>${r.name}</strong>
+                            <span part="badge-${r.status}">${r.status}</span>
+                            ${r.created_client_id
+                              ? html` — <code>${r.created_client_id}</code>`
+                              : ""}
+                            <div style="font-size: 0.8125rem; opacity: 0.8;">
+                              ${new Date(
+                                r.reviewed_at ?? r.submitted_at,
+                              ).toLocaleString()}
+                              ${r.decision_note
+                                ? html` · <em>${r.decision_note}</em>`
+                                : ""}
+                            </div>
+                          </li>
+                        `,
+                      )}
+                    </ul>
+                  `
+                : ""}
+            </div>
+          `
+        : ""}
     `;
   }
 
   private renderRow(c: ClientView) {
     const deleting = this.deleteTyped[c.client_id] !== undefined;
+    // Phase 9e v2 polish: state-dependent rotate-button label.
+    // - Approval-minted, secret never seen → "Get client secret"
+    //   (the user is acquiring credentials; "rotate" would imply
+    //   they had one before)
+    // - Anything else → "Rotate secret"
+    const secretLabel = c.secret_reset_required
+      ? "Get client secret"
+      : "Rotate secret";
+    // Tooltip echoes the current button label so the wording stays
+    // in sync if the copy ever shifts.
+    const actionHint = `Approved — click "${secretLabel}" to obtain your client secret.`;
+    const statusCell = c.secret_reset_required
+      ? html`<span part="badge-status" data-status="action-required" title=${actionHint}
+          >Action required</span>`
+      : html`<span part="badge-status" data-status="active">Active</span>`;
     return html`
       <tr part="row" data-client-id=${c.client_id}>
         <td part="cell">
@@ -557,10 +757,11 @@ export class AkashicClients extends LitElement {
             ? html`<span part="badge-primary">first-party</span>`
             : ""}
         </td>
+        <td part="cell">${statusCell}</td>
         <td part="cell"><code>${c.client_id}</code></td>
         <td part="cell">${c.client_type}</td>
         <td part="cell">
-          <code part="redirect-uris">${c.redirect_uris}</code>
+          <code part="redirect-uris" title=${c.redirect_uris}>${c.redirect_uris}</code>
         </td>
         <td part="row-actions">
           ${c.built_in
@@ -573,8 +774,9 @@ export class AkashicClients extends LitElement {
                   >Scopes</button>
                   ${!c.public
                     ? html`<button
+                        part=${c.secret_reset_required ? "button-primary" : ""}
                         @click=${() => this.startRotate(c)}
-                      >Rotate</button>`
+                      >${secretLabel}</button>`
                     : ""}
                   <button
                     part="button-danger"
@@ -582,6 +784,30 @@ export class AkashicClients extends LitElement {
                   >Delete</button>
                 `}
         </td>
+      </tr>
+    `;
+  }
+
+  private renderPendingRow(r: PendingClientRequest) {
+    // Submission time travels via the status-badge's title tooltip.
+    // No client_id yet (the row hasn't been materialized), so that
+    // cell shows an em-dash. Actions cell is empty for pending —
+    // the user can't act on a row that isn't a real client yet.
+    const submittedAt = new Date(r.submitted_at).toLocaleString();
+    return html`
+      <tr part="row" data-request-id=${r.id}>
+        <td part="cell">${r.name}</td>
+        <td part="cell">
+          <span part="badge-status" data-status="pending"
+                title=${`Submitted ${submittedAt}`}
+            >Pending review</span>
+        </td>
+        <td part="cell"><span style="opacity: 0.6;">—</span></td>
+        <td part="cell">${r.client_type}</td>
+        <td part="cell">
+          <code part="redirect-uris" title=${r.redirect_uris}>${r.redirect_uris}</code>
+        </td>
+        <td part="row-actions"><span style="opacity: 0.6;">—</span></td>
       </tr>
     `;
   }
@@ -953,10 +1179,15 @@ export class AkashicClients extends LitElement {
         return;
       }
       // Surface a "submitted, awaiting review" terminal panel and
-      // refresh the cached eligibility so the panel can show the
-      // updated pending count.
+      // refresh the cached state so the list view shows the new
+      // pending row immediately when the user clicks Back. We
+      // refresh BOTH eligibility (drives the "n of m used" copy on
+      // the panel) AND myRequests (drives the list-view pending
+      // rows) — without the latter, clicking Back lands on a
+      // stale list and the user has to manually refresh.
       const eligRes = await apiCall<ClientRegEligibility>("/client-registration-eligibility");
       const elig = eligRes.ok ? eligRes.data : (this.eligibility ?? null);
+      void this.loadMyRequests();
       if (elig) {
         this.eligibility = elig;
         this.view = { kind: "request-submitted", eligibility: elig };
@@ -1013,6 +1244,7 @@ export class AkashicClients extends LitElement {
   private async refreshListSilent() {
     const res = await apiCall<{ clients: ClientView[] }>("/clients/mine");
     if (res.ok) this.clients = res.data.clients;
+    void this.loadMyRequests();
   }
 
   // ─── scope matrix (shared by create + scopes view) ──────────────
@@ -1593,7 +1825,7 @@ export class AkashicClients extends LitElement {
       <div part="actions">
         <button
           part="button-primary"
-          @click=${() => (this.view = { kind: "list" })}
+          @click=${() => void this.loadClients()}
         >
           Back to clients
         </button>

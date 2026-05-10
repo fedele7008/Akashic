@@ -61,6 +61,15 @@ akashic-signin {
   max-width: none;
 }
 
+/* The clients widget displays a multi-column table; the 32rem
+   form-width default above is too narrow to render it comfortably
+   (cuts off the Actions column on most hosts). Let it fill its
+   host container instead — the widget's own Shadow-DOM CSS handles
+   internal layout (overflow-x:auto on the table wrap, etc.). */
+akashic-clients {
+  max-width: none;
+}
+
 /*
  * Light-mode override. Tenants who set `color-scheme: light` on
  * <html> get readable defaults. Most tenants will skip this and

@@ -58,8 +58,12 @@ type clientView struct {
 	RequirePKCE    bool    `json:"require_pkce"`
 	IsTenantPortal bool    `json:"is_tenant_portal"`
 	OwnerUserID    *string `json:"owner_user_id,omitempty"`
-	CreatedAt      string  `json:"created_at"`
-	UpdatedAt      string  `json:"updated_at"`
+	// SecretResetRequired = approval-minted, plaintext never seen.
+	// Drives the widget's button label switch + contextual hint.
+	// Phase 9e v2.
+	SecretResetRequired bool   `json:"secret_reset_required"`
+	CreatedAt           string `json:"created_at"`
+	UpdatedAt           string `json:"updated_at"`
 }
 
 // Canonical wire labels for client_type. Always uppercase on the
@@ -91,10 +95,11 @@ func toClientView(c *models.ClientService) clientView {
 		AuthTypes:      c.AuthTypes,
 		BuiltIn:        c.BuiltIn,
 		RoleAllowlist:  c.RoleAllowlist,
-		RequirePKCE:    c.RequirePKCE,
-		IsTenantPortal: c.IsTenantPortal,
-		CreatedAt:      c.CreatedAt.UTC().Format(time.RFC3339),
-		UpdatedAt:      c.UpdatedAt.UTC().Format(time.RFC3339),
+		RequirePKCE:         c.RequirePKCE,
+		IsTenantPortal:      c.IsTenantPortal,
+		SecretResetRequired: c.SecretResetRequired,
+		CreatedAt:           c.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:           c.UpdatedAt.UTC().Format(time.RFC3339),
 	}
 	if c.OwnerUserID != nil {
 		s := c.OwnerUserID.String()
