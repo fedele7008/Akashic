@@ -38,6 +38,17 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// token IS the proof; no CSRF needed for a one-shot consume).
 	mux.HandleFunc("/verify-email", s.handleVerifyEmail)
 
+	// Phase 9c: forgot-password 6-digit code flow. Login-page link
+	// kicks off here. Conditional on mailer-configured: when the
+	// mailer is in nop mode, every endpoint here renders the
+	// "contact administrator" stub instead.
+	mux.HandleFunc("/forgot-password", s.handleForgotPasswordPage)
+	mux.HandleFunc("/forgot-password/submit", s.handleForgotPasswordSubmit)
+	mux.HandleFunc("/forgot-password/verify", s.handleForgotPasswordVerifyPage)
+	mux.HandleFunc("/forgot-password/verify/submit", s.handleForgotPasswordVerifySubmit)
+	mux.HandleFunc("/forgot-password/reset", s.handleForgotPasswordResetPage)
+	mux.HandleFunc("/forgot-password/reset/submit", s.handleForgotPasswordResetSubmit)
+
 	// OAuth flow endpoints (Phase 7 Steps 5-7).
 	//
 	// /authorize is a top-level browser navigation (the SPA / portal

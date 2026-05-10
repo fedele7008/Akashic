@@ -210,6 +210,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// lived single-use tokens belong in Redis (auto-TTL,
 	// auto-GC) while durable answers stay in `users.email_verified`.
 	emailVerificationStore := email.NewVerificationStore(app.Redis)
+	// Phase 9c: forgot-password 6-digit code store. Same Redis
+	// pattern; also holds the "verified, may now reset" cookie
+	// token that gates the new-password page.
+	passwordResetStore := email.NewPasswordResetStore(app.Redis)
 
 	// Phase 9 (revised): DB-backed email-config service. The
 	// service satisfies `mailer.Mailer` so existing call sites
@@ -383,6 +387,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// the service so admin edits via UI take effect immediately.
 	app.AuthServer.SetEmailService(app.EmailService)
 	app.AuthServer.SetEmailVerificationStore(emailVerificationStore)
+	app.AuthServer.SetPasswordResetStore(passwordResetStore)
 
 	// Built-in OAuth client registration. After Phase 8b's tenant-
 	// client registration roadmap landed, akashic-admin is the only

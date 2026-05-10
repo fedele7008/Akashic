@@ -544,6 +544,56 @@ func (c *Client) RawModify(req *ldap.ModifyRequest) error {
 	return c.conn.Modify(req)
 }
 
+// LookupDNByEmail returns the LDAP DN for the user whose `mail`
+// attribute matches the given address, or empty + error if no
+// such user exists. Phase 9c (forgot-password): the form takes
+// an email; we map to a DN here, then PG lookup-by-DN to get
+// the user's UUID for the reset-store.
+//
+// Reuses the existing UserLoginFilter (default
+// `(|(uid={login})(mail={login}))`), so this also accepts a
+// uid input for callers who happen to have one. Email is the
+// expected normal input.
+func (c *Client) LookupDNByEmail(email string) (string, error) {
+	if c.conn == nil {
+		return "", fmt.Errorf("LDAP connection not established")
+	}
+	return c.searchLoginDN(email)
+}
+
+// ResetPasswordAsAdmin updates the userPassword attribute for the
+// given user DN without verifying any old password. Used by Phase 9c
+// (forgot-password reset) and Phase 9d (admin temporary reset),
+// where the caller has authenticated the user via a different
+// channel (email-delivered code or admin-mTLS authority) and the
+// "knows the old password" check no longer applies.
+//
+// Distinct from `ChangePassword` — that one binds as the user with
+// the old password first, which is the right thing for in-profile
+// password change. This admin-context variant skips that bind and
+// runs the modify as the admin connection.
+//
+// LDAP hashes the new password internally (typically SSHA per the
+// directory's password policy); we never store cleartext server-side.
+func (c *Client) ResetPasswordAsAdmin(userDN, newPassword string) error {
+	if c.conn == nil {
+		return fmt.Errorf("LDAP connection not established")
+	}
+	if userDN == "" || newPassword == "" {
+		return fmt.Errorf("ResetPasswordAsAdmin: userDN and newPassword required")
+	}
+	req := ldap.NewModifyRequest(userDN, nil)
+	req.Replace("userPassword", []string{newPassword})
+	if err := c.conn.Modify(req); err != nil {
+		c.logger.Security.Warn("ResetPasswordAsAdmin: LDAP modify failed",
+			zap.String("user_dn", userDN), zap.Error(err))
+		return fmt.Errorf("LDAP modify failed: %w", err)
+	}
+	c.logger.Security.Info("password reset by admin/system",
+		zap.String("user_dn", userDN))
+	return nil
+}
+
 // GetUser retrieves user information by username
 func (c *Client) GetUser(username string) (*UserInfo, error) {
 	if c.conn == nil {

@@ -12,6 +12,10 @@
     <h1>Sign in</h1>
     <p class="subtitle">Akashic Identity Provider</p>
 
+    {{if .Notice}}
+    <div class="success" role="status">{{.Notice}}</div>
+    {{end}}
+
     {{if .Error}}
     <div class="error" role="alert">{{.Error}}</div>
     {{end}}
@@ -30,11 +34,28 @@
 
       <label>
         <span>Password</span>
-        <input type="password" name="password" required>
+        <input type="password" name="password" required
+               autocomplete="current-password">
       </label>
 
       <button type="submit">Sign in</button>
     </form>
+
+    <p class="cancel cancel-spaced cancel-small">
+      {{if .ForgotPasswordEnabled}}
+        {{if .ReturnTo}}
+        <a href="/forgot-password?return_to={{.ReturnTo}}">Forgot password?</a>
+        {{else}}
+        <a href="/forgot-password">Forgot password?</a>
+        {{end}}
+      {{else}}
+        {{if .ReturnTo}}
+        <a href="/forgot-password?return_to={{.ReturnTo}}">Need help signing in?</a>
+        {{else}}
+        <a href="/forgot-password">Need help signing in?</a>
+        {{end}}
+      {{end}}
+    </p>
 
     {{if .SignUpHref}}
     <p class="signup-prompt">

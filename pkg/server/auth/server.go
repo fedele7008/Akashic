@@ -85,6 +85,17 @@ type Server struct {
 	// lived single-use tokens belong in Redis (auto-TTL, no row
 	// accumulation), durable answers stay in `users.email_verified`.
 	emailVerificationStore *email.VerificationStore
+
+	// Phase 9c: forgot-password 6-digit code flow. Same Redis
+	// pattern. The store also holds the post-verify "ready cookie"
+	// that gates the new-password page.
+	passwordResetStore *email.PasswordResetStore
+
+	// Phase 9c: refresh-token revocation on password change.
+	// Re-using the existing repo handle, NOT a new field — the
+	// auth-server already holds it for /token rotation. We add a
+	// pointer here too so the forgot-password handler can call
+	// RevokeAllForUser without reaching across packages.
 }
 
 // ServerState represents the current state of the server
@@ -186,6 +197,14 @@ func (s *Server) SetEmailVerificationStore(st *email.VerificationStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emailVerificationStore = st
+}
+
+// SetPasswordResetStore wires the Redis-backed forgot-password
+// store (Phase 9c). Required for the /forgot-password flow.
+func (s *Server) SetPasswordResetStore(st *email.PasswordResetStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.passwordResetStore = st
 }
 
 // bootstrapBlocked returns true iff the deployment is still in

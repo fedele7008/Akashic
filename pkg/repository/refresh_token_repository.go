@@ -243,6 +243,33 @@ func (r *OAuthRefreshTokenRepository) RevokeAllForUserClient(
 	return res.RowsAffected, nil
 }
 
+// RevokeAllForUser kills every refresh token belonging to a user
+// across ALL clients. Used by password-reset (Phase 9c): after a
+// successful forgot-password reset, every active session-via-RT
+// for the user dies, forcing re-auth — defense against account
+// takeover via stolen RT.
+//
+// Reason is recorded on each affected row. Returns the number of
+// rows newly revoked (zero is OK; means the user had no live RTs).
+func (r *OAuthRefreshTokenRepository) RevokeAllForUser(
+	ctx context.Context,
+	userID uuid.UUID,
+	reason string,
+) (int64, error) {
+	now := time.Now()
+	res := r.db.WithContext(ctx).
+		Model(&models.OAuthRefreshToken{}).
+		Where("user_id = ? AND revoked_at IS NULL", userID).
+		Updates(map[string]any{
+			"revoked_at":     &now,
+			"revoked_reason": reason,
+		})
+	if res.Error != nil {
+		return 0, fmt.Errorf("revoke all user refresh tokens: %w", res.Error)
+	}
+	return res.RowsAffected, nil
+}
+
 // RevokeAllForClient kills every refresh token issued for a given
 // client. Used when an OAuth client is deleted — pre-existing
 // refresh tokens for it should not continue to work.

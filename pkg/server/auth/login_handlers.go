@@ -72,13 +72,33 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 	// the user only has to type their password to finish the flow.
 	prefillUsername := strings.TrimSpace(r.URL.Query().Get("username"))
 
+	// Phase 9c: surface a banner for the post-reset case
+	// ("?notice=password_reset"). Non-strict input — unknown
+	// notice values render no banner. Centralised here so every
+	// notice that the reset/verify flow might pass through the
+	// login redirect lands on a single switch.
+	notice := loginNoticeText(r.URL.Query().Get("notice"))
+
 	renderTemplate(w, "login.html.tmpl", http.StatusOK, s.loginTemplateData(returnTo, map[string]any{
 		"CSRFToken": csrf,
 		"ReturnTo":  returnTo,
 		"CancelURL": cancelTo,
 		"Username":  prefillUsername,
 		"Error":     "",
+		"Notice":    notice,
 	}))
+}
+
+// loginNoticeText maps known `?notice=` codes to a user-facing
+// banner string. Unknown codes return empty (no banner). Phase 9c
+// adds "password_reset"; Phase 9d will add "temp_password_set"
+// for the admin-temp-reset flow.
+func loginNoticeText(code string) string {
+	switch code {
+	case "password_reset":
+		return "Your password has been reset. Sign in with your new password to continue."
+	}
+	return ""
 }
 
 // loginTemplateData augments the per-call template data with the
@@ -90,6 +110,11 @@ func (s *Server) handleLoginPage(w http.ResponseWriter, r *http.Request) {
 // preserves OAuth context.
 func (s *Server) loginTemplateData(returnTo string, extra map[string]any) map[string]any {
 	extra["SignUpHref"] = signUpHref(returnTo)
+	// Phase 9c: render a "Forgot password?" link when the mailer
+	// is configured; otherwise the link still appears but reads
+	// "Need help signing in?" and lands on the contact-admin
+	// stub. Visible-but-degraded keeps the flow discoverable.
+	extra["ForgotPasswordEnabled"] = s.MailerConfigured()
 	return extra
 }
 

@@ -250,3 +250,60 @@ button.deny-button:hover {
   background: var(--card-bg);
   color: var(--text);
 }
+
+/* Phase 9c: forgot-password helpers */
+.cancel-spaced {
+  margin-top: 18px;
+}
+
+/* OTP input — monospace with letter-spacing for the 6-digit code
+   form. Inline-style equivalent gets blocked by the auth-server
+   CSP (`style-src 'self'`); a class served from styles.css
+   carries the same look without the CSP violation. */
+input.otp-input {
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+  letter-spacing: 0.5rem;
+  text-align: center;
+  font-size: 1.25rem;
+}
+
+.cancel-small {
+  font-size: 0.875rem;
+}
+
+/* Phase 9c: forgot-password verify page additions */
+.success {
+  color: var(--success, #16a34a);
+  background: rgba(22, 163, 74, 0.08);
+  border: 1px solid rgba(22, 163, 74, 0.4);
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.375rem;
+  margin: 0.5rem 0;
+  font-size: 0.9rem;
+}
+
+/* Resend form: tighter spacing than the main verify form so the
+   resend button looks like a secondary action under the primary
+   "Verify code" button rather than a peer form. */
+.resend-form {
+  margin-top: 8px;
+  text-align: center;
+}
+
+/* Inline-link-styled button — used for the resend action to
+   submit a POST without rendering as a primary button. CSS-only;
+   sidesteps the auth-server CSP that blocks inline styles. */
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  margin: 0;
+  color: var(--accent, #4f8cff);
+  text-decoration: underline;
+  cursor: pointer;
+  font: inherit;
+  font-size: 0.875rem;
+}
+.link-button:hover {
+  text-decoration: none;
+}
