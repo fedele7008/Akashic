@@ -151,10 +151,6 @@ func (db *DB) AutoMigrate() error {
 		// approval workflow. Pending → approved/rejected, with
 		// partial-unique constraint on (client, scope, pending).
 		&models.OAuthScopeRequest{},
-		// Phase 9: email verification — one-shot tokens sent in
-		// verification emails. Hashed at rest; see model doc for
-		// the supersede-on-resend rule.
-		&models.EmailVerification{},
 		// Phase 9: email config — DB-backed mailer settings,
 		// operator-editable via admin web. Singleton row (id=1).
 		&models.EmailConfig{},

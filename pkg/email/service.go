@@ -28,6 +28,7 @@ import (
 	"fmt"
 	"sync"
 
+	"akashic/akashic/pkg/cryptutil"
 	"akashic/akashic/pkg/mailer"
 	"akashic/akashic/pkg/models"
 
@@ -50,6 +51,13 @@ type Service struct {
 	db     *gorm.DB
 	logger *zap.Logger
 
+	// cipher protects the SendGrid API key column. nil when no
+	// master secret is configured — the column falls back to
+	// plaintext-at-rest with a startup warning. Stable across the
+	// service's lifetime (key rotation = restart with new
+	// AKASHIC_SECRET + run the migration helper to re-encrypt).
+	cipher *cryptutil.Cipher
+
 	// current is the live mailer driver, rebuilt on Reload. Always
 	// non-nil after Reload has been called at least once (which
 	// EnsureSingleton triggers at startup). Initial value before
@@ -63,12 +71,32 @@ type Service struct {
 // Caller MUST call `EnsureSingleton` (which seeds + reloads) at
 // startup before serving requests; until then `Send` returns
 // ErrNotConfigured and `IsConfigured` returns false.
-func NewService(db *gorm.DB, logger *zap.Logger) *Service {
-	return &Service{
+//
+// `masterSecret` is used to derive an AES-256-GCM key (via HKDF)
+// for encrypting the stored SendGrid API key. Pass empty to run
+// in plaintext mode — the service will log a warning at startup
+// and store the key directly. Recommended only for dev/test
+// deployments without an `AKASHIC_SECRET`; production should
+// always supply one.
+func NewService(db *gorm.DB, logger *zap.Logger, masterSecret []byte) *Service {
+	s := &Service{
 		db:      db,
 		logger:  logger,
 		current: nopUntilReloaded{},
 	}
+	if len(masterSecret) > 0 {
+		c, err := cryptutil.New(masterSecret, "email-config-sendgrid-key")
+		if err != nil {
+			logger.Warn("email-config: cipher init failed; falling back to plaintext-at-rest",
+				zap.Error(err))
+		} else {
+			s.cipher = c
+		}
+	} else {
+		logger.Warn("email-config: master secret empty (AKASHIC_SECRET unset); " +
+			"SendGrid API key will be stored in plaintext-at-rest")
+	}
+	return s
 }
 
 // Send implements mailer.Mailer.Send. Proxies to the cached
@@ -89,17 +117,70 @@ func (s *Service) IsConfigured() bool {
 	return m.IsConfigured()
 }
 
-// Get returns the singleton config row. Returns
-// gorm.ErrRecordNotFound when the row hasn't been seeded yet —
-// callers should treat that as a "config service not ready"
-// 503, since it means startup wiring didn't run.
+// Get returns the singleton config row with the SendGrid API key
+// decrypted in-memory. Returns gorm.ErrRecordNotFound when the
+// row hasn't been seeded yet — callers should treat that as a
+// "config service not ready" 503.
+//
+// Decryption is best-effort: a stored value that fails to decrypt
+// (operator rotated AKASHIC_SECRET without re-encrypting; manual
+// SQL edit; corrupted row) becomes empty in the returned struct
+// AND logs a warning. The mailer ends up in nopMode rather than
+// crashing the read.
 func (s *Service) Get(ctx context.Context) (*models.EmailConfig, error) {
 	var cfg models.EmailConfig
 	if err := s.db.WithContext(ctx).
 		Where("id = ?", 1).First(&cfg).Error; err != nil {
 		return nil, err
 	}
+	if cfg.SendGridAPIKey != "" {
+		cfg.SendGridAPIKey = s.maybeDecrypt(cfg.SendGridAPIKey)
+	}
 	return &cfg, nil
+}
+
+// maybeDecrypt handles the three states the stored field can be in:
+//   - empty string                       → empty (no-op)
+//   - encrypted ciphertext (cipher OK)   → decrypted plaintext
+//   - plaintext (pre-encryption row OR
+//     no cipher configured)               → returned as-is
+//
+// The plaintext-detection heuristic (cryptutil.IsPlaintext) lets
+// the service tolerate the migration window — old rows with
+// plaintext keys keep working until the next save re-encrypts.
+func (s *Service) maybeDecrypt(stored string) string {
+	if s.cipher == nil {
+		return stored // plaintext-mode deployment
+	}
+	if cryptutil.IsPlaintext(stored) {
+		// Pre-encryption row. Log once at info level so an operator
+		// notices that a migration save is recommended; serve the
+		// plaintext to keep the deployment functional.
+		s.logger.Info("email-config: SendGrid key found in plaintext (pre-encryption row); " +
+			"save the email config in admin web to encrypt-at-rest")
+		return stored
+	}
+	pt, err := s.cipher.Decrypt(stored)
+	if err != nil {
+		s.logger.Warn("email-config: SendGrid key decrypt failed; treating as unset",
+			zap.Error(err))
+		return ""
+	}
+	return pt
+}
+
+// maybeEncrypt prepares a plaintext value for DB storage. Returns
+// the original plaintext when no cipher is configured (degraded
+// mode). Returns the ciphertext when the cipher is available.
+// Empty input round-trips as empty.
+func (s *Service) maybeEncrypt(plaintext string) (string, error) {
+	if plaintext == "" {
+		return "", nil
+	}
+	if s.cipher == nil {
+		return plaintext, nil // plaintext-mode deployment
+	}
+	return s.cipher.Encrypt(plaintext)
 }
 
 // EnsureSingleton seeds an empty singleton row if none exists,
@@ -131,7 +212,48 @@ func (s *Service) EnsureSingleton(ctx context.Context) error {
 		}
 		s.logger.Info("email_configs row created (empty); configure via admin web's Email page")
 	}
+	// One-time migration of plaintext keys: if the row's stored
+	// SendGrid key is plaintext AND we have a cipher, encrypt it
+	// in place. Idempotent — subsequent restarts with already-
+	// encrypted rows skip silently.
+	if err := s.migratePlaintextKey(ctx); err != nil {
+		s.logger.Warn("email-config: plaintext-to-encrypted migration failed; "+
+			"deployment continues but the row is still plaintext-at-rest",
+			zap.Error(err))
+	}
 	return s.Reload(ctx)
+}
+
+// migratePlaintextKey upgrades a row that holds a pre-encryption
+// plaintext SendGrid key to ciphertext. Runs once at startup;
+// no-op on subsequent boots (the heuristic detects ciphertext and
+// skips). No-op when the cipher isn't configured — those
+// deployments stay in plaintext mode by choice.
+func (s *Service) migratePlaintextKey(ctx context.Context) error {
+	if s.cipher == nil {
+		return nil
+	}
+	var row models.EmailConfig
+	if err := s.db.WithContext(ctx).Where("id = ?", 1).First(&row).Error; err != nil {
+		return fmt.Errorf("read for migration: %w", err)
+	}
+	if row.SendGridAPIKey == "" {
+		return nil // nothing to migrate
+	}
+	if !cryptutil.IsPlaintext(row.SendGridAPIKey) {
+		return nil // already encrypted
+	}
+	ct, err := s.cipher.Encrypt(row.SendGridAPIKey)
+	if err != nil {
+		return fmt.Errorf("encrypt during migration: %w", err)
+	}
+	if err := s.db.WithContext(ctx).Model(&models.EmailConfig{}).
+		Where("id = ?", 1).
+		Update("send_grid_api_key", ct).Error; err != nil {
+		return fmt.Errorf("write encrypted key: %w", err)
+	}
+	s.logger.Info("email-config: SendGrid key migrated from plaintext to encrypted-at-rest")
+	return nil
 }
 
 // Reload reads the singleton row + reconstructs the cached driver.
@@ -266,13 +388,20 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.EmailConf
 		updates["from_name"] = *p.FromName
 	}
 	if p.SendGridAPIKey != nil {
-		// Column name is GORM's default snake_case of `SendGridAPIKey`,
-		// which inserts an underscore at lowercase→uppercase
-		// boundaries: `send_grid_api_key`. The wire-format JSON
-		// uses `sendgrid_api_key` (no underscore between send+grid)
-		// because the BFF + admin UI side uses explicit JSON tags;
-		// the two namespaces are independent.
-		updates["send_grid_api_key"] = *p.SendGridAPIKey
+		// Encrypt before storing. maybeEncrypt is a no-op for
+		// empty input (so an operator clearing the key writes ""
+		// not ciphertext-of-empty) and a no-op for plaintext-mode
+		// deployments (no cipher configured). Column name is
+		// GORM's default snake_case of `SendGridAPIKey`:
+		// `send_grid_api_key` (note underscore at lowercase→
+		// uppercase boundaries). The wire-format JSON tag is
+		// `sendgrid_api_key` (no underscore) because BFF + UI use
+		// explicit JSON tags; the two namespaces are independent.
+		ct, encErr := s.maybeEncrypt(*p.SendGridAPIKey)
+		if encErr != nil {
+			return nil, fmt.Errorf("encrypt SendGrid key: %w", encErr)
+		}
+		updates["send_grid_api_key"] = ct
 	}
 	if p.VerifyURLBase != nil {
 		updates["verify_url_base"] = *p.VerifyURLBase

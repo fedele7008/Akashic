@@ -80,10 +80,11 @@ type Server struct {
 	// immediately (no static field to refresh).
 	emailSvc *email.Service
 
-	// Phase 9: email-verification repository. Read by the
-	// /verify-email landing (Consume); written by signup (Create)
-	// and the resend endpoint (Create — supersedes the prior).
-	emailVerificationRepo *repository.EmailVerificationRepository
+	// Phase 9 (revised): email-verification store, Redis-backed.
+	// Replaces the prior `email_verifications` PG table — short-
+	// lived single-use tokens belong in Redis (auto-TTL, no row
+	// accumulation), durable answers stay in `users.email_verified`.
+	emailVerificationStore *email.VerificationStore
 }
 
 // ServerState represents the current state of the server
@@ -178,12 +179,13 @@ func (s *Server) SetEmailService(svc *email.Service) {
 	s.emailSvc = svc
 }
 
-// SetEmailVerificationRepo wires the email-verification repository
-// (Phase 9b). Required for the /verify-email landing endpoint.
-func (s *Server) SetEmailVerificationRepo(r *repository.EmailVerificationRepository) {
+// SetEmailVerificationStore wires the Redis-backed verification
+// store (Phase 9b, revised). Required for the /verify-email
+// landing endpoint and the signup-time send.
+func (s *Server) SetEmailVerificationStore(st *email.VerificationStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.emailVerificationRepo = r
+	s.emailVerificationStore = st
 }
 
 // bootstrapBlocked returns true iff the deployment is still in

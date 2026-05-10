@@ -108,9 +108,8 @@ type Server struct {
 	// the longer rationale.
 	emailSvc *email.Service
 
-	// Phase 9b: email-verification repo. Read+written by the
-	// resend endpoint.
-	emailVerificationRepo *repository.EmailVerificationRepository
+	// Phase 9b (revised): Redis-backed verification store.
+	emailVerificationStore *email.VerificationStore
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -177,12 +176,12 @@ func (s *Server) SetEmailService(svc *email.Service) {
 	s.emailSvc = svc
 }
 
-// SetEmailVerificationRepo wires the email-verification repo
-// (Phase 9b). Required for `/users/me/send-verification-email`.
-func (s *Server) SetEmailVerificationRepo(r *repository.EmailVerificationRepository) {
+// SetEmailVerificationStore wires the Redis-backed verification
+// store (Phase 9b, revised). Required for the resend endpoint.
+func (s *Server) SetEmailVerificationStore(st *email.VerificationStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.emailVerificationRepo = r
+	s.emailVerificationStore = st
 }
 
 // SetBootstrapManager wires the bootstrap-state checker so signup

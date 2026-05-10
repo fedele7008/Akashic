@@ -40,7 +40,7 @@ func (s *Server) handleSendVerificationEmail(w http.ResponseWriter, r *http.Requ
 	}
 	s.mu.RLock()
 	emailSvc := s.emailSvc
-	verRepo := s.emailVerificationRepo
+	verStore := s.emailVerificationStore
 	s.mu.RUnlock()
 	verifyBase := ""
 	if emailSvc != nil {
@@ -53,10 +53,10 @@ func (s *Server) handleSendVerificationEmail(w http.ResponseWriter, r *http.Requ
 					"contact your administrator if you need to verify your email", nil))
 		return
 	}
-	if verRepo == nil {
+	if verStore == nil {
 		response.WriteJSON(w, http.StatusServiceUnavailable,
 			response.Fail("API_NOT_READY",
-				"verification repository not yet wired", nil))
+				"verification store not yet wired", nil))
 		return
 	}
 
@@ -153,18 +153,18 @@ func (s *Server) sendVerificationEmail(
 ) error {
 	s.mu.RLock()
 	emailSvc := s.emailSvc
-	repo := s.emailVerificationRepo
+	store := s.emailVerificationStore
 	s.mu.RUnlock()
 	if emailSvc == nil || !emailSvc.IsConfigured() {
 		return mailer.ErrNotConfigured
 	}
-	if repo == nil {
-		return errors.New("email-verification repo not wired")
+	if store == nil {
+		return errors.New("email-verification store not wired")
 	}
 	if verifyBase == "" {
 		return errors.New("verify_url_base not configured")
 	}
-	rawToken, _, err := repo.Create(ctx, userID, email)
+	rawToken, err := store.Create(ctx, userID, email)
 	if err != nil {
 		return err
 	}

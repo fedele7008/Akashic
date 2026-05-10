@@ -6,10 +6,11 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
+	"akashic/akashic/pkg/email"
 	"akashic/akashic/pkg/mailer"
 	"akashic/akashic/pkg/models"
-	"akashic/akashic/pkg/repository"
 
 	"github.com/google/uuid"
 	"go.uber.org/zap"
@@ -50,10 +51,10 @@ func (s *Server) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.mu.RLock()
-	repo := s.emailVerificationRepo
+	store := s.emailVerificationStore
 	db := s.db
 	s.mu.RUnlock()
-	if repo == nil || db == nil {
+	if store == nil || db == nil {
 		s.renderVerifyEmailError(w, http.StatusServiceUnavailable,
 			"Server not ready",
 			"The verification service isn't ready yet. Please try the link again in a moment.")
@@ -61,8 +62,8 @@ func (s *Server) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	rawToken := strings.TrimSpace(r.URL.Query().Get("token"))
-	row, err := repo.Consume(r.Context(), rawToken)
-	if errors.Is(err, repository.ErrEmailVerificationInvalid) {
+	data, err := store.Consume(r.Context(), rawToken)
+	if errors.Is(err, email.ErrVerificationInvalid) {
 		s.renderVerifyEmailError(w, http.StatusOK,
 			"Verification link expired or already used",
 			"This verification link is no longer valid. It may have expired (links last 24 hours), been used already, or been replaced by a newer one.")
@@ -77,22 +78,22 @@ func (s *Server) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Token is valid. Flip the user's `email_verified` flag.
-	// The token row stores the email it was sent TO; if the user's
-	// CURRENT email differs (changed mid-verification), we still
-	// flip the flag — the action verifies the user's claim about
-	// the address that was emailed, regardless of subsequent
+	// The Redis token stored the email it was sent TO; if the
+	// user's CURRENT email differs (changed mid-verification), we
+	// still flip the flag — the action verifies the user's claim
+	// about the address that was emailed, regardless of subsequent
 	// email-change events. Phase 9c (email-change re-verification)
 	// is what re-resets the flag on email change.
-	now := row.UsedAt // already set by Consume
+	now := time.Now().UTC()
 	updates := map[string]any{
 		"email_verified":    true,
-		"email_verified_at": now,
+		"email_verified_at": &now,
 	}
 	if err := db.WithContext(r.Context()).Model(&models.User{}).
-		Where("id = ?", row.UserID).
+		Where("id = ?", data.UserID).
 		Updates(updates).Error; err != nil {
 		s.logger.App.Error("verify-email: user update",
-			zap.String("user_id", row.UserID.String()),
+			zap.String("user_id", data.UserID.String()),
 			zap.Error(err))
 		s.renderVerifyEmailError(w, http.StatusInternalServerError,
 			"Server error",
@@ -101,19 +102,19 @@ func (s *Server) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.logger.Security.Info("email verified",
-		zap.String("user_id", row.UserID.String()),
-		zap.String("email", row.Email))
+		zap.String("user_id", data.UserID.String()),
+		zap.String("email", data.Email))
 
 	// Look up display name for the success page (best-effort).
 	var u models.User
 	displayName := ""
-	if err := db.WithContext(r.Context()).Where("id = ?", row.UserID).First(&u).Error; err == nil {
+	if err := db.WithContext(r.Context()).Where("id = ?", data.UserID).First(&u).Error; err == nil {
 		// User row doesn't carry display_name (it's in LDAP); fall
 		// back to the email's local part for a friendly greeting.
 		// Phase 9+ could fetch from LDAP for the welcome message;
 		// not worth the round-trip here.
-		if at := strings.IndexByte(row.Email, '@'); at > 0 {
-			displayName = row.Email[:at]
+		if at := strings.IndexByte(data.Email, '@'); at > 0 {
+			displayName = data.Email[:at]
 		}
 	}
 
@@ -162,21 +163,21 @@ func (s *Server) SendVerificationEmail(
 ) error {
 	s.mu.RLock()
 	emailSvc := s.emailSvc
-	repo := s.emailVerificationRepo
+	store := s.emailVerificationStore
 	s.mu.RUnlock()
 
 	if emailSvc == nil || !emailSvc.IsConfigured() {
 		return mailer.ErrNotConfigured
 	}
-	if repo == nil {
-		return errors.New("email-verification repo not wired")
+	if store == nil {
+		return errors.New("email-verification store not wired")
 	}
 	verifyBase := emailSvc.VerifyURLBase(ctx)
 	if verifyBase == "" {
 		return errors.New("verify_url_base not configured")
 	}
 
-	rawToken, _, err := repo.Create(ctx, userID, email)
+	rawToken, err := store.Create(ctx, userID, email)
 	if err != nil {
 		return err
 	}

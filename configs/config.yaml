@@ -220,6 +220,13 @@ middleware:
 deployment:
   environment: "development"  # development, staging, production
 
+# Master secret. Used by Phase 9 column-encryption (HKDF-SHA256
+# derives per-purpose AES-256-GCM keys for fields like the
+# SendGrid API key in email_configs). Same env var the CLI uses
+# for the Vault root token. Empty degrades encrypted columns to
+# plaintext-at-rest with a startup warning.
+secret: "${AKASHIC_SECRET}"
+
 bootstrap:
   # Bootstrap token time-to-live (regeneration invalidates old token)
   token_ttl: "1h"  # 1 hour default

@@ -304,6 +304,16 @@ type Config struct {
 	// Tenant-portal configuration (Phase 8)
 	Portal PortalConfig `mapstructure:"portal" yaml:"portal"`
 
+	// Secret is the deployment master secret (`AKASHIC_SECRET`).
+	// Phase 9 uses it as the HKDF root for column-level encryption
+	// of stored credentials (today: SendGrid API key in
+	// `email_configs`; future: SMTP passwords, Postmark tokens).
+	// Required when any encrypted-column feature is in use; empty
+	// degrades email-config to plaintext-at-rest with a startup
+	// warning (matches the existing Vault-token-encryption use of
+	// the same env var).
+	Secret string `mapstructure:"secret" yaml:"secret"`
+
 	// Note: outbound-email configuration is NOT in this struct.
 	// Phase 9 makes email config DB-backed + admin-web-editable
 	// (see pkg/email.Service + pkg/models/email_config.go).

@@ -205,10 +205,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// client-write paths (gate special scopes); read+written by the
 	// /scope-requests admin endpoints.
 	scopeRequestRepo := repository.NewOAuthScopeRequestRepository(app.DB.DB)
-	// Phase 9: email-verification repo. Read+written by signup
-	// (initial send), the auth-server's verify-email landing, and
-	// the api-server's resend endpoint.
-	emailVerificationRepo := repository.NewEmailVerificationRepository(app.DB.DB)
+	// Phase 9 (revised): Redis-backed verification store.
+	// Replaces the prior `email_verifications` PG table — short-
+	// lived single-use tokens belong in Redis (auto-TTL,
+	// auto-GC) while durable answers stay in `users.email_verified`.
+	emailVerificationStore := email.NewVerificationStore(app.Redis)
 
 	// Phase 9 (revised): DB-backed email-config service. The
 	// service satisfies `mailer.Mailer` so existing call sites
@@ -219,7 +220,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// deployment starts in degraded-email mode and operators
 	// configure the provider + credentials via the admin web's
 	// "Email" page. Edits take effect immediately on save.
-	app.EmailService = email.NewService(app.DB.DB, app.Logger.App)
+	app.EmailService = email.NewService(app.DB.DB, app.Logger.App, []byte(cfg.Secret))
 	if err := app.EmailService.EnsureSingleton(app.ctx); err != nil {
 		// Soft-fail: log + continue. The service is constructed but
 		// not reloaded — Send will return ErrNotConfigured until
@@ -381,7 +382,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// keep working; in addition, the verify-URL is read live from
 	// the service so admin edits via UI take effect immediately.
 	app.AuthServer.SetEmailService(app.EmailService)
-	app.AuthServer.SetEmailVerificationRepo(emailVerificationRepo)
+	app.AuthServer.SetEmailVerificationStore(emailVerificationStore)
 
 	// Built-in OAuth client registration. After Phase 8b's tenant-
 	// client registration roadmap landed, akashic-admin is the only
@@ -430,7 +431,7 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// Phase 9 (revised): same email service + verification repo on
 	// the api-server side. Used by the bearer-auth resend endpoint.
 	app.APIServer.SetEmailService(app.EmailService)
-	app.APIServer.SetEmailVerificationRepo(emailVerificationRepo)
+	app.APIServer.SetEmailVerificationStore(emailVerificationStore)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(
