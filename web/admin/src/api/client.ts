@@ -62,6 +62,18 @@ export interface TenantPolicy {
   // subset. Special scopes (e.g. `offline_access`) bypass this and
   // require admin approval via the scope-request workflow.
   allowed_client_scopes: string;
+  // Phase 9e v2: client-registration qualification.
+  //   - require_verified_email default true; UI greys-out the
+  //     checkbox when no mailer is configured but keeps the stored
+  //     value visible. Eligibility silently bypasses the gate when
+  //     no mailer is configured.
+  //   - require_approval routes every POST /clients through the
+  //     per-attempt approval workflow when on.
+  //   - default_max_clients is the tenant-wide cap; per-user offset
+  //     on User.client_count_offset adjusts it.
+  require_verified_email_for_client_registration: boolean;
+  require_approval_for_client_registration: boolean;
+  default_max_clients: number;
   updated_at: string;
   updated_by?: string;
 }
@@ -77,6 +89,9 @@ export interface UpdatePolicyRequest {
   refresh_token_sliding_ttl_seconds?: number;
   refresh_token_absolute_ttl_seconds?: number;
   allowed_client_scopes?: string;
+  require_verified_email_for_client_registration?: boolean;
+  require_approval_for_client_registration?: boolean;
+  default_max_clients?: number;
 }
 
 export class PolicyApi {
@@ -131,6 +146,9 @@ export interface UserView {
   missing_identity: boolean;
   missing_identity_since?: string;
   email_verified: boolean;
+  /** Phase 9e v2: signed offset on tenant default_max_clients.
+   *  Effective cap = max(0, policy.default_max_clients + offset). */
+  client_count_offset: number;
   last_login_at?: string;
   created_at: string;
   updated_at: string;
@@ -144,6 +162,8 @@ export interface ListUsersResponse {
 export interface UpdateUserRequest {
   user_type?: 'root' | 'admin' | 'user';
   is_disabled?: boolean;
+  /** Phase 9e v2: signed offset on tenant default_max_clients. */
+  client_count_offset?: number;
 }
 
 export interface UserListParams {
@@ -990,5 +1010,95 @@ export class ScopeRequestsApi {
       throw err;
     }
     return body.data.scope_request;
+  }
+}
+
+// ─── Phase 9e v2: client-registration request workflow ─────────
+
+export interface ClientRegistrationRequestView {
+  id: string;
+  user_id: string;
+  /** LDAP-joined fields, may be empty when LDAP is unreachable. */
+  requester_email?: string;
+  requester_display_name?: string;
+  reason: string;
+  /** Proposed client params; mirrors the create-client form. */
+  name: string;
+  description?: string;
+  homepage_url?: string;
+  client_type: 'WEB' | 'SPA';
+  redirect_uris: string;
+  required_scopes?: string;
+  optional_scopes?: string;
+  require_pkce: boolean;
+  status: 'pending' | 'approved' | 'rejected';
+  submitted_at: string;
+  reviewed_by?: string;
+  reviewed_at?: string;
+  decision_note?: string;
+  /** Set on approve only — the materialized client_services row. */
+  created_client_id?: string;
+}
+
+export class ClientRegistrationRequestsApi {
+  static async list(status?: 'pending' | 'approved' | 'rejected'): Promise<ClientRegistrationRequestView[]> {
+    const q = status ? '?status=' + encodeURIComponent(status) : '';
+    const r = await fetch('/api/client-registration-requests' + q, {
+      method: 'GET',
+      credentials: 'same-origin',
+      headers: { [CSRF_HEADER]: readCookie(CSRF_COOKIE) },
+    });
+    const body: ApiResponse<{ client_registration_requests: ClientRegistrationRequestView[] }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `List failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.client_registration_requests;
+  }
+
+  /** Approve a pending request "as proposed" — the request's stored
+   *  client params become a new `client_services` row owned by the
+   *  requester. v2: no field editing on review; reject + ask user
+   *  to resubmit if changes are needed. */
+  static async approve(
+    id: string,
+    decisionNote?: string,
+  ): Promise<ClientRegistrationRequestView> {
+    const r = await fetch(`/api/client-registration-requests/${encodeURIComponent(id)}/approve`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify({ decision_note: decisionNote ?? '' }),
+    });
+    const body: ApiResponse<{ client_registration_request: ClientRegistrationRequestView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Approve failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.client_registration_request;
+  }
+
+  static async reject(id: string, decisionNote?: string): Promise<ClientRegistrationRequestView> {
+    const r = await fetch(`/api/client-registration-requests/${encodeURIComponent(id)}/reject`, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Content-Type': 'application/json',
+        [CSRF_HEADER]: readCookie(CSRF_COOKIE),
+      },
+      body: JSON.stringify({ decision_note: decisionNote ?? '' }),
+    });
+    const body: ApiResponse<{ client_registration_request: ClientRegistrationRequestView }> = await r.json();
+    if (!r.ok || !body.success || !body.data) {
+      const err = new Error(body.error?.message ?? `Reject failed (HTTP ${r.status})`);
+      (err as Error & { apiError?: ApiError }).apiError = body.error;
+      throw err;
+    }
+    return body.data.client_registration_request;
   }
 }

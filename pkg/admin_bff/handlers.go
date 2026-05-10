@@ -1028,3 +1028,78 @@ func (s *Server) scopeRequestReview(w http.ResponseWriter, r *http.Request, acti
 		"data":    map[string]any{"scope_request": row},
 	})
 }
+
+// ─── Phase 9e: client-registration request workflow ─────────────
+
+func (s *Server) handleListClientRegistrationRequests(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	status := r.URL.Query().Get("status")
+	rows, err := s.controlClient.ClientRegistrationRequestList(r.Context(), status)
+	if err != nil {
+		s.writeControlError(w, err, "listing client-registration requests")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"client_registration_requests": rows},
+	})
+}
+
+func (s *Server) handleApproveClientRegistrationRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED",
+			"Missing client-registration-request id in path.")
+		return
+	}
+	var body ApproveClientRegistrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		// Empty / malformed body still needs a non-nil pointer with
+		// at least the reviewer stamped — fall through to the
+		// review call with whatever was decodable.
+		body = ApproveClientRegistrationRequest{}
+	}
+	defer r.Body.Close()
+	body.ReviewerUserID = s.callerUserIDFromSession(r)
+	row, err := s.controlClient.ClientRegistrationRequestApprove(r.Context(), id, &body)
+	if err != nil {
+		s.writeControlError(w, err, "approving client-registration request")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"client_registration_request": row},
+	})
+}
+
+func (s *Server) handleRejectClientRegistrationRequest(w http.ResponseWriter, r *http.Request) {
+	if !s.requireAdminSession(w, r) {
+		return
+	}
+	id := r.PathValue("id")
+	if id == "" {
+		writeError(w, http.StatusBadRequest, "VALIDATION_FAILED",
+			"Missing client-registration-request id in path.")
+		return
+	}
+	var body RejectClientRegistrationRequest
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		body = RejectClientRegistrationRequest{}
+	}
+	defer r.Body.Close()
+	body.ReviewerUserID = s.callerUserIDFromSession(r)
+	row, err := s.controlClient.ClientRegistrationRequestReject(r.Context(), id, &body)
+	if err != nil {
+		s.writeControlError(w, err, "rejecting client-registration request")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"success": true,
+		"data":    map[string]any{"client_registration_request": row},
+	})
+}

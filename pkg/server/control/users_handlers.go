@@ -50,9 +50,13 @@ type userView struct {
 	MissingIdentity      bool    `json:"missing_identity"`
 	MissingIdentitySince string  `json:"missing_identity_since,omitempty"`
 	EmailVerified        bool    `json:"email_verified"`
-	LastLoginAt          *string `json:"last_login_at,omitempty"`
-	CreatedAt            string  `json:"created_at"`
-	UpdatedAt            string  `json:"updated_at"`
+	// Phase 9e v2: signed offset on the tenant's default_max_clients.
+	// 0 = use the tenant default exactly; positive grants extra
+	// slots; negative tightens.
+	ClientCountOffset int     `json:"client_count_offset"`
+	LastLoginAt       *string `json:"last_login_at,omitempty"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 // toUserView converts the PG row to the wire shape. `email` is
@@ -62,15 +66,16 @@ type userView struct {
 // missing; the FE falls back to the uid extracted from the DN.
 func toUserView(u *models.User, email string) userView {
 	v := userView{
-		ID:              u.ID.String(),
-		LdapDN:          u.LdapDN,
-		Email:           email,
-		UserType:        string(u.UserType),
-		IsDisabled:      u.IsDisabled,
-		MissingIdentity: u.MissingIdentity,
-		EmailVerified:   u.EmailVerified,
-		CreatedAt:       u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
-		UpdatedAt:       u.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		ID:                u.ID.String(),
+		LdapDN:            u.LdapDN,
+		Email:             email,
+		UserType:          string(u.UserType),
+		IsDisabled:        u.IsDisabled,
+		MissingIdentity:   u.MissingIdentity,
+		EmailVerified:     u.EmailVerified,
+		ClientCountOffset: u.ClientCountOffset,
+		CreatedAt:         u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
+		UpdatedAt:         u.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
 	if u.DisabledAt != nil {
 		v.DisabledAt = u.DisabledAt.UTC().Format("2006-01-02T15:04:05Z")
@@ -231,13 +236,16 @@ func (s *Server) adminGetUser(w http.ResponseWriter, r *http.Request, id uuid.UU
 }
 
 // adminPatchUserRequest is the body for PATCH /users/<id>. Pointer
-// fields distinguish "leave unchanged" (omitted) from "set to false"
-// (explicit false). caller_user_id is the operator's user_id from
+// fields distinguish "leave unchanged" (omitted) from "set to zero"
+// (explicit zero). caller_user_id is the operator's user_id from
 // the BFF session — required for self-protection invariants.
 type adminPatchUserRequest struct {
-	UserType     *string `json:"user_type,omitempty"`
-	IsDisabled   *bool   `json:"is_disabled,omitempty"`
-	CallerUserID string  `json:"caller_user_id,omitempty"`
+	UserType   *string `json:"user_type,omitempty"`
+	IsDisabled *bool   `json:"is_disabled,omitempty"`
+	// Phase 9e v2: signed offset applied to the tenant policy's
+	// default_max_clients to compute this user's effective cap.
+	ClientCountOffset *int   `json:"client_count_offset,omitempty"`
+	CallerUserID      string `json:"caller_user_id,omitempty"`
 }
 
 func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -249,7 +257,10 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request, id uuid.
 	}
 	defer r.Body.Close()
 
-	params := usermanagement.UpdateParams{IsDisabled: req.IsDisabled}
+	params := usermanagement.UpdateParams{
+		IsDisabled:        req.IsDisabled,
+		ClientCountOffset: req.ClientCountOffset,
+	}
 	if req.UserType != nil {
 		ut := models.UserType(*req.UserType)
 		if !ut.IsValid() {
@@ -656,6 +667,9 @@ func changedFields(req adminPatchUserRequest) []string {
 	}
 	if req.IsDisabled != nil {
 		out = append(out, "is_disabled="+strconv.FormatBool(*req.IsDisabled))
+	}
+	if req.ClientCountOffset != nil {
+		out = append(out, "client_count_offset="+strconv.Itoa(*req.ClientCountOffset))
 	}
 	return out
 }

@@ -9,6 +9,7 @@ import (
 
 	authpkg "akashic/akashic/pkg/auth"
 	"akashic/akashic/pkg/bootstrap"
+	"akashic/akashic/pkg/clientregistration"
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/database/akashic_postgres"
 	"akashic/akashic/pkg/database/akashic_redis"
@@ -205,6 +206,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// client-write paths (gate special scopes); read+written by the
 	// /scope-requests admin endpoints.
 	scopeRequestRepo := repository.NewOAuthScopeRequestRepository(app.DB.DB)
+	// Phase 9e: client-registration approval workflow repo. Same
+	// shape as scopeRequestRepo. Read by the eligibility endpoint
+	// + the user submit/list endpoints; read+written by the admin
+	// reviewer endpoints.
+	clientRegRequestRepo := repository.NewClientRegistrationRequestRepository(app.DB.DB)
 	// Phase 9 (revised): Redis-backed verification store.
 	// Replaces the prior `email_verifications` PG table — short-
 	// lived single-use tokens belong in Redis (auto-TTL,
@@ -232,6 +238,22 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 		app.Logger.App.Warn("email config seed/reload failed; running in degraded mode",
 			zap.Error(err))
 	}
+
+	// Phase 9e: client-registration qualification service. Bundles
+	// the eligibility check, the submit/approve/reject orchestration,
+	// and the approval/rejection email send. Held by both the api-
+	// server (eligibility + submit) and the control-server (review).
+	clientRegSvc := clientregistration.NewService(clientregistration.Deps{
+		DB:        app.DB.DB,
+		Requests:  clientRegRequestRepo,
+		Users:     userRepo,
+		PolicySvc: app.PolicyService,
+		Mailer:    app.EmailService,
+		Logger:    app.Logger.App,
+		LoginURLBase: func(ctx context.Context) string {
+			return app.EmailService.VerifyURLBase(ctx)
+		},
+	})
 
 	// Initialize OAuth signing-key store (Phase 7).
 	// On first-ever startup the directory is empty and we generate a
@@ -438,6 +460,12 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	app.APIServer.SetEmailService(app.EmailService)
 	app.APIServer.SetEmailVerificationStore(emailVerificationStore)
 
+	// Phase 9e: client-registration qualification service. Wire into
+	// both servers — the api-server needs it for the eligibility
+	// endpoint + cap enforcement, the control-server needs it for
+	// approve/reject orchestration.
+	app.APIServer.SetClientRegistrationService(clientRegSvc)
+
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(
 		app.ctx,
@@ -489,6 +517,10 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// control plane needs the same RT repo the auth server already
 	// holds.
 	app.ControlServer.SetRefreshTokenRepo(refreshTokenRepo)
+
+	// Phase 9e: hand the control plane the client-registration repo
+	// (for list/get) and service (for approve/reject orchestration).
+	app.ControlServer.SetClientRegistrationDeps(clientRegRequestRepo, clientRegSvc)
 
 	app.Logger.App.Info("Application initialized successfully")
 	return nil

@@ -79,6 +79,19 @@ interface RotateSecretResult {
   client_secret: string;
 }
 
+/** Phase 9e v2: client-registration eligibility wire shape.
+ *  Mirrors the api-server's `Eligibility` struct. */
+interface ClientRegEligibility {
+  verified_email_required: boolean;
+  approval_required: boolean;
+  eligible: boolean;
+  missing?: string[];
+  effective_max_clients: number;
+  current_client_count: number;
+  pending_request_count: number;
+  mailer_configured: boolean;
+}
+
 /** Internal view-state machine. Same pattern admin-web's Dashboard
  *  uses; discriminated union beats parallel booleans. */
 type View =
@@ -88,11 +101,17 @@ type View =
   | { kind: "list" }
   | { kind: "create" }
   | { kind: "created"; result: CreatedClient }
+  | { kind: "request-submitted"; eligibility: ClientRegEligibility }
   | { kind: "rotate-confirm"; target: ClientView }
   | { kind: "rotated"; client: ClientView; result: RotateSecretResult }
   // Phase B portal-side: per-client scope management — required/optional
   // matrix + special-scope request submission + history.
-  | { kind: "scopes"; client: ClientView };
+  | { kind: "scopes"; client: ClientView }
+  // Phase 9e v2: read-only stub when the user can't even start a
+  // registration ("verify your email" / "cap reached"). When
+  // approval is required, the user STILL sees the regular create
+  // form and the submit goes through the approval flow.
+  | { kind: "not-eligible"; eligibility: ClientRegEligibility };
 
 @customElement("akashic-clients")
 export class AkashicClients extends LitElement {
@@ -149,6 +168,21 @@ export class AkashicClients extends LitElement {
   @state() private rotating = false;
   @state() private rotateError: string | null = null;
   @state() private secretCopied = false;
+
+  // Phase 9e v2: cached eligibility from the most recent
+  // CheckEligibility round trip. Drives:
+  //   - whether to render the "Request approval" submit copy on
+  //     the create form vs. the regular submit copy
+  //   - which endpoint to POST to (/clients vs.
+  //     /client-registration-requests)
+  //   - the cap-reached panel's count breakdown
+  // null while initial fetch is in flight; non-null once load
+  // completes.
+  @state() private eligibility: ClientRegEligibility | null = null;
+
+  // Reason field for the approval-request flow; shown on the
+  // create form only when `eligibility.approval_required` is true.
+  @state() private reason = "";
 
   static override styles = css`
     :host {
@@ -460,6 +494,10 @@ export class AkashicClients extends LitElement {
         return this.renderRotated(this.view.client, this.view.result);
       case "scopes":
         return this.renderScopes(this.view.client);
+      case "not-eligible":
+        return this.renderNotEligible(this.view.eligibility);
+      case "request-submitted":
+        return this.renderRequestSubmitted(this.view.eligibility);
     }
   }
 
@@ -615,9 +653,41 @@ export class AkashicClients extends LitElement {
     await this.loadClients();
   }
 
-  // ─── create view ─────────────────────────────────────────────────
+  // ─── Phase 9e v2: eligibility + routing ─────────────────────────
 
-  private startCreate() {
+  // startCreate is the user-facing "register a new client" entry
+  // point. v2 fetches eligibility, caches it on `this.eligibility`
+  // (drives the create form's submit copy + endpoint choice), and
+  // either opens the form or shows the "not eligible" stub.
+  //
+  // Approval-required is NOT a block — it just changes the route
+  // the create form posts to. Cap-reached and unverified-email
+  // ARE blocks; the form doesn't render.
+  //
+  // Fail-soft on eligibility error: the form opens; api-server's
+  // POST validates and surfaces a typed error. UX is less precise
+  // but security stays correct.
+  private async startCreate() {
+    const res = await apiCall<ClientRegEligibility>("/client-registration-eligibility");
+    if (!res.ok) {
+      if (res.code === "NO_SESSION") {
+        this.view = { kind: "needs-signin" };
+        dispatchNeedsSignin(this);
+        return;
+      }
+      this.eligibility = null;
+      this.openCreateForm();
+      return;
+    }
+    this.eligibility = res.data;
+    if (!res.data.eligible) {
+      this.view = { kind: "not-eligible", eligibility: res.data };
+      return;
+    }
+    this.openCreateForm();
+  }
+
+  private openCreateForm() {
     // Seed scope modes: openid required (OIDC mandatory), email +
     // profile optional. Other tenant-allowed scopes default to
     // "disabled" so the developer opts them in explicitly. Special
@@ -640,6 +710,7 @@ export class AkashicClients extends LitElement {
       requirePKCE: true,
       scopeModes: seed,
     };
+    this.reason = "";
     this.formError = null;
     this.fieldErrors = {};
     this.submitting = false;
@@ -663,6 +734,30 @@ export class AkashicClients extends LitElement {
       <form part="form" @submit=${this.onCreateSubmit} novalidate>
         ${this.formError
           ? html`<p part="error" role="alert">${this.formError}</p>`
+          : ""}
+
+        ${this.eligibility?.approval_required
+          ? html`
+              <p part="hint" style="margin-bottom: 0.75rem;">
+                This tenant requires admin approval. Your submission
+                creates a pending request${this.eligibility.mailer_configured
+                  ? "; you'll be emailed when an admin reviews it."
+                  : "; an admin will reach out to you when reviewed."}
+              </p>
+              <label part="field">
+                <span part="field-label">Reason</span>
+                <textarea
+                  part="field-input"
+                  name="reason"
+                  rows="3"
+                  required
+                  .value=${this.reason}
+                  @input=${(e: Event) =>
+                    (this.reason = (e.target as HTMLTextAreaElement).value)}
+                  placeholder="e.g. internal admin tool for the design team"
+                ></textarea>
+              </label>
+            `
           : ""}
 
         <label part="field">
@@ -787,7 +882,9 @@ export class AkashicClients extends LitElement {
             type="submit"
             part="button-primary"
             ?disabled=${this.submitting}
-          >${this.submitting ? "Registering…" : "Register client"}</button>
+          >${this.submitting
+              ? (this.eligibility?.approval_required ? "Submitting…" : "Registering…")
+              : (this.eligibility?.approval_required ? "Submit for review" : "Register client")}</button>
           <button
             type="button"
             @click=${() => (this.view = { kind: "list" })}
@@ -835,6 +932,42 @@ export class AkashicClients extends LitElement {
     payload.required_scopes = required;
     payload.optional_scopes = optional;
 
+    // v2 routing: when the tenant policy requires approval, the
+    // exact same form posts to the approval-request endpoint
+    // instead of /clients. Reason is required there.
+    if (this.eligibility?.approval_required) {
+      const reason = this.reason.trim();
+      if (reason === "") {
+        this.submitting = false;
+        this.formError = "Reason is required for approval.";
+        return;
+      }
+      payload.reason = reason;
+      const res = await apiCall<unknown>("/client-registration-requests", {
+        method: "POST",
+        json: payload,
+      });
+      this.submitting = false;
+      if (!res.ok) {
+        this.handleCreateError(res);
+        return;
+      }
+      // Surface a "submitted, awaiting review" terminal panel and
+      // refresh the cached eligibility so the panel can show the
+      // updated pending count.
+      const eligRes = await apiCall<ClientRegEligibility>("/client-registration-eligibility");
+      const elig = eligRes.ok ? eligRes.data : (this.eligibility ?? null);
+      if (elig) {
+        this.eligibility = elig;
+        this.view = { kind: "request-submitted", eligibility: elig };
+      } else {
+        this.view = { kind: "list" };
+      }
+      return;
+    }
+
+    // Direct path: tenant doesn't require approval; create the
+    // client immediately.
     const res = await apiCall<CreatedClient>("/clients", {
       method: "POST",
       json: payload,
@@ -1384,6 +1517,88 @@ export class AkashicClients extends LitElement {
       // Clipboard API unavailable on insecure origins / denied perms;
       // operator can still triple-click the monospace value to select.
     }
+  }
+
+  // ─── Phase 9e v2: gate + terminal views ─────────────────────────
+
+  private renderNotEligible(elig: ClientRegEligibility) {
+    const missing = elig.missing ?? [];
+    return html`
+      <div part="header">
+        <div part="header-text">
+          <h2 part="header-title">Register a new client</h2>
+          <p part="header-sub">
+            You can't start a new registration right now.
+          </p>
+        </div>
+      </div>
+
+      ${missing.includes("email_verified")
+        ? html`
+            <p part="error" role="alert">
+              <strong>Verify your email.</strong> Open your profile and
+              use the "Verify email" banner to send yourself a
+              verification link.
+            </p>
+          `
+        : ""}
+
+      ${missing.includes("cap_reached")
+        ? html`
+            <p part="error" role="alert">
+              <strong>Cap reached.</strong> You've used
+              ${elig.current_client_count + elig.pending_request_count}
+              of ${elig.effective_max_clients} client slot${elig.effective_max_clients === 1 ? "" : "s"}
+              (${elig.current_client_count} active${elig.pending_request_count > 0
+                ? html` · ${elig.pending_request_count} pending review`
+                : ""}).
+              Delete an existing client to free a slot, or contact your
+              administrator to request a higher cap.
+            </p>
+          `
+        : ""}
+
+      <div part="actions">
+        <button
+          part="button-secondary"
+          @click=${() => (this.view = { kind: "list" })}
+        >
+          Back to clients
+        </button>
+      </div>
+    `;
+  }
+
+  private renderRequestSubmitted(elig: ClientRegEligibility) {
+    return html`
+      <div part="header">
+        <div part="header-text">
+          <h2 part="header-title">Request submitted</h2>
+          <p part="header-sub">
+            Your client registration is awaiting admin review.
+          </p>
+        </div>
+      </div>
+
+      <p part="hint">
+        ${elig.mailer_configured
+          ? "You'll be emailed when an admin approves or rejects your request."
+          : "An admin will reach out to you when reviewed."}
+        You currently have <strong>${elig.pending_request_count}</strong>
+        request${elig.pending_request_count === 1 ? "" : "s"} pending
+        review (${elig.current_client_count} active client${elig.current_client_count === 1 ? "" : "s"} +
+        ${elig.pending_request_count} pending of ${elig.effective_max_clients} slot${elig.effective_max_clients === 1 ? "" : "s"}).
+      </p>
+
+      <div part="actions">
+        <button
+          part="button-primary"
+          @click=${() => (this.view = { kind: "list" })}
+        >
+          Back to clients
+        </button>
+      </div>
+    `;
   }
 }
 

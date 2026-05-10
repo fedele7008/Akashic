@@ -291,6 +291,27 @@ func (r *UserRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error
 	return nil
 }
 
+// SetClientCountOffset adjusts a user's per-user offset on the
+// tenant policy's `default_max_clients` cap. Signed: +N grants
+// extra slots, -N tightens. The user's effective cap is computed
+// live as `max(0, policy.default_max_clients + offset)` against
+// (existing clients) + (pending requests).
+//
+// Phase 9e v2 — admin-only edit; no widget surface for users to
+// raise their own cap.
+func (r *UserRepository) SetClientCountOffset(ctx context.Context, userID uuid.UUID, offset int) error {
+	res := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", userID).
+		Update("client_count_offset", offset)
+	if res.Error != nil {
+		return fmt.Errorf("set client_count_offset: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return models.ErrUserNotFound
+	}
+	return nil
+}
+
 // SetPasswordResetRequired flips the gate that the auth-server's
 // /login flow checks after a successful password verify. When true,
 // the next sign-in is intercepted into a forced-reset page instead

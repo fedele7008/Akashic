@@ -82,6 +82,19 @@ type User struct {
 	// `POST /users/<id>/reset-password` on the control plane.
 	PasswordResetRequired bool `gorm:"default:false;not null;index" json:"password_reset_required"`
 
+	// Phase 9e (v2): per-user offset applied to the tenant policy's
+	// `default_max_clients`. Signed: positive grants extra slots to
+	// power users, negative tightens trusted-but-restricted users.
+	// The user's effective cap is computed live as
+	// `max(0, policy.default_max_clients + client_count_offset)`,
+	// counted against (existing clients) + (pending registration
+	// requests) so a flood of pending submissions can't bypass it.
+	//
+	// Edited only by admins via PATCH /users/<id>; there is no
+	// widget-side surface for users to request a higher cap. Default
+	// 0 means "use the tenant default exactly".
+	ClientCountOffset int `gorm:"default:0;not null" json:"client_count_offset"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }

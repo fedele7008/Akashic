@@ -477,9 +477,11 @@ type UserView struct {
 	MissingIdentity      bool    `json:"missing_identity"`
 	MissingIdentitySince string  `json:"missing_identity_since,omitempty"`
 	EmailVerified        bool    `json:"email_verified"`
-	LastLoginAt          *string `json:"last_login_at,omitempty"`
-	CreatedAt            string  `json:"created_at"`
-	UpdatedAt            string  `json:"updated_at"`
+	// Phase 9e v2: signed offset on tenant default_max_clients.
+	ClientCountOffset int     `json:"client_count_offset"`
+	LastLoginAt       *string `json:"last_login_at,omitempty"`
+	CreatedAt         string  `json:"created_at"`
+	UpdatedAt         string  `json:"updated_at"`
 }
 
 type ListUsersResponse struct {
@@ -492,9 +494,11 @@ type ListUsersResponse struct {
 // CallerUserID flows in from the BFF's session so the domain layer
 // can run self-protection invariants.
 type UpdateUserRequest struct {
-	UserType     *string `json:"user_type,omitempty"`
-	IsDisabled   *bool   `json:"is_disabled,omitempty"`
-	CallerUserID string  `json:"caller_user_id,omitempty"`
+	UserType   *string `json:"user_type,omitempty"`
+	IsDisabled *bool   `json:"is_disabled,omitempty"`
+	// Phase 9e v2: signed offset on tenant default_max_clients.
+	ClientCountOffset *int   `json:"client_count_offset,omitempty"`
+	CallerUserID      string `json:"caller_user_id,omitempty"`
 }
 
 // UserListParams bundles pagination + filter params for UserList.
@@ -658,8 +662,12 @@ type TenantPolicyView struct {
 	RefreshTokenSlidingTTLSeconds  int     `json:"refresh_token_sliding_ttl_seconds"`
 	RefreshTokenAbsoluteTTLSeconds int     `json:"refresh_token_absolute_ttl_seconds"`
 	AllowedClientScopes            string  `json:"allowed_client_scopes"`
-	UpdatedAt                      string  `json:"updated_at"`
-	UpdatedBy                      *string `json:"updated_by,omitempty"`
+	// Phase 9e v2: client-registration qualification.
+	RequireVerifiedEmailForClientRegistration bool   `json:"require_verified_email_for_client_registration"`
+	RequireApprovalForClientRegistration      bool   `json:"require_approval_for_client_registration"`
+	DefaultMaxClients                         int    `json:"default_max_clients"`
+	UpdatedAt                                 string `json:"updated_at"`
+	UpdatedBy                                 *string `json:"updated_by,omitempty"`
 }
 
 // UpdatePolicyRequest mirrors the control-plane PATCH /policy body.
@@ -674,7 +682,11 @@ type UpdatePolicyRequest struct {
 	RefreshTokenSlidingTTLSeconds  *int    `json:"refresh_token_sliding_ttl_seconds,omitempty"`
 	RefreshTokenAbsoluteTTLSeconds *int    `json:"refresh_token_absolute_ttl_seconds,omitempty"`
 	AllowedClientScopes            *string `json:"allowed_client_scopes,omitempty"`
-	CallerUserID                   string  `json:"caller_user_id,omitempty"`
+	// Phase 9e v2: client-registration qualification.
+	RequireVerifiedEmailForClientRegistration *bool  `json:"require_verified_email_for_client_registration,omitempty"`
+	RequireApprovalForClientRegistration      *bool  `json:"require_approval_for_client_registration,omitempty"`
+	DefaultMaxClients                         *int   `json:"default_max_clients,omitempty"`
+	CallerUserID                              string `json:"caller_user_id,omitempty"`
 }
 
 func (c *ControlClient) PolicyGet(ctx context.Context) (*TenantPolicyView, error) {
@@ -1018,6 +1030,104 @@ func (c *ControlClient) scopeRequestReview(ctx context.Context, id, action strin
 		return nil, fmt.Errorf("malformed scope-request payload: %w", err)
 	}
 	return &wrap.ScopeRequest, nil
+}
+
+// ─── Phase 9e v2: client-registration requests ──────────────────
+
+// ClientRegistrationRequestView mirrors the control plane's
+// `adminClientRegRequestView`. Each row carries the proposed
+// client params so the reviewer page can render them inline.
+type ClientRegistrationRequestView struct {
+	ID                   string `json:"id"`
+	UserID               string `json:"user_id"`
+	RequesterEmail       string `json:"requester_email,omitempty"`
+	RequesterDisplayName string `json:"requester_display_name,omitempty"`
+	Reason               string `json:"reason"`
+
+	// Proposed client params.
+	Name           string `json:"name"`
+	Description    string `json:"description,omitempty"`
+	HomepageURL    string `json:"homepage_url,omitempty"`
+	ClientType     string `json:"client_type"`
+	RedirectURIs   string `json:"redirect_uris"`
+	RequiredScopes string `json:"required_scopes,omitempty"`
+	OptionalScopes string `json:"optional_scopes,omitempty"`
+	RequirePKCE    bool   `json:"require_pkce"`
+
+	Status          string  `json:"status"`
+	SubmittedAt     string  `json:"submitted_at"`
+	ReviewedBy      *string `json:"reviewed_by,omitempty"`
+	ReviewedAt      *string `json:"reviewed_at,omitempty"`
+	DecisionNote    string  `json:"decision_note,omitempty"`
+	CreatedClientID *string `json:"created_client_id,omitempty"`
+}
+
+// ApproveClientRegistrationRequest is the body for the approve
+// action. v2: approve "as proposed" — no field editing on review.
+type ApproveClientRegistrationRequest struct {
+	ReviewerUserID string `json:"reviewer_user_id"`
+	DecisionNote   string `json:"decision_note,omitempty"`
+}
+
+// RejectClientRegistrationRequest is the body for the reject action.
+type RejectClientRegistrationRequest struct {
+	ReviewerUserID string `json:"reviewer_user_id"`
+	DecisionNote   string `json:"decision_note,omitempty"`
+}
+
+func (c *ControlClient) ClientRegistrationRequestList(ctx context.Context, status string) ([]ClientRegistrationRequestView, error) {
+	path := "/client-registration-requests"
+	if status != "" {
+		path += "?status=" + url.QueryEscape(status)
+	}
+	resp, body, err := c.do(ctx, http.MethodGet, path, nil)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		Requests []ClientRegistrationRequestView `json:"client_registration_requests"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed client-registration-requests payload: %w", err)
+	}
+	return wrap.Requests, nil
+}
+
+func (c *ControlClient) ClientRegistrationRequestApprove(ctx context.Context, id string, req *ApproveClientRegistrationRequest) (*ClientRegistrationRequestView, error) {
+	return c.clientRegRequestReview(ctx, id, "approve", req)
+}
+
+func (c *ControlClient) ClientRegistrationRequestReject(ctx context.Context, id string, req *RejectClientRegistrationRequest) (*ClientRegistrationRequestView, error) {
+	return c.clientRegRequestReview(ctx, id, "reject", req)
+}
+
+func (c *ControlClient) clientRegRequestReview(ctx context.Context, id, action string, req any) (*ClientRegistrationRequestView, error) {
+	resp, body, err := c.do(ctx, http.MethodPost,
+		"/client-registration-requests/"+id+"/"+action, req)
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, parseControlError(resp.StatusCode, body)
+	}
+	var env envelope
+	if err := json.Unmarshal(body, &env); err != nil {
+		return nil, fmt.Errorf("malformed control plane response: %w", err)
+	}
+	var wrap struct {
+		Request ClientRegistrationRequestView `json:"client_registration_request"`
+	}
+	if err := json.Unmarshal(env.Data, &wrap); err != nil {
+		return nil, fmt.Errorf("malformed client-registration-request payload: %w", err)
+	}
+	return &wrap.Request, nil
 }
 
 // parseControlError extracts the {error: {code, message, details}}

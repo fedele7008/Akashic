@@ -1,0 +1,17 @@
+Subject: Your client registration was approved
+
+Hi {{.DisplayName}},
+
+Good news — your request to register the OAuth client
+"{{.ClientName}}" on {{.TenantName}} has been approved. The client
+is now live and you can manage its credentials from your portal.
+
+{{if .DecisionNote}}Reviewer note:
+{{.DecisionNote}}
+{{end}}
+{{if .LoginURL}}Sign in to manage the client:
+{{.LoginURL}}
+{{end}}
+If you didn't expect this, contact your administrator.
+
+— {{.TenantName}}

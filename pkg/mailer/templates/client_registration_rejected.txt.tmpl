@@ -1,0 +1,14 @@
+Subject: Your client registration was not approved
+
+Hi {{.DisplayName}},
+
+Your request to register the OAuth client "{{.ClientName}}" on
+{{.TenantName}} was reviewed and not approved at this time.
+
+{{if .DecisionNote}}Reviewer note:
+{{.DecisionNote}}
+{{end}}
+You're welcome to submit a new request from your portal once any
+concerns have been addressed.
+
+— {{.TenantName}}

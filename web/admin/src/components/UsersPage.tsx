@@ -343,6 +343,7 @@ function EditUserDialog({
 }) {
   const [userType, setUserType] = useState(user.user_type);
   const [isDisabled, setIsDisabled] = useState(user.is_disabled);
+  const [clientCountOffset, setClientCountOffset] = useState(user.client_count_offset);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -352,6 +353,7 @@ function EditUserDialog({
     const req: UpdateUserRequest = {};
     if (userType !== user.user_type) req.user_type = userType;
     if (isDisabled !== user.is_disabled) req.is_disabled = isDisabled;
+    if (clientCountOffset !== user.client_count_offset) req.client_count_offset = clientCountOffset;
     if (Object.keys(req).length === 0) {
       onClose();
       return;
@@ -393,6 +395,21 @@ function EditUserDialog({
               <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
                 Locks sign-in. Reversible — uncheck to re-enable.
               </span>
+            </span>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'column', gap: '6px', marginTop: '12px' }}>
+            <span style={{ fontSize: '0.875rem' }}>Client cap offset</span>
+            <input
+              type="number"
+              value={clientCountOffset}
+              onChange={(e) => setClientCountOffset(parseInt(e.target.value, 10) || 0)}
+              style={{ width: '120px' }}
+            />
+            <span style={{ color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+              Signed adjustment to the tenant default. Effective cap =
+              <code> max(0, default + offset)</code>. 0 = use the
+              tenant default exactly. Negative values tighten this
+              user; positive grants extra slots.
             </span>
           </label>
         </div>

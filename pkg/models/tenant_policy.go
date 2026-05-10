@@ -103,6 +103,38 @@ type TenantPolicy struct {
 	// token URL-safe at write time.
 	AllowedClientScopes string `gorm:"type:text;not null;default:'openid profile email'" json:"allowed_client_scopes"`
 
+	// ─── Client-registration qualification (Phase 9e v2) ─────────
+	//
+	// Two independent toggles + one numeric default. The toggles
+	// govern *whether* a registration must clear extra checks; the
+	// default controls *how many* clients each user may register.
+	//
+	//   - RequireVerifiedEmailForClientRegistration: caller must
+	//     have `users.email_verified = true`. Defaults TRUE (the
+	//     intent is "we want verification"); the eligibility check
+	//     silently skips it when no mailer is configured because
+	//     there's no path for users to verify. The admin UI shows
+	//     the stored value as-is and disables the checkbox while
+	//     the mailer is off (so operators see the latent intent).
+	//
+	//   - RequireApprovalForClientRegistration: when on, every
+	//     `POST /clients` is routed through a per-attempt approval
+	//     workflow — the user submits client params + a reason; an
+	//     admin approves or rejects; on approve the `client_services`
+	//     row is created from the stored request params. Defaults
+	//     false (free-for-all preserved for permissive deployments).
+	//
+	//   - DefaultMaxClients: tenant-wide cap on registered clients
+	//     per user. The user's effective cap is
+	//     `max(0, default_max_clients + users.client_count_offset)`.
+	//     Counted against (existing clients) + (pending registration
+	//     requests). Default 25 — enough for normal app developers
+	//     to experiment without becoming a quota-management chore;
+	//     small enough that a runaway script can't fill the table.
+	RequireVerifiedEmailForClientRegistration bool `gorm:"not null;default:true" json:"require_verified_email_for_client_registration"`
+	RequireApprovalForClientRegistration      bool `gorm:"not null;default:false" json:"require_approval_for_client_registration"`
+	DefaultMaxClients                         int  `gorm:"not null;default:25" json:"default_max_clients"`
+
 	UpdatedAt time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
 	UpdatedBy *uuid.UUID `gorm:"type:uuid" json:"updated_by,omitempty"`
 }

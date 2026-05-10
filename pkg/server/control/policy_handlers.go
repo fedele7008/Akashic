@@ -69,7 +69,11 @@ type adminPatchPolicyRequest struct {
 	RefreshTokenSlidingTTLSeconds  *int    `json:"refresh_token_sliding_ttl_seconds,omitempty"`
 	RefreshTokenAbsoluteTTLSeconds *int    `json:"refresh_token_absolute_ttl_seconds,omitempty"`
 	AllowedClientScopes            *string `json:"allowed_client_scopes,omitempty"`
-	CallerUserID                   string  `json:"caller_user_id,omitempty"`
+	// Phase 9e v2: client-registration qualification.
+	RequireVerifiedEmailForClientRegistration *bool `json:"require_verified_email_for_client_registration,omitempty"`
+	RequireApprovalForClientRegistration      *bool `json:"require_approval_for_client_registration,omitempty"`
+	DefaultMaxClients                         *int  `json:"default_max_clients,omitempty"`
+	CallerUserID                              string `json:"caller_user_id,omitempty"`
 }
 
 func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
@@ -93,6 +97,9 @@ func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
 		RefreshTokenSlidingTTLSeconds:  req.RefreshTokenSlidingTTLSeconds,
 		RefreshTokenAbsoluteTTLSeconds: req.RefreshTokenAbsoluteTTLSeconds,
 		AllowedClientScopes:            req.AllowedClientScopes,
+		RequireVerifiedEmailForClientRegistration: req.RequireVerifiedEmailForClientRegistration,
+		RequireApprovalForClientRegistration:      req.RequireApprovalForClientRegistration,
+		DefaultMaxClients:                         req.DefaultMaxClients,
 	}
 	if req.CallerUserID != "" {
 		callerID, err := uuid.Parse(req.CallerUserID)
@@ -158,6 +165,15 @@ func changedPolicyFields(req adminPatchPolicyRequest) []string {
 	}
 	if req.AllowedClientScopes != nil {
 		out = append(out, "allowed_client_scopes")
+	}
+	if req.RequireVerifiedEmailForClientRegistration != nil {
+		out = append(out, "require_verified_email_for_client_registration")
+	}
+	if req.RequireApprovalForClientRegistration != nil {
+		out = append(out, "require_approval_for_client_registration")
+	}
+	if req.DefaultMaxClients != nil {
+		out = append(out, "default_max_clients")
 	}
 	return out
 }

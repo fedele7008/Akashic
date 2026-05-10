@@ -143,6 +143,21 @@ type UpdateParams struct {
 	// time as a non-empty space-separated set of valid scope tokens.
 	AllowedClientScopes *string
 
+	// Phase 9e v2: client-registration qualification.
+	//   - RequireVerifiedEmailForClientRegistration: gate is silently
+	//     skipped when no mailer is configured (eligibility doesn't
+	//     enforce; admin UI greys-out the checkbox while keeping the
+	//     stored value visible). No special validation here.
+	//   - RequireApprovalForClientRegistration: routes /clients
+	//     registrations through the approval workflow when on.
+	//   - DefaultMaxClients: tenant-wide cap; per-user offset on
+	//     `users.client_count_offset` adjusts. Validated to a sane
+	//     range (0..1000) so a typo can't lock everyone out / let
+	//     a runaway script flood the table.
+	RequireVerifiedEmailForClientRegistration *bool
+	RequireApprovalForClientRegistration      *bool
+	DefaultMaxClients                         *int
+
 	CallerID uuid.UUID
 }
 
@@ -167,6 +182,12 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 	if p.UIDChangeCooldownDays != nil {
 		if *p.UIDChangeCooldownDays < 0 || *p.UIDChangeCooldownDays > 365 {
 			return nil, fmt.Errorf("%w: uid_change_cooldown_days must be between 0 and 365",
+				ErrInvalidPolicy)
+		}
+	}
+	if p.DefaultMaxClients != nil {
+		if *p.DefaultMaxClients < 0 || *p.DefaultMaxClients > 1000 {
+			return nil, fmt.Errorf("%w: default_max_clients must be between 0 and 1000",
 				ErrInvalidPolicy)
 		}
 	}
@@ -252,6 +273,15 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 		// Canonicalise on write so the stored form is sorted +
 		// deduped — saves comparison churn on subsequent reads.
 		updates["allowed_client_scopes"] = oauth.ParseScopeSet(*p.AllowedClientScopes).String()
+	}
+	if p.RequireVerifiedEmailForClientRegistration != nil {
+		updates["require_verified_email_for_client_registration"] = *p.RequireVerifiedEmailForClientRegistration
+	}
+	if p.RequireApprovalForClientRegistration != nil {
+		updates["require_approval_for_client_registration"] = *p.RequireApprovalForClientRegistration
+	}
+	if p.DefaultMaxClients != nil {
+		updates["default_max_clients"] = *p.DefaultMaxClients
 	}
 	if p.CallerID != uuid.Nil {
 		updates["updated_by"] = p.CallerID

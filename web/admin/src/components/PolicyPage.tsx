@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  EmailConfigApi,
   PolicyApi,
   type ApiError,
   type TenantPolicy,
@@ -48,6 +49,16 @@ export function PolicyPage() {
   // string in a textarea; the parser canonicalises (sorts +
   // dedupes) on submit so save round-trips don't churn the column.
   const [allowedClientScopes, setAllowedClientScopes] = useState('openid profile email');
+  // Phase 9e v2: client-registration qualification.
+  // Verified-email default-on: the *intent* survives mailer state.
+  // The eligibility service silently bypasses the gate when no
+  // mailer is configured, so it's safe to keep the stored value
+  // true even in that case; the admin UI shows it checked-but-
+  // disabled to make the latent intent visible.
+  const [requireVerifiedEmail, setRequireVerifiedEmail] = useState(true);
+  const [requireApproval, setRequireApproval] = useState(false);
+  const [defaultMaxClients, setDefaultMaxClients] = useState(25);
+  const [mailerConfigured, setMailerConfigured] = useState(false);
 
   const [submitting, setSubmitting] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -68,8 +79,20 @@ export function PolicyPage() {
       setRefreshSlidingTTL(formatSecondsAsDuration(p.refresh_token_sliding_ttl_seconds));
       setRefreshAbsoluteTTL(formatSecondsAsDuration(p.refresh_token_absolute_ttl_seconds));
       setAllowedClientScopes(p.allowed_client_scopes);
+      setRequireVerifiedEmail(p.require_verified_email_for_client_registration);
+      setRequireApproval(p.require_approval_for_client_registration);
+      setDefaultMaxClients(p.default_max_clients);
     } catch (e) {
       setErr((e as Error).message);
+    }
+    // Best-effort mailer-configured probe. Failures degrade to
+    // "assume not configured" — safer than enabling a toggle that
+    // could lock users out.
+    try {
+      const cfg = await EmailConfigApi.get();
+      setMailerConfigured(cfg.provider !== '');
+    } catch {
+      setMailerConfigured(false);
     }
   };
 
@@ -117,6 +140,19 @@ export function PolicyPage() {
     const canonScopes = canonicaliseScopes(allowedClientScopes);
     if (canonScopes !== canonicaliseScopes(policy.allowed_client_scopes)) {
       req.allowed_client_scopes = canonScopes;
+    }
+
+    // Phase 9e v2: client-registration toggles. Verified-email is
+    // saved AS-IS (intent survives mailer state); eligibility
+    // silently skips the gate when no mailer is configured.
+    if (requireVerifiedEmail !== policy.require_verified_email_for_client_registration) {
+      req.require_verified_email_for_client_registration = requireVerifiedEmail;
+    }
+    if (requireApproval !== policy.require_approval_for_client_registration) {
+      req.require_approval_for_client_registration = requireApproval;
+    }
+    if (defaultMaxClients !== policy.default_max_clients) {
+      req.default_max_clients = defaultMaxClients;
     }
 
     if (Object.keys(req).length === 0) {
@@ -282,6 +318,61 @@ export function PolicyPage() {
               Saved value is canonicalised — sorted + deduplicated.
             </div>
           </label>
+        </div>
+
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Client registration</h3>
+          <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0 }}>
+            Tenant-wide rules for OAuth client registration via the
+            <code>&lt;akashic-clients&gt;</code> widget. Per-user
+            overrides (cap offset) live on the Users page.
+          </p>
+          <label style={{ display: 'block', marginBottom: '1rem' }}>
+            <div>Default max clients per user</div>
+            <input
+              type="number"
+              min={0}
+              max={1000}
+              value={defaultMaxClients}
+              onChange={(e) => setDefaultMaxClients(parseInt(e.target.value, 10) || 0)}
+              disabled={submitting}
+              style={{ width: '120px' }}
+            />
+            <div className="hint" style={{ fontSize: '0.75rem', padding: 0, background: 'transparent', border: 'none' }}>
+              Effective cap per user is{' '}
+              <code>max(0, default + user.client_count_offset)</code> and
+              counts (existing clients) + (pending registration requests).
+              Default <strong>25</strong>; range 0–1000.
+            </div>
+          </label>
+          <Checkbox
+            label="Require a verified email"
+            checked={requireVerifiedEmail}
+            onChange={setRequireVerifiedEmail}
+            disabled={submitting || !mailerConfigured}
+            help={
+              mailerConfigured
+                ? "Users must verify their email before they can " +
+                  "register OAuth clients. Default on."
+                : "Inactive — no mailer is configured, so the gate is " +
+                  "silently bypassed at runtime regardless of this " +
+                  "setting. The stored value is preserved so it takes " +
+                  "effect automatically once you configure email."
+            }
+          />
+          <Checkbox
+            label="Require approval"
+            checked={requireApproval}
+            onChange={setRequireApproval}
+            disabled={submitting}
+            help={
+              "When on, every client registration goes through admin " +
+              "review: the user submits client params + a reason via " +
+              "the widget, you approve or reject on the Client " +
+              "requests page, and the client_services row is created " +
+              "on approve."
+            }
+          />
         </div>
 
         <div className="panel">

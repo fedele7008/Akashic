@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import type { SessionInfo } from '../api/client';
+import { ClientRegistrationRequestsPage } from './ClientRegistrationRequestsPage';
 import { ClientsPage } from './ClientsPage';
 import { OverviewPage } from './OverviewPage';
 import { EmailConfigPage } from './EmailConfigPage';
@@ -75,6 +76,7 @@ export function Dashboard({ session }: { session: SessionInfo }) {
           {page === 'clients' && <ClientsPage session={session} />}
           {page === 'policy' && <PolicyPage />}
           {page === 'scope-requests' && <ScopeRequestsPage />}
+          {page === 'client-registration-requests' && <ClientRegistrationRequestsPage />}
           {page === 'email' && <EmailConfigPage />}
           {page === 'server' && <ServerPage />}
           {page === 'tools' && <ToolsPage />}
@@ -96,6 +98,8 @@ function pageTitleFor(page: Page): string {
       return 'Policy';
     case 'scope-requests':
       return 'Scope requests';
+    case 'client-registration-requests':
+      return 'Client-registration requests';
     case 'email':
       return 'Email';
     case 'server':

@@ -154,6 +154,10 @@ func (db *DB) AutoMigrate() error {
 		// Phase 9: email config — DB-backed mailer settings,
 		// operator-editable via admin web. Singleton row (id=1).
 		&models.EmailConfig{},
+		// Phase 9e: client-registration approval workflow. Mirrors
+		// OAuthScopeRequest's shape — same partial-unique-on-pending
+		// pattern, same approve/reject state machine.
+		&models.ClientRegistrationRequest{},
 	}
 
 	if err := db.DB.AutoMigrate(modelList...); err != nil {

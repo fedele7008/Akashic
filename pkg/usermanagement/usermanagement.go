@@ -117,6 +117,10 @@ func Get(ctx context.Context, d Deps, userID uuid.UUID) (*models.User, error) {
 type UpdateParams struct {
 	UserType   *models.UserType
 	IsDisabled *bool
+	// ClientCountOffset is the per-user adjustment applied to the
+	// tenant's `default_max_clients`. Signed; admin-only.
+	// Phase 9e v2.
+	ClientCountOffset *int
 	// CallerID is the ID of the operator making the change. Used
 	// for the self-demotion check and for audit (DisableUser
 	// records this in disabled_by). Must be supplied for any
@@ -190,6 +194,11 @@ func Update(ctx context.Context, d Deps, userID uuid.UUID, p UpdateParams) (*mod
 			if err := d.UserRepo.EnableUser(ctx, userID); err != nil {
 				return nil, fmt.Errorf("enable user: %w", err)
 			}
+		}
+	}
+	if p.ClientCountOffset != nil && *p.ClientCountOffset != target.ClientCountOffset {
+		if err := d.UserRepo.SetClientCountOffset(ctx, userID, *p.ClientCountOffset); err != nil {
+			return nil, fmt.Errorf("set client_count_offset: %w", err)
 		}
 	}
 

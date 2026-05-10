@@ -2,6 +2,7 @@ package control
 
 import (
 	"akashic/akashic/pkg/bootstrap"
+	"akashic/akashic/pkg/clientregistration"
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/ldap"
 	"akashic/akashic/pkg/logging"
@@ -87,6 +88,18 @@ type Server struct {
 	// the LDAP password change and gate flip, but logs a warning that
 	// existing RTs were not revoked.
 	refreshTokenRepo *repository.OAuthRefreshTokenRepository
+
+	// clientRegRequestRepo backs the Phase 9e admin reviewer surface
+	// (list/get pending+historical requests). Same nil-tolerant
+	// pattern.
+	clientRegRequestRepo *repository.ClientRegistrationRequestRepository
+
+	// clientRegSvc holds the qualification orchestration (approve →
+	// flip user flags + send email; reject → flag the row + email).
+	// Wired in alongside the repo so the control plane can delegate
+	// the approval side-effects to one place rather than duplicating
+	// them across handlers.
+	clientRegSvc *clientregistration.Service
 }
 
 // SetDB wires the GORM handle into the control server. Called from
@@ -139,6 +152,14 @@ func (s *Server) SetEmailService(svc *email.Service) {
 // chain for the target user as part of the reset operation.
 func (s *Server) SetRefreshTokenRepo(repo *repository.OAuthRefreshTokenRepository) {
 	s.refreshTokenRepo = repo
+}
+
+// SetClientRegistrationDeps wires the Phase 9e qualification deps
+// for the admin reviewer surface: the request repo (for list/get)
+// and the service (for approve/reject orchestration).
+func (s *Server) SetClientRegistrationDeps(repo *repository.ClientRegistrationRequestRepository, svc *clientregistration.Service) {
+	s.clientRegRequestRepo = repo
+	s.clientRegSvc = svc
 }
 
 // SetAPIServer wires the API server's state manager into the control

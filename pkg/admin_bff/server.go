@@ -394,6 +394,17 @@ func (s *Server) buildMux() http.Handler {
 		s.csrfMiddleware(
 			s.rateLimitMiddleware(s.rateLimiter, s.handleRejectScopeRequest)))
 
+	// Phase 9e: client-registration request workflow.
+	mux.HandleFunc("GET /api/client-registration-requests",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleListClientRegistrationRequests)))
+	mux.HandleFunc("POST /api/client-registration-requests/{id}/approve",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleApproveClientRegistrationRequest)))
+	mux.HandleFunc("POST /api/client-registration-requests/{id}/reject",
+		s.csrfMiddleware(
+			s.rateLimitMiddleware(s.rateLimiter, s.handleRejectClientRegistrationRequest)))
+
 	// FE assets at "/", with SPA-fallback so client-side routes load
 	// index.html. The CSRF middleware also wraps this so the cookie
 	// gets set on initial page load (the FE then reads it for forms).

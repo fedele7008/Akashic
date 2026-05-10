@@ -330,6 +330,57 @@ func (s *Server) handleCreateClient(w http.ResponseWriter, r *http.Request, uid 
 		requirePKCE = *req.RequirePKCE
 	}
 
+	// Phase 9e v2: qualification + routing. The eligibility service
+	// composes the verified-email gate and the per-user cap into
+	// `Eligible`; `ApprovalRequired` is a separate dimension
+	// signalling that this endpoint is the wrong route — the user
+	// must POST through /client-registration-requests instead so
+	// the registration goes through the approval workflow. Fail-
+	// soft when the service isn't wired (preserves the pre-9e
+	// free-for-all if an operator backs out the wiring).
+	s.mu.RLock()
+	clientRegSvc := s.clientRegSvc
+	s.mu.RUnlock()
+	if clientRegSvc != nil {
+		elig, eErr := clientRegSvc.CheckEligibility(r.Context(), uid)
+		if eErr != nil {
+			s.logger.App.Error("createClient: eligibility check failed",
+				zap.String("user_id", uid.String()), zap.Error(eErr))
+			response.WriteJSON(w, http.StatusInternalServerError,
+				response.Fail("INTERNAL", "could not check eligibility", nil))
+			return
+		}
+		if !elig.Eligible {
+			code := "NOT_ELIGIBLE"
+			msg := "you are not eligible to register clients at this time"
+			if len(elig.Missing) > 0 {
+				switch elig.Missing[0] {
+				case "email_verified":
+					code = "EMAIL_NOT_VERIFIED"
+					msg = "your email must be verified before you can register OAuth clients"
+				case "cap_reached":
+					code = "CAP_REACHED"
+					msg = "you have reached your client-registration cap; delete an existing client or contact your administrator for a higher cap"
+				}
+			}
+			response.WriteJSON(w, http.StatusForbidden,
+				response.Fail(code, msg, map[string]any{
+					"missing":               elig.Missing,
+					"effective_max_clients": elig.EffectiveMaxClients,
+					"current_client_count":  elig.CurrentClientCount,
+					"pending_request_count": elig.PendingRequestCount,
+				}))
+			return
+		}
+		if elig.ApprovalRequired {
+			response.WriteJSON(w, http.StatusForbidden,
+				response.Fail("APPROVAL_REQUIRED",
+					"this tenant requires admin approval; submit through "+
+						"POST /client-registration-requests instead", nil))
+			return
+		}
+	}
+
 	owner := uid
 	result, err := clientservice.Create(r.Context(), s.db.DB, clientservice.CreateParams{
 		Name:           req.Name,

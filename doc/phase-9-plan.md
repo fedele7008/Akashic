@@ -138,8 +138,7 @@ text template (Go's stdlib mail convention). Both are loaded via
 | `password_reset_required` | bool | false | 9d |
 | `mfa_enabled` | bool | false | 9f |
 | `login_notifications_enabled` | bool | false | 9g |
-| `client_registration_approved` | bool | false | 9e |
-| `max_clients_allowed` | int | 0 | 9e |
+| `client_count_offset` | int (signed) | 0 | 9e v2 |
 
 ### Per-client columns (`client_services`)
 
@@ -151,8 +150,9 @@ text template (Go's stdlib mail convention). Both are loaded via
 
 | Column | Type | Default | Phase |
 |---|---|---|---|
-| `require_verified_email_for_client_registration` | bool | false | 9e |
-| `require_approval_for_client_registration` | bool | false | 9e |
+| `require_verified_email_for_client_registration` | bool | true | 9e v2 |
+| `require_approval_for_client_registration` | bool | false | 9e v2 |
+| `default_max_clients` | int | 25 | 9e v2 |
 | `mfa_trusted_device_max_days` | int | 30 | 9f |
 
 ### New tables
@@ -163,7 +163,7 @@ text template (Go's stdlib mail convention). Both are loaded via
 | `password_reset_codes` | 6-digit code, hashed, 15-min TTL, attempt counter | 9c |
 | `mfa_email_codes` | 6-digit code, per (user, login-attempt), short TTL | 9f |
 | `mfa_trusted_devices` | Hashed device cookie, user_id, expires_at | 9f |
-| `client_registration_requests` | user_id, max_clients_requested, reason, status, reviewer fields | 9e |
+| `client_registration_requests` | user_id, reason, proposed client params (name/type/redirect_uris/scopes/etc.), status, reviewer fields, created_client_id | 9e v2 |
 
 ## Sub-phase split
 
@@ -322,71 +322,65 @@ state.
 distinct error code so the widget can redirect to the auth-server's
 forced-reset page.
 
-### 9e — Client-registration qualification
+### 9e v2 — Client-registration qualification
 
-**Goal**: admin opt-in policy gating who can register OAuth clients.
-Two independent toggles:
-1. **Require verified email** — user must have `email_verified=true`
-2. **Require approval** — user must have an approved
-   `client_registration_requests` row
-
-Both can be on simultaneously (verified email AND approved request).
+**Goal**: tenant-wide cap on per-user OAuth client registration,
+plus an optional admin-approval router. Three knobs:
+1. **default_max_clients** (int, default 25) — tenant-wide cap.
+2. **require_verified_email** (bool, default true) — gate skipped
+   silently when no mailer is configured.
+3. **require_approval** (bool, default false) — when on, every
+   client registration goes through per-attempt admin review.
 
 **New TenantPolicy fields**:
-- `require_verified_email_for_client_registration bool`
-- `require_approval_for_client_registration bool`
+- `require_verified_email_for_client_registration bool` (default true)
+- `require_approval_for_client_registration bool` (default false)
+- `default_max_clients int` (default 25)
 
-**New User fields**:
-- `client_registration_approved bool` (default false)
-- `max_clients_allowed int` (default 0 = unbounded; > 0 = cap)
+**New User field**:
+- `client_count_offset int` (signed; default 0) — admin-only
+  override; effective cap = `max(0, default_max_clients + offset)`.
 
-**New table**: `client_registration_requests`
-- `id` (uuid PK)
-- `user_id` (uuid, indexed)
-- `max_clients_requested` (int, default 1)
-- `reason` (text)
-- `status` (pending / approved / rejected)
-- `submitted_at` (timestamp)
-- `reviewed_by` (uuid nullable)
-- `reviewed_at` (timestamp nullable)
-- `decision_note` (text)
+**Repurposed table**: `client_registration_requests` — each row
+maps to ONE proposed client, holding the full create-client params
+(name, type, redirect_uris, scopes, require_pkce, etc.) plus a
+reason. On approve, the row's params materialize a `client_services`
+row owned by the requester; the new client_id is stored on the
+request for audit. Multiple pending rows per user are allowed; cap
+enforcement counts (existing clients) + (pending requests).
 
-Same shape as `oauth_scope_requests`. Reuses the partial-unique-on-
-pending pattern: at most one pending row per user.
+**Workflow** (approval-required):
+1. User clicks "Register a new client" in the widget.
+2. Widget GET /client-registration-eligibility, opens the create
+   form with a "Reason" textarea when approval is required.
+3. User fills the form; submit POSTs to
+   `POST /client-registration-requests`.
+4. Admin reviews on the Client requests page; approve → client
+   row materialized, requester emailed; reject → no client created,
+   requester emailed with the decision note.
 
-**Workflow**:
-1. User logs into portal, opens `<akashic-clients>` widget, clicks
-   "Register a new client"
-2. Widget consults `GET /client-registration-eligibility` which
-   returns: `{verified_email_required, approval_required, eligible,
-   missing: ["email_verified"|"approval"], pending_request: ...}`
-3. If `eligible: true` → existing register flow
-4. If missing email_verified → widget shows "Verify your email
-   first" with link to verification banner
-5. If missing approval → widget shows "Request approval" form
-   (max_clients_requested + reason); submits to
-   `POST /client-registration-requests`
-6. Widget shows pending status until reviewed
-7. On approval: `User.client_registration_approved=true`,
-   `User.max_clients_allowed = max_clients_requested`. If mailer
-   configured, send approval email.
-8. On rejection: status updated; widget shows decision note. User
-   may submit a new request.
+**Workflow** (approval-NOT-required):
+1. Same widget; reason field hidden.
+2. Submit POSTs to `POST /clients` (immediate creation).
 
-**Cap enforcement**: `POST /clients` checks
-`User.max_clients_allowed`. If 0 = no cap (matches today). If > 0
-= count user's existing non-deleted clients; reject if at cap.
+**Cap enforcement**: `POST /clients` AND
+`POST /client-registration-requests` both consult eligibility,
+which compares `existing_clients + pending_requests` against
+`max(0, policy.default_max_clients + user.client_count_offset)`.
 
 **Admin web**:
-- New "Client registration requests" page (mirrors Scope-requests
-  page exactly)
-- Tenant Policy page: two new toggles in a "Client registration
-  qualification" panel
-- Greyed out + forced-off: `require_verified_email` toggle when
-  `mailer.IsConfigured() == false` (no way for users to verify)
+- "Client registration requests" page lists the proposed client
+  params per row; approve = "as proposed" (no field editing), reject
+  with note for resubmit.
+- Tenant Policy page: number input for `default_max_clients`,
+  checkbox for `require_verified_email` (greyed when no mailer; the
+  stored value is preserved so the gate becomes active automatically
+  when email is later configured), checkbox for `require_approval`.
+- Users page edit dialog: signed `client_count_offset` field.
 
-**Conditional UX**: approval-required works regardless of email.
-Approval/rejection email notifications only send when configured.
+**Conditional UX**: verified-email gate is silently bypassed when
+no mailer is configured (the stored intent is preserved, just
+inactive). Approval emails only send when configured.
 
 ### 9f — MFA via email
 

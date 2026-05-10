@@ -115,6 +115,18 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/clients/",
 		s.requireFirstPartyBearer(s.handleClientByID))
 
+	// Phase 9e: client-registration qualification.
+	//   GET  /client-registration-eligibility   live policy + user state
+	//   POST /client-registration-requests      user submits an approval req
+	//   GET  /client-registration-requests/mine user's request history
+	// All first-party — same trust posture as /clients/*.
+	mux.HandleFunc("/client-registration-eligibility",
+		s.requireFirstPartyBearer(s.handleClientRegistrationEligibility))
+	mux.HandleFunc("/client-registration-requests",
+		s.requireFirstPartyBearer(s.handleClientRegistrationRequests))
+	mux.HandleFunc("/client-registration-requests/mine",
+		s.requireFirstPartyBearer(s.handleListMyClientRegistrationRequests))
+
 	// Phase 8b: embeddable widget bundle hosting. Public, cacheable
 	// static assets — see widgets_handler.go for the full rationale.
 	mux.HandleFunc("/widgets/", s.handleWidgetAsset)

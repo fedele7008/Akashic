@@ -148,4 +148,16 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/email-config/test",
 		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
 			s.handleAdminTestEmail))
+
+	// Phase 9e: client-registration approval workflow.
+	//   GET  /client-registration-requests              list (?status=)
+	//   GET  /client-registration-requests/<id>         fetch
+	//   POST /client-registration-requests/<id>/approve approve
+	//   POST /client-registration-requests/<id>/reject  reject
+	mux.HandleFunc("/client-registration-requests",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.requireBootstrapComplete(s.handleAdminClientRegistrationRequests)))
+	mux.HandleFunc("/client-registration-requests/",
+		requireClientIdentity("cli.akashic.local", "bff.akashic.local")(
+			s.requireBootstrapComplete(s.handleAdminClientRegistrationRequestByID)))
 }

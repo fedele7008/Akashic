@@ -22,6 +22,7 @@ package api
 import (
 	authpkg "akashic/akashic/pkg/auth"
 	"akashic/akashic/pkg/bootstrap"
+	"akashic/akashic/pkg/clientregistration"
 	"akashic/akashic/pkg/config"
 	"akashic/akashic/pkg/database/akashic_postgres"
 	"akashic/akashic/pkg/ldap"
@@ -110,6 +111,14 @@ type Server struct {
 
 	// Phase 9b (revised): Redis-backed verification store.
 	emailVerificationStore *email.VerificationStore
+
+	// Phase 9e: client-registration qualification service. Used by
+	// the public-bearer eligibility endpoint, the user-side submit
+	// endpoint, and the cap-enforcement hook in handleCreateClient.
+	// Same fail-soft posture as the other deps — when nil, the
+	// related endpoints return SERVICE_UNAVAILABLE and the
+	// cap-enforcement hook is skipped.
+	clientRegSvc *clientregistration.Service
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -182,6 +191,15 @@ func (s *Server) SetEmailVerificationStore(st *email.VerificationStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emailVerificationStore = st
+}
+
+// SetClientRegistrationService wires the Phase 9e qualification
+// service. Used by the eligibility endpoint, user-side submit
+// endpoint, and the cap-enforcement hook in handleCreateClient.
+func (s *Server) SetClientRegistrationService(svc *clientregistration.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.clientRegSvc = svc
 }
 
 // SetBootstrapManager wires the bootstrap-state checker so signup
