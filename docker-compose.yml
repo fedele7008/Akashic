@@ -15,12 +15,10 @@ services:
   vault-bootstrap:
     build: ./services/vault/bootstrap
     container_name: akashic-vault-bootstrap
-    entrypoint: ["/bin/sh", "/bootstrap/vault-bootstrap.sh"]
+    restart: "no"
     volumes:
       - vault_file:/file
       - certs:/certs
-      - ./services/vault/bootstrap:/bootstrap
-    restart: "no"
 
   # ═══════════════════════════════════════════════════════════════════════════════
   # vault: HashiCorp Vault Server (STEP 2/3)
@@ -43,21 +41,13 @@ services:
     depends_on:
       vault-bootstrap:
         condition: service_completed_successfully
-    environment:
-      VAULT_ADDR: "https://localhost:8200"
-      VAULT_API_ADDR: "https://vault:8200"
-      VAULT_CLUSTER_ADDR: "https://vault:8201"
-      VAULT_CAPATH: "/vault/certs/vault/root-ca.crt"
-      TZ: ${AKASHIC_TZ:-UTC}
     ports:
-      # Don't expose vault to public
       - "127.0.0.1:${AKASHIC_VAULT_HOST_PORT:-8200}:8200"
       - "127.0.0.1:${AKASHIC_VAULT_CLUSTER_PORT:-8201}:8201"
     volumes:
       - vault_file:/vault/file
       - vault_logs:/vault/logs
       - certs:/vault/certs
-      - ./services/vault/config.hcl:/vault/config/vault.hcl:ro
     command: server
     cap_add:
       - IPC_LOCK
@@ -102,8 +92,7 @@ services:
     restart: "no"
     environment:
       AKASHIC_SECRET: "${AKASHIC_SECRET:-}"
-      # use docker container's vault address using docker dns
-      AKASHIC_VAULT_ADDRESS: "https://vault:8200"
+      AKASHIC_VAULT_ADDRESS: "https://vault.akashic.local:8200"
       AKASHIC_VAULT_TLS_CACERT: "/certs/vault/root-ca.crt"
       CERTS_OUTPUT_DIR: "/certs"
       CONFIGS_DIR: "/configs"
@@ -111,7 +100,7 @@ services:
       VAULT_TOKEN_FILE: "/vault/token/vault/root-token.enc"
       VAULT_KEY_DIR: "/vault/token/vault/keys"
       VAULT_AGENT_OUTPUT_DIR: "/vault/token/vault-agent"
-      VAULT_ADMIN_USERNAME: "${AKASHIC_VAULT_USERNAME:-}"
+      VAULT_ADMIN_USERNAME: "${AKASHIC_VAULT_USERNAME:-admin}"
       VAULT_ADMIN_PASSWORD: "${AKASHIC_VAULT_PASSWORD:-}"
       TZ: ${AKASHIC_TZ:-UTC}
     volumes:
@@ -407,7 +396,7 @@ services:
     environment:
       RI_ENCRYPTION_KEY: "${AKASHIC_SECRET}"
       RI_ENCRYPTION_KEYTAR: "false"
-      RI_REDIS_HOST: redis
+      RI_REDIS_HOST: redis.akashic.local
       RI_REDIS_PORT: 6379
       RI_REDIS_PASSWORD: ${AKASHIC_DATABASE_REDIS_PASSWORD}
       RI_REDIS_TLS: "${AKASHIC_REDIS_TLS:-on}"
@@ -637,7 +626,7 @@ services:
       # Production deployments (where the host directory may not exist)
       # should remove this mount; the baked path takes over and keeps
       # the deploy reproducible.
-      - ./web/widgets/dist:/usr/local/share/akashic-widgets:ro
+      # - ./web/widgets/dist:/usr/local/share/akashic-widgets:ro
     networks:
       default:
         aliases:
@@ -1028,9 +1017,6 @@ volumes:
   redisinsight_data:
   vault_logs:
   vault_file:
-  # Placeholders for inherited VOLUME declarations from upstream images.
-  # These aren't used for real persistence -- they exist only to prevent
-  # Docker from auto-generating anonymous 64-char-hash volumes.
-  vault_agent_file:
-  vault_agent_logs:
-  phpldapadmin_www:
+  vault_agent_file: # placeholder - inherited volume from upstream image
+  vault_agent_logs: # placeholder - inherited volume from upstream image
+  phpldapadmin_www: # placeholder - inherited volume from upstream image

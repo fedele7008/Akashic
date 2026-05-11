@@ -20,10 +20,8 @@ if [ -f "$CRT" ] && [ -f "$KEY" ] && [ -f "$ROOT" ]; then
     exit 0
 fi
 
-chown -R 100:100 /file /certs
-
 echo "==> openssl --version"
-openssl --version
+openssl version
 
 echo "==> Generating Vault Root CA ($ROOT_KEY)"
 openssl genpkey -algorithm RSA -pkeyopt rsa_keygen_bits:4096 -out "$ROOT_KEY" > /dev/null 2>&1
@@ -50,7 +48,8 @@ subjectAltName = @alt_names
 
 [alt_names]
 DNS.1 = vault
-DNS.3 = localhost
+DNS.2 = localhost
+DNS.3 = vault.akashic.local
 IP.1 = 127.0.0.1
 EOF
 
@@ -63,6 +62,8 @@ openssl x509 -req -in "$CSR" -CA "$ROOT" -CAkey "$ROOT_KEY" \
     -sha256 -days 3650 -extfile "$SAN_CONF" -extensions v3_req -out "$CRT"
 
 rm -f "$SAN_CONF" "$CSR" "$ROOT_KEY"
+
+chown -R 100:100 /file /certs
 
 chmod 644 "$ROOT"
 chmod 600 "$KEY"

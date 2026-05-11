@@ -9,7 +9,7 @@
 # ═══════════════════════════════════════════════════════════════
 
 vault {
-  address = "https://vault:8200"
+  address = "https://vault.akashic.local:8200"
   ca_cert = "/certs/vault/root-ca.crt"
 }
 

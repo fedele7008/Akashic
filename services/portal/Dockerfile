@@ -72,7 +72,7 @@ WORKDIR /app
 #   .next/standalone/server.js   (the entry point)
 #   .next/static/            ← still need to be served, copy alongside
 #   public/                  ← static-files dir
-COPY --from=builder --chown=akashic:akashic /app/public ./public
+# COPY --from=builder --chown=akashic:akashic /app/public ./public
 COPY --from=builder --chown=akashic:akashic /app/.next/standalone ./
 COPY --from=builder --chown=akashic:akashic /app/.next/static ./.next/static
 
