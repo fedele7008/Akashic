@@ -351,6 +351,15 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Phase 9g: fire the post-login "you signed in" email. Async,
+	// best-effort, gated on user opt-in + mailer-configured + email
+	// on file. Fires here ONLY when the user reached final sign-in
+	// state at /login/submit — the MFA branch fires its own
+	// notification after /login/mfa/submit succeeds, and the
+	// forced-reset branch fires after the reset+MFA chain.
+	s.fireLoginNotification(r, user, sess.Email, sess.Username,
+		extractClientIDFromReturnTo(returnTo))
+
 	// returnTo is empty when the user landed on /login directly
 	// (typed the URL, used a saved bookmark, etc.) rather than via
 	// an OAuth /authorize redirect. The auth server is purely an

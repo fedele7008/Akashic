@@ -1,0 +1,14 @@
+Subject: Your scope request was approved
+
+Hi {{.DisplayName}},
+
+Your request for the OAuth scope "{{.Scope}}" on client
+"{{.ClientName}}" has been approved.
+
+{{if .DecisionNote}}Reviewer note:
+{{.DecisionNote}}
+{{end}}
+{{if .LoginURL}}Sign in to manage the client:
+{{.LoginURL}}
+{{end}}
+— {{.TenantName}}

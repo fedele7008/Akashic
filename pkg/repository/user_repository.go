@@ -291,6 +291,38 @@ func (r *UserRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error
 	return nil
 }
 
+// SetNotificationPreferences atomically updates the user's two
+// notification toggles. Phase 9g. Pointer params preserve "leave
+// unchanged" (nil) — passing nil for both is a no-op write.
+//
+// Defaults at row-creation are true; toggling to false here is the
+// only path that drops them. We deliberately don't refuse the call
+// when the mailer is off — the *intent* survives mailer state, so
+// a toggle change should persist; the runtime send path silently
+// skips when there's no mailer to deliver through.
+func (r *UserRepository) SetNotificationPreferences(ctx context.Context, userID uuid.UUID, login, approval *bool) error {
+	updates := map[string]any{}
+	if login != nil {
+		updates["login_notifications_enabled"] = *login
+	}
+	if approval != nil {
+		updates["approval_notifications_enabled"] = *approval
+	}
+	if len(updates) == 0 {
+		return nil
+	}
+	res := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", userID).
+		Updates(updates)
+	if res.Error != nil {
+		return fmt.Errorf("update notification preferences: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return models.ErrUserNotFound
+	}
+	return nil
+}
+
 // SetMFAEnabled toggles a user's per-account MFA opt-in flag.
 // Phase 9f — called by the user-side <akashic-mfa-settings> widget
 // when the toggle changes. Stamps `mfa_enabled_at` on enable so an

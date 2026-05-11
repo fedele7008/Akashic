@@ -114,6 +114,10 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/users/me/mfa/trusted-devices/",
 		s.requireFirstPartyBearer(s.handleRevokeMyTrustedDevice))
 
+	// Phase 9g: per-user notification preferences. First-party only.
+	mux.HandleFunc("/users/me/notification-preferences",
+		s.requireFirstPartyBearer(s.handleMyNotificationPrefs))
+
 	// Phase 7.5: end-user consent management.
 	//   GET    /users/me/consents       → list active grants
 	//   DELETE /users/me/consents/<id>  → revoke a specific grant

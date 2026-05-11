@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"akashic/akashic/pkg/mailer"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/repository"
@@ -313,6 +314,8 @@ func (s *Server) handleAdminApproveScopeRequest(w http.ResponseWriter, r *http.R
 		zap.String("client_id", row.ClientID),
 		zap.String("scope", row.Scope),
 		zap.String("reviewer", reviewerID.String()))
+	// Phase 9g: ping the submitter (if known) about the approval.
+	s.sendScopeRequestNotification(r.Context(), row, "scope_request_approved")
 	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
 		"scope_request": toScopeRequestView(row),
 	}))
@@ -350,9 +353,93 @@ func (s *Server) handleAdminRejectScopeRequest(w http.ResponseWriter, r *http.Re
 		zap.String("client_id", row.ClientID),
 		zap.String("scope", row.Scope),
 		zap.String("reviewer", reviewerID.String()))
+	// Phase 9g: ping the submitter (if known) about the rejection.
+	s.sendScopeRequestNotification(r.Context(), row, "scope_request_rejected")
 	response.WriteJSON(w, http.StatusOK, response.Success(map[string]any{
 		"scope_request": toScopeRequestView(row),
 	}))
+}
+
+// sendScopeRequestNotification fires the approval/rejection email
+// for the submitter (when SubmittedBy is non-nil and the user opted
+// in to approval notifications). Phase 9g. Best-effort: a send
+// failure never affects the state-transition contract.
+//
+// Five preconditions for delivery:
+//
+//	1. SubmittedBy is non-nil (operator-side submissions skip).
+//	2. Mailer is configured.
+//	3. User row resolvable + has an LDAP email.
+//	4. User opted in (approval_notifications_enabled).
+//	5. Client name resolvable (used in the email body).
+//
+// Any failure silently drops the send; the audit log carries the
+// approval/rejection itself.
+func (s *Server) sendScopeRequestNotification(ctx context.Context, row *models.OAuthScopeRequest, template string) {
+	if row.SubmittedBy == nil {
+		return
+	}
+	if s.emailService == nil || !s.emailService.IsConfigured() {
+		return
+	}
+	if s.userRepo == nil || s.ldapClient == nil || s.db == nil {
+		return
+	}
+	user, err := s.userRepo.GetUserByID(ctx, *row.SubmittedBy)
+	if err != nil || user == nil {
+		return
+	}
+	if !user.ApprovalNotificationsEnabled {
+		s.logger.App.Info("scope-request: submitter opted out of notifications",
+			zap.String("user_id", user.ID.String()),
+			zap.String("template", template))
+		return
+	}
+	info, err := s.ldapClient.GetUserByDN(user.LdapDN)
+	if err != nil || info == nil || info.Email == "" {
+		return
+	}
+
+	// Resolve client name for the email body. Best-effort.
+	var c models.ClientService
+	clientName := row.ClientID
+	if err := s.db.WithContext(ctx).
+		Select("name").Where("client_id = ?", row.ClientID).
+		First(&c).Error; err == nil && c.Name != "" {
+		clientName = c.Name
+	}
+
+	displayName := info.DisplayName
+	if displayName == "" {
+		displayName = info.Email
+		if at := strings.IndexByte(displayName, '@'); at > 0 {
+			displayName = displayName[:at]
+		}
+	}
+	loginURL := ""
+	if base := s.emailService.VerifyURLBase(ctx); base != "" {
+		loginURL = strings.TrimRight(base, "/") + "/login"
+	}
+	msg, err := mailer.Render(template, map[string]any{
+		"TenantName":   "Akashic",
+		"DisplayName":  displayName,
+		"Scope":        row.Scope,
+		"ClientName":   clientName,
+		"DecisionNote": row.DecisionNote,
+		"LoginURL":     loginURL,
+	})
+	if err != nil {
+		s.logger.App.Warn("scope-request: render notification failed",
+			zap.String("template", template), zap.Error(err))
+		return
+	}
+	msg.To = info.Email
+	if err := s.emailService.Send(ctx, msg); err != nil {
+		s.logger.App.Warn("scope-request: send notification failed",
+			zap.String("template", template),
+			zap.String("to", info.Email), zap.Error(err))
+		return
+	}
 }
 
 // applyApprovalToClient is the side-effect bundle that runs after a

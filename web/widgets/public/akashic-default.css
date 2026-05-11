@@ -26,7 +26,8 @@ akashic-profile,
 akashic-change-password,
 akashic-forgot-help,
 akashic-clients,
-akashic-mfa-settings {
+akashic-mfa-settings,
+akashic-notification-preferences {
   /* Token defaults — every variable is overridable. */
   --akashic-text:           #e4e6eb;
   --akashic-text-muted:     #8b91a0;
@@ -77,6 +78,13 @@ akashic-mfa-settings {
   max-width: none;
 }
 
+/* Notification-preferences widget shows two toggle rows with
+   multi-line hint copy beneath each — benefits from the same
+   container-stretching as other list/widget surfaces. Phase 9g. */
+akashic-notification-preferences {
+  max-width: none;
+}
+
 /*
  * Light-mode override. Tenants who set `color-scheme: light` on
  * <html> get readable defaults. Most tenants will skip this and
@@ -89,7 +97,8 @@ akashic-mfa-settings {
   akashic-change-password,
   akashic-forgot-help,
   akashic-clients,
-  akashic-mfa-settings {
+  akashic-mfa-settings,
+  akashic-notification-preferences {
     --akashic-text:         #1f2937;
     --akashic-text-muted:   #6b7280;
     --akashic-bg:           #ffffff;

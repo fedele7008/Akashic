@@ -109,6 +109,28 @@ type User struct {
 	MFAEnabled   bool       `gorm:"default:false;not null;index" json:"mfa_enabled"`
 	MFAEnabledAt *time.Time `json:"mfa_enabled_at,omitempty"`
 
+	// Phase 9g: notification preferences. Both default TRUE — most
+	// users benefit from knowing when their account was used (login
+	// notifications, anti-takeover hint) and from being notified of
+	// admin decisions on their pending requests (approval flow).
+	// Users can toggle from `/profile/notifications` in the portal.
+	//
+	// `Login`: post-login "you signed in" email containing the
+	//          timestamp, source IP, user-agent, and (when known)
+	//          the OAuth client being authorized. Best-effort send;
+	//          never fails the login.
+	//
+	// `Approval`: emails for client-registration and scope-request
+	//             decisions. Gates the EXISTING approval/rejection
+	//             email path — when off, the workflow still records
+	//             the decision; the user just doesn't get pinged.
+	//
+	// Transactional emails (email verification, forgot-password
+	// codes, MFA codes, admin temp-password reset) bypass these
+	// preferences — they're security-required, not notifications.
+	LoginNotificationsEnabled    bool `gorm:"default:true;not null" json:"login_notifications_enabled"`
+	ApprovalNotificationsEnabled bool `gorm:"default:true;not null" json:"approval_notifications_enabled"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }

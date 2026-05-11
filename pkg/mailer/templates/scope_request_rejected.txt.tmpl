@@ -1,0 +1,14 @@
+Subject: Your scope request was not approved
+
+Hi {{.DisplayName}},
+
+Your request for the OAuth scope "{{.Scope}}" on client
+"{{.ClientName}}" was reviewed and not approved at this time.
+
+{{if .DecisionNote}}Reviewer note:
+{{.DecisionNote}}
+{{end}}
+You're welcome to submit a new request from the client's
+management page once any concerns have been addressed.
+
+— {{.TenantName}}

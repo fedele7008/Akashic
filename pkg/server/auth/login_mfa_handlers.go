@@ -235,6 +235,24 @@ func (s *Server) handleLoginMFASubmit(w http.ResponseWriter, r *http.Request) {
 		zap.String("user_id", sess.UserID),
 		zap.Bool("remember_device", rememberDays > 0))
 
+	// Phase 9g: post-login notification fires after MFA success
+	// (this is the actual "fully authenticated" moment for MFA-
+	// enabled accounts). Load the user row to pick up the opt-in
+	// flag; on lookup failure we silently skip — the notification
+	// is a courtesy and a stale flag fetch shouldn't surface as
+	// a user-visible error.
+	if userID, err := uuid.Parse(sess.UserID); err == nil {
+		s.mu.RLock()
+		authSvc := s.authService
+		s.mu.RUnlock()
+		if authSvc != nil {
+			if u, uerr := authSvc.UserRepository().GetUserByID(r.Context(), userID); uerr == nil {
+				clientID := extractClientIDFromReturnTo(sess.PendingReturnTo)
+				s.fireLoginNotification(r, u, sess.Email, sess.Username, clientID)
+			}
+		}
+	}
+
 	s.redirectToReturnToOrLanding(w, r, &upgraded, sess.PendingReturnTo)
 }
 

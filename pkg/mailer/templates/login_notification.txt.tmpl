@@ -1,0 +1,24 @@
+Subject: New sign-in to your {{.TenantName}} account
+
+Hi {{.DisplayName}},
+
+Your {{.TenantName}} account was just signed in to.
+
+  Time:        {{.Timestamp}}
+  IP address:  {{.IPAddress}}
+  Device:      {{.Device}}
+{{if .ClientName}}  Application: {{.ClientName}}
+{{end}}
+If this was you, no further action is needed.
+
+If you don't recognize this sign-in, secure your account
+immediately:
+  1. Change your password from your profile.
+  2. Review and revoke trusted devices in your Two-factor
+     authentication settings.
+  3. Contact your administrator if anything looks unfamiliar.
+
+You can turn off these notifications from your profile's
+"Notification preferences" section.
+
+— {{.TenantName}}

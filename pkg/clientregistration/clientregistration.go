@@ -419,7 +419,7 @@ func (s *Service) Approve(ctx context.Context, p ApproveParams) (*models.ClientR
 		zap.String("created_client_id", created.Client.ClientID))
 
 	s.sendDecisionEmail(ctx, "client_registration_approved",
-		p.RequesterEmail, p.RequesterDisplayName,
+		p.RequesterEmail, p.RequesterDisplayName, row.UserID,
 		map[string]any{
 			"DecisionNote": p.DecisionNote,
 			"ClientName":   pre.Name,
@@ -439,7 +439,7 @@ func (s *Service) Reject(ctx context.Context, p RejectParams) (*models.ClientReg
 		zap.String("request_id", row.ID.String()),
 		zap.String("reviewer_id", p.ReviewerID.String()))
 	s.sendDecisionEmail(ctx, "client_registration_rejected",
-		p.RequesterEmail, p.RequesterDisplayName,
+		p.RequesterEmail, p.RequesterDisplayName, row.UserID,
 		map[string]any{
 			"DecisionNote": p.DecisionNote,
 			"ClientName":   row.Name,
@@ -450,7 +450,13 @@ func (s *Service) Reject(ctx context.Context, p RejectParams) (*models.ClientReg
 // sendDecisionEmail renders + dispatches the approval or rejection
 // template. Best-effort: failures log at App-Warn but never surface
 // because the state change is the contract; the email is courtesy.
-func (s *Service) sendDecisionEmail(ctx context.Context, template, toEmail, displayName string, extra map[string]any) {
+//
+// Phase 9g: gated on the requester's `approval_notifications_enabled`
+// flag. A user who opted out of approval notifications still gets
+// the state change; they just don't get pinged about it. The caller
+// passes `userID` so we can do that gate-check without re-routing
+// through HTTP-level user lookups.
+func (s *Service) sendDecisionEmail(ctx context.Context, template, toEmail, displayName string, userID uuid.UUID, extra map[string]any) {
 	if s.mailer == nil || !s.mailer.IsConfigured() {
 		return
 	}
@@ -458,6 +464,15 @@ func (s *Service) sendDecisionEmail(ctx context.Context, template, toEmail, disp
 		s.logger.Info("client-registration: skipping decision email — no recipient",
 			zap.String("template", template))
 		return
+	}
+	if userID != uuid.Nil && s.users != nil {
+		u, err := s.users.GetUserByID(ctx, userID)
+		if err == nil && u != nil && !u.ApprovalNotificationsEnabled {
+			s.logger.Info("client-registration: user opted out of approval notifications",
+				zap.String("template", template),
+				zap.String("user_id", userID.String()))
+			return
+		}
 	}
 	dn := displayName
 	if dn == "" {

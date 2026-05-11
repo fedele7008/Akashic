@@ -33,6 +33,7 @@ declare module "react" {
       "akashic-clients": WidgetProps;
       "akashic-connected-apps": WidgetProps;
       "akashic-mfa-settings": WidgetProps;
+      "akashic-notification-preferences": WidgetProps;
     }
   }
 }
@@ -50,6 +51,7 @@ declare global {
       "akashic-clients": WidgetProps;
       "akashic-connected-apps": WidgetProps;
       "akashic-mfa-settings": WidgetProps;
+      "akashic-notification-preferences": WidgetProps;
     }
   }
 }
