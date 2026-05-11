@@ -1,0 +1,32 @@
+# === editor/os ===
+.DS_Store
+*.DS_Store
+.idea/
+.vscode/
+.claude/
+CLAUDE.md
+
+# === secrets/credentials ===
+.env
+.env.*
+!.env.example
+
+# === vault ===
+vault/data/
+vault/logs/
+
+# === generated files ===
+node_modules/
+build/
+dist/
+
+# === docker compose ===
+docker-compose.override.yml
+
+# === logs/dumps ===
+*.log
+logs/*
+
+# === temp/test files ===
+tmp/
+**/*.ignore
