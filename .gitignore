@@ -26,6 +26,9 @@ docker-compose.override.yml
 # === logs/dumps ===
 *.log
 logs/*
+!logs/vault/
+logs/vault/*
+!logs/vault/.gitkeep
 
 # === temp/test files ===
 tmp/

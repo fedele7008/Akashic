@@ -1,0 +1,79 @@
+services:
+  vault-bootstrap:
+    build: ./services/vault/bootstrap
+    container_name: akashic-vault-bootstrap
+    restart: no
+    volumes:
+      - certs:/certs
+      - vault_file:/vault/file
+
+  vault:
+    build: ./services/vault
+    container_name: akashic-vault
+    restart: unless-stopped
+    depends_on:
+      vault-bootstrap:
+        condition: service_completed_successfully
+    ports:
+      - "127.0.0.1:${AKASHIC_VAULT_HOST_PORT:-8200}:8200"
+      - "127.0.0.1:${AKASHIC_VAULT_CLUSTER_PORT:-8201}:8201"
+    volumes:
+      - vault_file:/vault/file
+      - vault_logs:/vault/logs
+      - certs:/vault/certs
+    command: server
+    cap_add:
+      - IPC_LOCK
+    networks:
+      default:
+        aliases:
+          - vault.akashic.local
+    healthcheck:
+      test: ["CMD", "curl", "--cacert", "/vault/certs/vault/root-ca.crt", "https://localhost:8200/v1/sys/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  vault-init:
+    build: ./services/vault/init
+
+  proxy:
+    build: ./services/proxy
+    container_name: akashic-proxy
+    restart: unless-stopped
+    depends_on:
+      vault:
+        condition: service_healthy
+    ports:
+      - "${AKASHIC_PROXY_PORT:-8280}:8280"
+    volumes:
+      - certs:/certs:ro
+    networks:
+      default:
+        aliases:
+          - proxy.akashic.local
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+      - "auth.akashic.local:host-gateway"
+      - "ctrl.akashic.local:host-gateway"
+      - "api.akashic.local:host-gateway"
+
+networks:
+  default:
+    name: akashic-net
+
+volumes:
+  certs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./certs
+  vault_logs:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./logs/vault
+  vault_file:
