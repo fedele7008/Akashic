@@ -11,15 +11,66 @@
   <main class="card">
     <h1>{{.Title}}</h1>
     {{if .Success}}
-      <p class="subtitle">Your email is verified.</p>
-      <p>
-        Thanks{{if .DisplayName}}, {{.DisplayName}}{{end}}. Your
-        email address has been confirmed for this Akashic account.
-        You can close this tab and continue where you left off.
-      </p>
-      <p style="margin-top: 16px;">
-        <a href="/login">Go to sign-in →</a>
-      </p>
+      {{if .MFAEnabled}}
+        <p class="subtitle">Multi-factor authentication is on.</p>
+        <p>
+          From now on you'll receive a 6-digit code by email when you
+          sign in. You can manage trusted browsers and turn MFA off
+          again from your profile's Two-factor authentication
+          section.
+        </p>
+        <p style="margin-top: 16px;">
+          <a href="/login">Go to sign-in →</a>
+        </p>
+      {{else}}
+        <p class="subtitle">Your email is verified.</p>
+        <p>
+          Thanks{{if .DisplayName}}, {{.DisplayName}}{{end}}. Your
+          email address has been confirmed for this Akashic account.
+        </p>
+
+        {{if .MFASetupToken}}
+        <div class="cta-card">
+          <h2>One more step? Add multi-factor authentication</h2>
+          <p>
+            Enable a 6-digit email code at sign-in for stronger
+            protection. You can mark trusted browsers to skip the
+            prompt for a bounded window — and turn it back off any
+            time from your profile.
+          </p>
+          <form method="POST" action="/verify-email/enable-mfa"
+                style="margin-top: 16px;">
+            <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+            <input type="hidden" name="setup_token" value="{{.MFASetupToken}}">
+            <div class="cta-actions">
+              <button type="submit" class="cta-primary">
+                Enable MFA now
+              </button>
+              <a class="cta-secondary" href="/login">
+                Maybe later
+              </a>
+            </div>
+          </form>
+          <p class="cta-hint">
+            This setup link is valid for 5 minutes. You can always
+            enable MFA later from your profile.
+          </p>
+        </div>
+        {{else if .MailerConfigured}}
+        <p style="margin-top: 16px;">
+          <a href="/login">Go to sign-in →</a>
+        </p>
+        <p style="margin-top: 12px; font-size: 0.875rem; color: var(--text-muted, #6e6e73);">
+          Tip: you can enable two-factor authentication for stronger
+          security from your profile's Two-factor authentication
+          section.
+        </p>
+        {{else}}
+        <p style="margin-top: 16px;">
+          <a href="/login">Go to sign-in →</a>
+        </p>
+        {{end}}
+      {{end}}
     {{else}}
       <p class="subtitle">Verification didn't work.</p>
       <p>{{.Message}}</p>

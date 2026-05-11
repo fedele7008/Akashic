@@ -17,6 +17,7 @@ import (
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/email"
+	"akashic/akashic/pkg/mfa"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/policy"
 	"akashic/akashic/pkg/pki"
@@ -243,6 +244,25 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// the eligibility check, the submit/approve/reject orchestration,
 	// and the approval/rejection email send. Held by both the api-
 	// server (eligibility + submit) and the control-server (review).
+	// Phase 9f: MFA via email — Redis store for short-lived codes,
+	// PG repo for trusted-device cookies, service that bundles
+	// them with the policy + mailer + user/client lookups.
+	mfaCodeStore := email.NewMFACodeStore(app.Redis)
+	mfaTrustedRepo := repository.NewMFATrustedDeviceRepository(app.DB.DB)
+	// Phase 9f follow-up: post-verify-email "enable MFA" one-shot
+	// setup tokens. Separate store from mfaCodeStore — the two
+	// have different lifecycles and authority shapes.
+	mfaSetupTokens := email.NewMFASetupTokenStore(app.Redis)
+	mfaSvc := mfa.NewService(mfa.Deps{
+		Users:   userRepo,
+		Clients: mfa.NewDBClientLookup(app.DB.DB),
+		Devices: mfaTrustedRepo,
+		Codes:   mfaCodeStore,
+		Policy:  app.PolicyService,
+		Mailer:  app.EmailService,
+		Logger:  app.Logger.App,
+	})
+
 	clientRegSvc := clientregistration.NewService(clientregistration.Deps{
 		DB:        app.DB.DB,
 		Requests:  clientRegRequestRepo,
@@ -410,6 +430,11 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	app.AuthServer.SetEmailService(app.EmailService)
 	app.AuthServer.SetEmailVerificationStore(emailVerificationStore)
 	app.AuthServer.SetPasswordResetStore(passwordResetStore)
+	// Phase 9f: MFA service drives the /login MFA gate, /login/mfa
+	// challenge handlers, and the trusted-device cookie machinery.
+	app.AuthServer.SetMFAService(mfaSvc)
+	// Phase 9f follow-up: post-verify "Enable MFA" inline toggle.
+	app.AuthServer.SetMFASetupTokenStore(mfaSetupTokens)
 
 	// Built-in OAuth client registration. After Phase 8b's tenant-
 	// client registration roadmap landed, akashic-admin is the only
@@ -465,6 +490,8 @@ func (app *AkashicApp) Init(cmd *cobra.Command, args []string) error {
 	// endpoint + cap enforcement, the control-server needs it for
 	// approve/reject orchestration.
 	app.APIServer.SetClientRegistrationService(clientRegSvc)
+	// Phase 9f: api-server drives /users/me/mfa endpoints.
+	app.APIServer.SetMFAService(mfaSvc)
 
 	// Create control server (but don't start yet)
 	app.ControlServer = control.New(

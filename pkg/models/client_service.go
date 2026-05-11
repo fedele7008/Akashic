@@ -300,6 +300,20 @@ type ClientService struct {
 	RefreshTokenSlidingTTLSecondsOverride  *int `gorm:"" json:"refresh_token_sliding_ttl_seconds_override,omitempty"`
 	RefreshTokenAbsoluteTTLSecondsOverride *int `gorm:"" json:"refresh_token_absolute_ttl_seconds_override,omitempty"`
 
+	// RequireMFA is the per-client MFA gate. When true, every login
+	// flow that lands at /authorize for this client is forced
+	// through the email-MFA challenge regardless of the user's
+	// `mfa_enabled` setting. Default false. Edited from the admin
+	// web's client-edit page (greyed-out when no mailer is
+	// configured per design decision D2). Phase 9f.
+	//
+	// OR-semantics with `users.mfa_enabled` at login time: either
+	// flag true → MFA required. AND-semantics doesn't make sense
+	// here — a per-user opt-in shouldn't be defeated by a client
+	// that doesn't require MFA, and a security-sensitive client
+	// shouldn't allow a user opt-out.
+	RequireMFA bool `gorm:"default:false;not null" json:"require_mfa"`
+
 	// SecretResetRequired is true when the row was created with a
 	// confidential secret the requester has never seen plaintext for.
 	// Phase 9e v2: approval-gated registration mints the secret at

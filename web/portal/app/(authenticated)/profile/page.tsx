@@ -40,6 +40,21 @@ export default function ProfilePage() {
 
       <div className="flex items-center justify-between rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm">
         <div>
+          <p className="font-medium">Two-factor authentication</p>
+          <p className="text-[var(--text-muted)]">
+            Add an email code as a second step at sign-in.
+          </p>
+        </div>
+        <Link
+          href="/profile/mfa"
+          className="rounded-md border border-[var(--text-muted)]/30 px-3 py-1.5 hover:bg-[var(--bg)]"
+        >
+          Open
+        </Link>
+      </div>
+
+      <div className="flex items-center justify-between rounded-md border border-[var(--text-muted)]/20 bg-[var(--card)] p-4 text-sm">
+        <div>
           <p className="font-medium">Change ID / tag</p>
           <p className="text-[var(--text-muted)]">
             Rotate your <code>id#TAG</code> handle. Cooldown applies.

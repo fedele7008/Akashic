@@ -8,6 +8,7 @@ import (
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/email"
+	"akashic/akashic/pkg/mfa"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/policy"
@@ -96,6 +97,18 @@ type Server struct {
 	// auth-server already holds it for /token rotation. We add a
 	// pointer here too so the forgot-password handler can call
 	// RevokeAllForUser without reaching across packages.
+
+	// Phase 9f: email-MFA service. Drives the per-user / per-client
+	// MFA gate at /login/submit, the /login/mfa challenge, and the
+	// trusted-device cookie machinery.
+	mfaSvc *mfa.Service
+
+	// Phase 9f follow-up: short-lived "enable MFA after email
+	// verification" tokens. Issued by the verify-email success
+	// path; consumed by /verify-email/enable-mfa. Strictly enable-
+	// only — see pkg/email/mfa_setup_token_store.go for the
+	// rationale.
+	mfaSetupTokens *email.MFASetupTokenStore
 }
 
 // ServerState represents the current state of the server
@@ -205,6 +218,23 @@ func (s *Server) SetPasswordResetStore(st *email.PasswordResetStore) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.passwordResetStore = st
+}
+
+// SetMFAService wires the email-MFA service. Phase 9f. Drives the
+// MFA gate at /login/submit, the /login/mfa challenge handlers,
+// and the trusted-device cookie machinery.
+func (s *Server) SetMFAService(svc *mfa.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mfaSvc = svc
+}
+
+// SetMFASetupTokenStore wires the one-shot setup-token store for
+// the post-verify "enable MFA" inline toggle. Phase 9f follow-up.
+func (s *Server) SetMFASetupTokenStore(st *email.MFASetupTokenStore) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mfaSetupTokens = st
 }
 
 // bootstrapBlocked returns true iff the deployment is still in

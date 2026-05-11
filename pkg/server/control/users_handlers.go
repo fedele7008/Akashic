@@ -53,10 +53,12 @@ type userView struct {
 	// Phase 9e v2: signed offset on the tenant's default_max_clients.
 	// 0 = use the tenant default exactly; positive grants extra
 	// slots; negative tightens.
-	ClientCountOffset int     `json:"client_count_offset"`
-	LastLoginAt       *string `json:"last_login_at,omitempty"`
-	CreatedAt         string  `json:"created_at"`
-	UpdatedAt         string  `json:"updated_at"`
+	ClientCountOffset int `json:"client_count_offset"`
+	// Phase 9f: per-user MFA opt-in flag.
+	MFAEnabled  bool    `json:"mfa_enabled"`
+	LastLoginAt *string `json:"last_login_at,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 // toUserView converts the PG row to the wire shape. `email` is
@@ -74,6 +76,7 @@ func toUserView(u *models.User, email string) userView {
 		MissingIdentity:   u.MissingIdentity,
 		EmailVerified:     u.EmailVerified,
 		ClientCountOffset: u.ClientCountOffset,
+		MFAEnabled:        u.MFAEnabled,
 		CreatedAt:         u.CreatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 		UpdatedAt:         u.UpdatedAt.UTC().Format("2006-01-02T15:04:05Z"),
 	}
@@ -244,8 +247,14 @@ type adminPatchUserRequest struct {
 	IsDisabled *bool   `json:"is_disabled,omitempty"`
 	// Phase 9e v2: signed offset applied to the tenant policy's
 	// default_max_clients to compute this user's effective cap.
-	ClientCountOffset *int   `json:"client_count_offset,omitempty"`
-	CallerUserID      string `json:"caller_user_id,omitempty"`
+	ClientCountOffset *int `json:"client_count_offset,omitempty"`
+	// Phase 9f: per-user MFA opt-in toggle. Admin can enable on
+	// behalf of a user; the handler enforces the same
+	// no-mailer-no-MFA gate the user-side widget uses so an
+	// admin can't accidentally lock a user out by enabling MFA
+	// without a configured mailer.
+	MFAEnabled   *bool  `json:"mfa_enabled,omitempty"`
+	CallerUserID string `json:"caller_user_id,omitempty"`
 }
 
 func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request, id uuid.UUID) {
@@ -257,9 +266,24 @@ func (s *Server) adminPatchUser(w http.ResponseWriter, r *http.Request, id uuid.
 	}
 	defer r.Body.Close()
 
+	// Refuse MFA-enable when no mailer is configured. Same guard the
+	// user-side /users/me/mfa endpoint applies; surfacing it here
+	// keeps an admin from accidentally locking a user out by
+	// flipping the bit through this surface.
+	if req.MFAEnabled != nil && *req.MFAEnabled {
+		if s.emailService == nil || !s.emailService.IsConfigured() {
+			response.WriteJSON(w, http.StatusConflict,
+				response.Fail("MFA_REQUIRES_MAILER",
+					"email is not configured for this deployment; "+
+						"MFA can't be enabled until email is set up", nil))
+			return
+		}
+	}
+
 	params := usermanagement.UpdateParams{
 		IsDisabled:        req.IsDisabled,
 		ClientCountOffset: req.ClientCountOffset,
+		MFAEnabled:        req.MFAEnabled,
 	}
 	if req.UserType != nil {
 		ut := models.UserType(*req.UserType)
@@ -670,6 +694,9 @@ func changedFields(req adminPatchUserRequest) []string {
 	}
 	if req.ClientCountOffset != nil {
 		out = append(out, "client_count_offset="+strconv.Itoa(*req.ClientCountOffset))
+	}
+	if req.MFAEnabled != nil {
+		out = append(out, "mfa_enabled="+strconv.FormatBool(*req.MFAEnabled))
 	}
 	return out
 }

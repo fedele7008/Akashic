@@ -344,6 +344,7 @@ function EditUserDialog({
   const [userType, setUserType] = useState(user.user_type);
   const [isDisabled, setIsDisabled] = useState(user.is_disabled);
   const [clientCountOffset, setClientCountOffset] = useState(user.client_count_offset);
+  const [mfaEnabled, setMfaEnabled] = useState(user.mfa_enabled);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -354,6 +355,7 @@ function EditUserDialog({
     if (userType !== user.user_type) req.user_type = userType;
     if (isDisabled !== user.is_disabled) req.is_disabled = isDisabled;
     if (clientCountOffset !== user.client_count_offset) req.client_count_offset = clientCountOffset;
+    if (mfaEnabled !== user.mfa_enabled) req.mfa_enabled = mfaEnabled;
     if (Object.keys(req).length === 0) {
       onClose();
       return;
@@ -410,6 +412,23 @@ function EditUserDialog({
               <code> max(0, default + offset)</code>. 0 = use the
               tenant default exactly. Negative values tighten this
               user; positive grants extra slots.
+            </span>
+          </label>
+          <label style={{ display: 'flex', flexDirection: 'row', gap: '8px', alignItems: 'flex-start', marginTop: '12px' }}>
+            <input
+              type="checkbox"
+              checked={mfaEnabled}
+              onChange={(e) => setMfaEnabled(e.target.checked)}
+              style={{ marginTop: '0.25rem' }}
+            />
+            <span>
+              Email-based MFA enabled
+              <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: '0.8125rem' }}>
+                When on, the user must enter a 6-digit code emailed to
+                them at every sign-in (unless a trusted-device cookie
+                is presented). Server rejects enabling when no mailer
+                is configured.
+              </span>
             </span>
           </label>
         </div>

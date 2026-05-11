@@ -73,7 +73,9 @@ type adminPatchPolicyRequest struct {
 	RequireVerifiedEmailForClientRegistration *bool `json:"require_verified_email_for_client_registration,omitempty"`
 	RequireApprovalForClientRegistration      *bool `json:"require_approval_for_client_registration,omitempty"`
 	DefaultMaxClients                         *int  `json:"default_max_clients,omitempty"`
-	CallerUserID                              string `json:"caller_user_id,omitempty"`
+	// Phase 9f: MFA trusted-device cookie ceiling.
+	MFATrustedDeviceMaxDays *int   `json:"mfa_trusted_device_max_days,omitempty"`
+	CallerUserID            string `json:"caller_user_id,omitempty"`
 }
 
 func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +102,7 @@ func (s *Server) adminPatchPolicy(w http.ResponseWriter, r *http.Request) {
 		RequireVerifiedEmailForClientRegistration: req.RequireVerifiedEmailForClientRegistration,
 		RequireApprovalForClientRegistration:      req.RequireApprovalForClientRegistration,
 		DefaultMaxClients:                         req.DefaultMaxClients,
+		MFATrustedDeviceMaxDays:                   req.MFATrustedDeviceMaxDays,
 	}
 	if req.CallerUserID != "" {
 		callerID, err := uuid.Parse(req.CallerUserID)
@@ -174,6 +177,9 @@ func changedPolicyFields(req adminPatchPolicyRequest) []string {
 	}
 	if req.DefaultMaxClients != nil {
 		out = append(out, "default_max_clients")
+	}
+	if req.MFATrustedDeviceMaxDays != nil {
+		out = append(out, "mfa_trusted_device_max_days")
 	}
 	return out
 }

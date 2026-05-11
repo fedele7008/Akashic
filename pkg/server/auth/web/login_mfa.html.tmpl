@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
+  <title>Verify it's you — Akashic</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="card">
+    <h1>Verify it's you</h1>
+    <p class="subtitle">
+      We've sent a 6-digit code to <strong>{{.Email}}</strong>.
+      It expires in {{.ExpiresInMinutes}} minutes.
+    </p>
+
+    {{if .Error}}
+    <p class="error" role="alert">{{.Error}}</p>
+    {{end}}
+
+    <form method="POST" action="/login/mfa/submit" autocomplete="off">
+      <input type="hidden" name="csrf_token" value="{{.CSRFToken}}">
+
+      <label for="code">6-digit code</label>
+      <input type="text" id="code" name="code" required autofocus
+             inputmode="numeric" pattern="[0-9]{6}" maxlength="6"
+             autocomplete="one-time-code"
+             class="otp-input" />
+
+      <label class="checkbox-row">
+        <input type="checkbox" name="remember_device"
+               value="{{.DefaultTrustedDays}}">
+        <span>
+          Remember this device for {{.DefaultTrustedDays}} day{{if ne .DefaultTrustedDays 1}}s{{end}}
+          <span class="hint-inline">
+            Skip the code on this browser until then. Don't enable
+            on a shared computer.
+          </span>
+        </span>
+      </label>
+
+      <button type="submit">Verify and continue</button>
+    </form>
+
+    <p class="cancel cancel-spaced">
+      <a href="/login">← Cancel and start over</a>
+    </p>
+  </main>
+</body>
+</html>

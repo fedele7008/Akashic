@@ -158,6 +158,9 @@ func (db *DB) AutoMigrate() error {
 		// OAuthScopeRequest's shape — same partial-unique-on-pending
 		// pattern, same approve/reject state machine.
 		&models.ClientRegistrationRequest{},
+		// Phase 9f: per-user "remember this device" cookies for the
+		// email-MFA flow. Hashed cookie token + audit trail.
+		&models.MFATrustedDevice{},
 	}
 
 	if err := db.DB.AutoMigrate(modelList...); err != nil {

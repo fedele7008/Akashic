@@ -95,6 +95,20 @@ type User struct {
 	// 0 means "use the tenant default exactly".
 	ClientCountOffset int `gorm:"default:0;not null" json:"client_count_offset"`
 
+	// Phase 9f: per-user MFA opt-in. When true, every login goes
+	// through the email-code MFA flow unless a trusted-device cookie
+	// is presented for this user. OR'd with the per-client
+	// `require_mfa` flag at login time — either "true" trips the gate.
+	// User-toggled via the <akashic-mfa-settings> widget; admin-
+	// readable but not edited from the admin surface.
+	//
+	// MFA is silently bypassed when no mailer is configured (the
+	// widget greys-out the toggle and the login path short-circuits)
+	// — there's no path to deliver codes without email, and a stuck
+	// deployment would lock users out.
+	MFAEnabled   bool       `gorm:"default:false;not null;index" json:"mfa_enabled"`
+	MFAEnabledAt *time.Time `json:"mfa_enabled_at,omitempty"`
+
 	CreatedAt time.Time `gorm:"autoCreateTime;not null" json:"created_at"`
 	UpdatedAt time.Time `gorm:"autoUpdateTime;not null" json:"updated_at"`
 }

@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/url"
 
+	"akashic/akashic/pkg/mfa"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
 
@@ -214,6 +215,42 @@ func (s *Server) handleForcedPasswordResetSubmit(w http.ResponseWriter, r *http.
 
 	s.logger.Security.Info("forced-reset: completed",
 		zap.String("user_id", user.ID.String()))
+
+	// Phase 9f: re-evaluate MFA on the freshly-rotated session.
+	// The just-completed reset gives the user a known-good password;
+	// MFA's job (proving "this is the actual user") still applies
+	// to the new session and should fire if the account opts in or
+	// the intended client requires it.
+	s.mu.RLock()
+	mfaSvc := s.mfaSvc
+	s.mu.RUnlock()
+	if mfaSvc != nil {
+		clientID := extractClientIDFromReturnTo(returnTo)
+		need, mErr := mfaSvc.IsRequired(r.Context(), user, clientID)
+		if mErr != nil {
+			s.logger.App.Warn("forced-reset: mfa IsRequired errored; allowing through",
+				zap.Error(mErr))
+		}
+		if need {
+			cookieVal := readCookie(r, mfa.CookieName)
+			trusted := false
+			if cookieVal != "" {
+				ok, _ := mfaSvc.IsTrustedDevice(r.Context(), user.ID, cookieVal)
+				trusted = ok
+			}
+			if !trusted {
+				if err := s.startMFAChallenge(r.Context(), w, r, &upgraded, newSID, user, returnTo, clientID); err != nil {
+					s.logger.App.Error("forced-reset: startMFAChallenge",
+						zap.Error(err))
+					// Soft-fail: continue without MFA rather than
+					// leaving the user stuck post-reset. The
+					// admin's audit log captures the inconsistency.
+				} else {
+					return
+				}
+			}
+		}
+	}
 
 	s.redirectToReturnToOrLanding(w, r, &upgraded, returnTo)
 }

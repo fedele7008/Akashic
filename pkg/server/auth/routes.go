@@ -37,6 +37,9 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// link in verification emails. GET-only and idempotent (the
 	// token IS the proof; no CSRF needed for a one-shot consume).
 	mux.HandleFunc("/verify-email", s.handleVerifyEmail)
+	// Phase 9f follow-up: inline "Enable MFA" submit from the
+	// verify-email success page. Token-gated, enable-only.
+	mux.HandleFunc("/verify-email/enable-mfa", s.handleVerifyEmailEnableMFA)
 
 	// Phase 9c: forgot-password 6-digit code flow. Login-page link
 	// kicks off here. Conditional on mailer-configured: when the
@@ -56,6 +59,13 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	// + rotates the session ID + revokes all live RTs.
 	mux.HandleFunc("/forced-password-reset", s.handleForcedPasswordResetPage)
 	mux.HandleFunc("/forced-password-reset/submit", s.handleForcedPasswordResetSubmit)
+
+	// Phase 9f: email-MFA challenge. /login/submit mints a
+	// MFAPending partial session and 302s to /login/mfa; the user
+	// types their 6-digit code and on success the session is
+	// rotated + cookie set + redirected to PendingReturnTo.
+	mux.HandleFunc("/login/mfa", s.handleLoginMFAPage)
+	mux.HandleFunc("/login/mfa/submit", s.handleLoginMFASubmit)
 
 	// OAuth flow endpoints (Phase 7 Steps 5-7).
 	//

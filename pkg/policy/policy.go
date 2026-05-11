@@ -158,6 +158,11 @@ type UpdateParams struct {
 	RequireApprovalForClientRegistration      *bool
 	DefaultMaxClients                         *int
 
+	// Phase 9f: trusted-device cookie ceiling for the email-MFA
+	// flow. Operator picks a value in [1, 365]; user-pickable
+	// values on the MFA challenge page are clamped down to this.
+	MFATrustedDeviceMaxDays *int
+
 	CallerID uuid.UUID
 }
 
@@ -188,6 +193,12 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 	if p.DefaultMaxClients != nil {
 		if *p.DefaultMaxClients < 0 || *p.DefaultMaxClients > 1000 {
 			return nil, fmt.Errorf("%w: default_max_clients must be between 0 and 1000",
+				ErrInvalidPolicy)
+		}
+	}
+	if p.MFATrustedDeviceMaxDays != nil {
+		if *p.MFATrustedDeviceMaxDays < 1 || *p.MFATrustedDeviceMaxDays > 365 {
+			return nil, fmt.Errorf("%w: mfa_trusted_device_max_days must be between 1 and 365",
 				ErrInvalidPolicy)
 		}
 	}
@@ -282,6 +293,9 @@ func (s *Service) Update(ctx context.Context, p UpdateParams) (*models.TenantPol
 	}
 	if p.DefaultMaxClients != nil {
 		updates["default_max_clients"] = *p.DefaultMaxClients
+	}
+	if p.MFATrustedDeviceMaxDays != nil {
+		updates["mfa_trusted_device_max_days"] = *p.MFATrustedDeviceMaxDays
 	}
 	if p.CallerID != uuid.Nil {
 		updates["updated_by"] = p.CallerID

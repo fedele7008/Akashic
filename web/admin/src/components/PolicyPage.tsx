@@ -59,6 +59,8 @@ export function PolicyPage() {
   const [requireApproval, setRequireApproval] = useState(false);
   const [defaultMaxClients, setDefaultMaxClients] = useState(25);
   const [mailerConfigured, setMailerConfigured] = useState(false);
+  // Phase 9f: MFA trusted-device ceiling (1..365 days).
+  const [mfaTrustedDays, setMfaTrustedDays] = useState(30);
 
   const [submitting, setSubmitting] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
@@ -82,6 +84,7 @@ export function PolicyPage() {
       setRequireVerifiedEmail(p.require_verified_email_for_client_registration);
       setRequireApproval(p.require_approval_for_client_registration);
       setDefaultMaxClients(p.default_max_clients);
+      setMfaTrustedDays(p.mfa_trusted_device_max_days);
     } catch (e) {
       setErr((e as Error).message);
     }
@@ -153,6 +156,9 @@ export function PolicyPage() {
     }
     if (defaultMaxClients !== policy.default_max_clients) {
       req.default_max_clients = defaultMaxClients;
+    }
+    if (mfaTrustedDays !== policy.mfa_trusted_device_max_days) {
+      req.mfa_trusted_device_max_days = mfaTrustedDays;
     }
 
     if (Object.keys(req).length === 0) {
@@ -438,6 +444,41 @@ export function PolicyPage() {
               </div>
             </label>
           </div>
+        </div>
+
+        <div className="panel">
+          <h3 style={{ marginTop: 0 }}>Multi-factor authentication</h3>
+          <p className="hint" style={{ fontSize: '0.8125rem', marginTop: 0 }}>
+            Email-based MFA: per-user opt-in (via the user's profile) or
+            per-client requirement (via the client edit page) — either
+            triggers a 6-digit code by email at login. Users can mark a
+            browser as "trusted" to skip the prompt for a bounded window;
+            this setting caps that window.
+          </p>
+          {!mailerConfigured && (
+            <p className="hint" role="status" style={{ fontSize: '0.8125rem' }}>
+              Email is not configured for this deployment. MFA gates
+              are silently bypassed at login until you set up the
+              Email page; the value below is preserved so it takes
+              effect automatically once email is configured.
+            </p>
+          )}
+          <label>
+            <div>Trusted-device cookie max duration (days)</div>
+            <input
+              type="number"
+              min={1}
+              max={365}
+              value={mfaTrustedDays}
+              onChange={(e) => setMfaTrustedDays(parseInt(e.target.value, 10) || 1)}
+              disabled={submitting}
+              style={{ width: '120px' }}
+            />
+            <div className="hint" style={{ fontSize: '0.75rem', padding: 0, background: 'transparent', border: 'none' }}>
+              User-pickable durations on the MFA challenge page clamp
+              down to this. Range 1..365. Default <strong>30</strong>.
+            </div>
+          </label>
         </div>
 
         {savedAt && (

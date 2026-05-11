@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 
+	"akashic/akashic/pkg/mfa"
 	"akashic/akashic/pkg/models"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/userregistration"
@@ -296,6 +297,58 @@ func (s *Server) handleLoginSubmit(w http.ResponseWriter, r *http.Request) {
 	if sess.ResetRequired {
 		http.Redirect(w, r, forcedResetURLWithReturnTo(returnTo, ""), http.StatusSeeOther)
 		return
+	}
+
+	// Phase 9f: MFA gate. After password verification, before
+	// finalising the login, check whether MFA is required (per-user
+	// opt-in OR per-client require_mfa, OR'd at this point). If
+	// required AND the request has no valid trusted-device cookie,
+	// flip the session into MFAPending state and route to the
+	// challenge page. The original returnTo is stamped on the
+	// session so the post-MFA finalise lands the user on the
+	// correct destination.
+	//
+	// Order vs forced-reset: forced-reset comes first (above)
+	// because the user's password has been admin-rotated and we
+	// want them on a fresh password before the MFA prompt. The
+	// forced-reset handler then re-runs this gate after the rotate.
+	s.mu.RLock()
+	mfaSvc := s.mfaSvc
+	s.mu.RUnlock()
+	if mfaSvc != nil {
+		clientID := extractClientIDFromReturnTo(returnTo)
+		need, err := mfaSvc.IsRequired(r.Context(), user, clientID)
+		if err != nil {
+			s.logger.App.Warn("login: mfa IsRequired errored; allowing through",
+				zap.String("user_id", user.ID.String()), zap.Error(err))
+		}
+		if need {
+			// Trusted-device short-circuit: matching cookie skips
+			// the prompt and lets the regular finalise continue.
+			cookieVal := readCookie(r, mfa.CookieName)
+			trusted := false
+			if cookieVal != "" {
+				ok, terr := mfaSvc.IsTrustedDevice(r.Context(), user.ID, cookieVal)
+				if terr != nil {
+					s.logger.App.Warn("login: mfa IsTrustedDevice errored",
+						zap.Error(terr))
+				}
+				trusted = ok
+			}
+			if !trusted {
+				if err := s.startMFAChallenge(r.Context(), w, r, sess, sid, user, returnTo, clientID); err != nil {
+					s.logger.App.Error("login: startMFAChallenge",
+						zap.String("user_id", user.ID.String()), zap.Error(err))
+					s.renderLoginError(w, r,
+						"We couldn't send your verification code. Please retry.",
+						username)
+					return
+				}
+				return
+			}
+			s.logger.Security.Info("mfa: trusted-device cookie short-circuited prompt",
+				zap.String("user_id", user.ID.String()))
+		}
 	}
 
 	// returnTo is empty when the user landed on /login directly

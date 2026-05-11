@@ -225,6 +225,16 @@ func (s *Server) handleAuthorize(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Phase 9f: MFA-pending gate. Same shape as the forced-reset
+	// gate above — a session in MFAPending state can't yet authorize.
+	// Bounce to /login/mfa, which has its own returnTo embedded in
+	// the partial session's PendingReturnTo, so we don't need to
+	// re-thread it here.
+	if sess.MFAPending {
+		http.Redirect(w, r, mfaURLWithReturnTo(""), http.StatusSeeOther)
+		return
+	}
+
 	// Phase 7: consent gate. Built-ins and first-party clients
 	// (IsTenantPortal=true) skip; everyone else is prompted unless
 	// the user has previously granted these scopes (or a superset).

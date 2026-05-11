@@ -25,7 +25,8 @@ akashic-signin,
 akashic-profile,
 akashic-change-password,
 akashic-forgot-help,
-akashic-clients {
+akashic-clients,
+akashic-mfa-settings {
   /* Token defaults — every variable is overridable. */
   --akashic-text:           #e4e6eb;
   --akashic-text-muted:     #8b91a0;
@@ -70,6 +71,12 @@ akashic-clients {
   max-width: none;
 }
 
+/* The MFA-settings widget renders a multi-row trusted-device list
+   that benefits from the same wide-content treatment. Phase 9f. */
+akashic-mfa-settings {
+  max-width: none;
+}
+
 /*
  * Light-mode override. Tenants who set `color-scheme: light` on
  * <html> get readable defaults. Most tenants will skip this and
@@ -81,7 +88,8 @@ akashic-clients {
   akashic-profile,
   akashic-change-password,
   akashic-forgot-help,
-  akashic-clients {
+  akashic-clients,
+  akashic-mfa-settings {
     --akashic-text:         #1f2937;
     --akashic-text-muted:   #6b7280;
     --akashic-bg:           #ffffff;

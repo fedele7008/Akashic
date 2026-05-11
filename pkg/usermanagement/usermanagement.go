@@ -121,6 +121,13 @@ type UpdateParams struct {
 	// tenant's `default_max_clients`. Signed; admin-only.
 	// Phase 9e v2.
 	ClientCountOffset *int
+	// MFAEnabled lets admins flip the per-user email-MFA opt-in.
+	// Phase 9f. Same gate as the user-side widget — caller is
+	// expected to have refused enabling without a configured
+	// mailer; the repo write itself doesn't enforce that here
+	// because the control plane handler does the check (it has
+	// the email service handle; this domain layer doesn't).
+	MFAEnabled *bool
 	// CallerID is the ID of the operator making the change. Used
 	// for the self-demotion check and for audit (DisableUser
 	// records this in disabled_by). Must be supplied for any
@@ -199,6 +206,11 @@ func Update(ctx context.Context, d Deps, userID uuid.UUID, p UpdateParams) (*mod
 	if p.ClientCountOffset != nil && *p.ClientCountOffset != target.ClientCountOffset {
 		if err := d.UserRepo.SetClientCountOffset(ctx, userID, *p.ClientCountOffset); err != nil {
 			return nil, fmt.Errorf("set client_count_offset: %w", err)
+		}
+	}
+	if p.MFAEnabled != nil && *p.MFAEnabled != target.MFAEnabled {
+		if err := d.UserRepo.SetMFAEnabled(ctx, userID, *p.MFAEnabled); err != nil {
+			return nil, fmt.Errorf("set mfa_enabled: %w", err)
 		}
 	}
 

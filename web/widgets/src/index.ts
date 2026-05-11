@@ -32,6 +32,7 @@ import "./components/akashic-change-id";
 import "./components/akashic-verify-email-banner";
 import "./components/akashic-clients";
 import "./components/akashic-connected-apps";
+import "./components/akashic-mfa-settings";
 
 declare global {
   interface Window {

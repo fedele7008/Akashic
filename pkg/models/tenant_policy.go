@@ -135,6 +135,16 @@ type TenantPolicy struct {
 	RequireApprovalForClientRegistration      bool `gorm:"not null;default:false" json:"require_approval_for_client_registration"`
 	DefaultMaxClients                         int  `gorm:"not null;default:25" json:"default_max_clients"`
 
+	// ─── MFA (Phase 9f) ───────────────────────────────────────────
+	//
+	// MFATrustedDeviceMaxDays caps how long a user's "remember this
+	// device" cookie can outlive its issuance. Default 30 — long
+	// enough to stay out of the user's way during normal use, short
+	// enough that a stolen device cookie has a bounded blast radius.
+	// User-pickable durations on the MFA challenge page are clamped
+	// down to this ceiling. Operator range: 1..365.
+	MFATrustedDeviceMaxDays int `gorm:"not null;default:30" json:"mfa_trusted_device_max_days"`
+
 	UpdatedAt time.Time  `gorm:"autoUpdateTime;not null" json:"updated_at"`
 	UpdatedBy *uuid.UUID `gorm:"type:uuid" json:"updated_by,omitempty"`
 }

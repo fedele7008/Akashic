@@ -29,6 +29,7 @@ import (
 	"akashic/akashic/pkg/logging"
 	"akashic/akashic/pkg/middleware"
 	"akashic/akashic/pkg/email"
+	"akashic/akashic/pkg/mfa"
 	"akashic/akashic/pkg/oauth"
 	"akashic/akashic/pkg/pki"
 	"akashic/akashic/pkg/policy"
@@ -119,6 +120,9 @@ type Server struct {
 	// related endpoints return SERVICE_UNAVAILABLE and the
 	// cap-enforcement hook is skipped.
 	clientRegSvc *clientregistration.Service
+
+	// Phase 9f: email-MFA service. Drives /users/me/mfa endpoints.
+	mfaSvc *mfa.Service
 }
 
 // New constructs a Server. Lifecycle: New → SetDeps → Start.
@@ -200,6 +204,14 @@ func (s *Server) SetClientRegistrationService(svc *clientregistration.Service) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.clientRegSvc = svc
+}
+
+// SetMFAService wires the email-MFA service for /users/me/mfa
+// endpoints. Phase 9f.
+func (s *Server) SetMFAService(svc *mfa.Service) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.mfaSvc = svc
 }
 
 // SetBootstrapManager wires the bootstrap-state checker so signup

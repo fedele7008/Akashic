@@ -291,6 +291,32 @@ func (r *UserRepository) DeleteUser(ctx context.Context, userID uuid.UUID) error
 	return nil
 }
 
+// SetMFAEnabled toggles a user's per-account MFA opt-in flag.
+// Phase 9f — called by the user-side <akashic-mfa-settings> widget
+// when the toggle changes. Stamps `mfa_enabled_at` on enable so an
+// audit trail exists; clearing the timestamp on disable is fine
+// (the historical "when was MFA first enabled" isn't itself
+// security-load-bearing).
+func (r *UserRepository) SetMFAEnabled(ctx context.Context, userID uuid.UUID, enabled bool) error {
+	updates := map[string]any{"mfa_enabled": enabled}
+	if enabled {
+		now := time.Now().UTC()
+		updates["mfa_enabled_at"] = &now
+	} else {
+		updates["mfa_enabled_at"] = nil
+	}
+	res := r.db.WithContext(ctx).Model(&models.User{}).
+		Where("id = ?", userID).
+		Updates(updates)
+	if res.Error != nil {
+		return fmt.Errorf("update mfa_enabled: %w", res.Error)
+	}
+	if res.RowsAffected == 0 {
+		return models.ErrUserNotFound
+	}
+	return nil
+}
+
 // SetClientCountOffset adjusts a user's per-user offset on the
 // tenant policy's `default_max_clients` cap. Signed: +N grants
 // extra slots, -N tightens. The user's effective cap is computed

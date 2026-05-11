@@ -42,6 +42,34 @@ type AuthSession struct {
 	// time so any leak of the partial-session cookie can't ride
 	// the upgrade.
 	ResetRequired bool `json:"reset_required,omitempty"`
+
+	// Phase 9f: when true, this is also a "partial" session — the
+	// user passed password verification but still owes an email-
+	// MFA challenge before any gated endpoint accepts them.
+	// /login/mfa is the only endpoint that operates on this state;
+	// /authorize and other flows 302 here until the code is
+	// consumed. Cleared on successful code verify, with session-id
+	// rotation so a leaked partial-session cookie can't ride the
+	// MFA upgrade.
+	//
+	// Compounding with ResetRequired: password reset comes first
+	// (the user's old password just changed; we want them on a
+	// fresh password before they fight the MFA prompt). The
+	// forced-reset success path checks MFA after the rotate.
+	MFAPending bool `json:"mfa_pending,omitempty"`
+
+	// PendingClientID records which OAuth client (if any) the user
+	// was trying to authorize when the MFA challenge was triggered.
+	// Used by IsRequired's per-client `require_mfa` check —
+	// stamped here at login time so the MFA flow doesn't have to
+	// re-derive the client_id from a returnTo URL on every request.
+	// Empty when login originated outside an /authorize redirect.
+	PendingClientID string `json:"pending_client_id,omitempty"`
+
+	// PendingReturnTo carries the original returnTo (typically
+	// /authorize?...) across the MFA detour so the post-MFA
+	// redirect lands the user on the right destination.
+	PendingReturnTo string `json:"pending_return_to,omitempty"`
 }
 
 // SessionStore manages auth-server sessions in Redis. Two TTLs:
@@ -146,6 +174,28 @@ func (ss *SessionStore) Touch(ctx context.Context, sid string) (*AuthSession, er
 		return nil, fmt.Errorf("redis SET session (touch): %w", err)
 	}
 	return s, nil
+}
+
+// Replace overwrites an existing session's payload while preserving
+// its sid AND the remaining absolute TTL. Used by mid-flow state
+// updates (Phase 9f marks MFAPending after Create) where the caller
+// already holds the session and just wants to flush new fields to
+// Redis without a Touch's LastSeenAt bump or a Delete+Create
+// cookie-rotation dance.
+func (ss *SessionStore) Replace(ctx context.Context, sid string, s *AuthSession) error {
+	payload, err := json.Marshal(s)
+	if err != nil {
+		return fmt.Errorf("marshal session: %w", err)
+	}
+	absRemaining := time.Until(s.IssuedAt.Add(ss.absoluteTTL))
+	if absRemaining <= 0 {
+		_ = ss.Delete(ctx, sid)
+		return ErrSessionExpired
+	}
+	if err := ss.r.Set(ctx, sessionKey(sid), payload, absRemaining).Err(); err != nil {
+		return fmt.Errorf("redis SET session (replace): %w", err)
+	}
+	return nil
 }
 
 // Delete removes a session — used by /logout, by post-login session

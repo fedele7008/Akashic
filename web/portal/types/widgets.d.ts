@@ -32,6 +32,7 @@ declare module "react" {
       "akashic-verify-email-banner": WidgetProps;
       "akashic-clients": WidgetProps;
       "akashic-connected-apps": WidgetProps;
+      "akashic-mfa-settings": WidgetProps;
     }
   }
 }
@@ -48,6 +49,7 @@ declare global {
       "akashic-verify-email-banner": WidgetProps;
       "akashic-clients": WidgetProps;
       "akashic-connected-apps": WidgetProps;
+      "akashic-mfa-settings": WidgetProps;
     }
   }
 }

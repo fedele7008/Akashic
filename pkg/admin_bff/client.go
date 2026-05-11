@@ -478,10 +478,12 @@ type UserView struct {
 	MissingIdentitySince string  `json:"missing_identity_since,omitempty"`
 	EmailVerified        bool    `json:"email_verified"`
 	// Phase 9e v2: signed offset on tenant default_max_clients.
-	ClientCountOffset int     `json:"client_count_offset"`
-	LastLoginAt       *string `json:"last_login_at,omitempty"`
-	CreatedAt         string  `json:"created_at"`
-	UpdatedAt         string  `json:"updated_at"`
+	ClientCountOffset int `json:"client_count_offset"`
+	// Phase 9f: per-user MFA opt-in flag.
+	MFAEnabled  bool    `json:"mfa_enabled"`
+	LastLoginAt *string `json:"last_login_at,omitempty"`
+	CreatedAt   string  `json:"created_at"`
+	UpdatedAt   string  `json:"updated_at"`
 }
 
 type ListUsersResponse struct {
@@ -497,8 +499,10 @@ type UpdateUserRequest struct {
 	UserType   *string `json:"user_type,omitempty"`
 	IsDisabled *bool   `json:"is_disabled,omitempty"`
 	// Phase 9e v2: signed offset on tenant default_max_clients.
-	ClientCountOffset *int   `json:"client_count_offset,omitempty"`
-	CallerUserID      string `json:"caller_user_id,omitempty"`
+	ClientCountOffset *int `json:"client_count_offset,omitempty"`
+	// Phase 9f: per-user MFA opt-in flag.
+	MFAEnabled   *bool  `json:"mfa_enabled,omitempty"`
+	CallerUserID string `json:"caller_user_id,omitempty"`
 }
 
 // UserListParams bundles pagination + filter params for UserList.
@@ -663,11 +667,13 @@ type TenantPolicyView struct {
 	RefreshTokenAbsoluteTTLSeconds int     `json:"refresh_token_absolute_ttl_seconds"`
 	AllowedClientScopes            string  `json:"allowed_client_scopes"`
 	// Phase 9e v2: client-registration qualification.
-	RequireVerifiedEmailForClientRegistration bool   `json:"require_verified_email_for_client_registration"`
-	RequireApprovalForClientRegistration      bool   `json:"require_approval_for_client_registration"`
-	DefaultMaxClients                         int    `json:"default_max_clients"`
-	UpdatedAt                                 string `json:"updated_at"`
-	UpdatedBy                                 *string `json:"updated_by,omitempty"`
+	RequireVerifiedEmailForClientRegistration bool `json:"require_verified_email_for_client_registration"`
+	RequireApprovalForClientRegistration      bool `json:"require_approval_for_client_registration"`
+	DefaultMaxClients                         int  `json:"default_max_clients"`
+	// Phase 9f: MFA trusted-device cookie ceiling.
+	MFATrustedDeviceMaxDays int     `json:"mfa_trusted_device_max_days"`
+	UpdatedAt               string  `json:"updated_at"`
+	UpdatedBy               *string `json:"updated_by,omitempty"`
 }
 
 // UpdatePolicyRequest mirrors the control-plane PATCH /policy body.
@@ -683,10 +689,12 @@ type UpdatePolicyRequest struct {
 	RefreshTokenAbsoluteTTLSeconds *int    `json:"refresh_token_absolute_ttl_seconds,omitempty"`
 	AllowedClientScopes            *string `json:"allowed_client_scopes,omitempty"`
 	// Phase 9e v2: client-registration qualification.
-	RequireVerifiedEmailForClientRegistration *bool  `json:"require_verified_email_for_client_registration,omitempty"`
-	RequireApprovalForClientRegistration      *bool  `json:"require_approval_for_client_registration,omitempty"`
-	DefaultMaxClients                         *int   `json:"default_max_clients,omitempty"`
-	CallerUserID                              string `json:"caller_user_id,omitempty"`
+	RequireVerifiedEmailForClientRegistration *bool `json:"require_verified_email_for_client_registration,omitempty"`
+	RequireApprovalForClientRegistration      *bool `json:"require_approval_for_client_registration,omitempty"`
+	DefaultMaxClients                         *int  `json:"default_max_clients,omitempty"`
+	// Phase 9f: MFA trusted-device cookie ceiling.
+	MFATrustedDeviceMaxDays *int   `json:"mfa_trusted_device_max_days,omitempty"`
+	CallerUserID            string `json:"caller_user_id,omitempty"`
 }
 
 func (c *ControlClient) PolicyGet(ctx context.Context) (*TenantPolicyView, error) {

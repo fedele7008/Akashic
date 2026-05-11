@@ -105,23 +105,59 @@ func (s *Server) handleVerifyEmail(w http.ResponseWriter, r *http.Request) {
 		zap.String("user_id", data.UserID.String()),
 		zap.String("email", data.Email))
 
-	// Look up display name for the success page (best-effort).
+	// Look up display name AND current MFA state for the success
+	// page. We need user.MFAEnabled to decide whether to render the
+	// "Enable MFA" inline toggle — already-on accounts shouldn't be
+	// prompted (the prompt is enable-only, and showing it on an
+	// already-on account is just confusing UX).
 	var u models.User
 	displayName := ""
+	mfaAlreadyOn := false
 	if err := db.WithContext(r.Context()).Where("id = ?", data.UserID).First(&u).Error; err == nil {
+		mfaAlreadyOn = u.MFAEnabled
 		// User row doesn't carry display_name (it's in LDAP); fall
 		// back to the email's local part for a friendly greeting.
-		// Phase 9+ could fetch from LDAP for the welcome message;
-		// not worth the round-trip here.
 		if at := strings.IndexByte(data.Email, '@'); at > 0 {
 			displayName = data.Email[:at]
 		}
 	}
 
+	// Phase 9f follow-up: mint an enable-only setup token when the
+	// user is a candidate for inline MFA enablement (mailer
+	// configured AND MFA currently off). The plaintext is embedded
+	// as a hidden form field on the success page; the user clicks
+	// "Enable MFA" → POST /verify-email/enable-mfa consumes the
+	// token and flips users.mfa_enabled to true. Token TTL is 5
+	// minutes, single-use. Already-on accounts skip the prompt
+	// entirely — this token MUST NOT exist as a downgrade vector.
+	mailerOn := s.MailerConfigured()
+	var setupToken string
+	s.mu.RLock()
+	setupStore := s.mfaSetupTokens
+	s.mu.RUnlock()
+	if mailerOn && !mfaAlreadyOn && setupStore != nil {
+		tok, terr := setupStore.Create(r.Context(), data.UserID)
+		if terr != nil {
+			// Best-effort: a token-mint failure shouldn't block the
+			// verified-email confirmation. Just suppress the inline
+			// toggle and fall through to the plain success page.
+			s.logger.App.Warn("verify-email: mint mfa setup token failed",
+				zap.String("user_id", data.UserID.String()), zap.Error(terr))
+		} else {
+			setupToken = tok
+		}
+	}
+
+	csrf := s.ensureLoginCSRF(w, r)
 	renderTemplate(w, "verify_email_result.html.tmpl", http.StatusOK, map[string]any{
-		"Title":       "Email verified",
-		"Success":     true,
-		"DisplayName": displayName,
+		"Title":            "Email verified",
+		"Success":          true,
+		"DisplayName":      displayName,
+		"MailerConfigured": mailerOn,
+		// MFASetupToken is non-empty only when the inline-enable
+		// toggle should render. Template branches on it.
+		"MFASetupToken": setupToken,
+		"CSRFToken":     csrf,
 	})
 }
 
@@ -135,6 +171,103 @@ func (s *Server) renderVerifyEmailError(w http.ResponseWriter, status int, title
 		"Title":   title,
 		"Success": false,
 		"Message": msg,
+	})
+}
+
+// handleVerifyEmailEnableMFA serves POST /verify-email/enable-mfa.
+// Phase 9f follow-up. Consumes a one-shot MFA setup token (minted
+// during the verify-email success path) and enables MFA for the
+// bound user.
+//
+// Direction-of-change is **enable-only** by design: the form has no
+// way to send "disable", and the handler ignores any field that
+// could be interpreted as such. The token grants only the narrow
+// authority to flip mfa_enabled from false to true; using it to
+// disable would be a downgrade attack vector if the verification
+// email channel were compromised.
+//
+// Failure modes:
+//   - Token invalid/expired → render a "link expired" page; user
+//     can manage MFA from their profile after signing in.
+//   - Mailer no longer configured → ignore; the toggle is a no-op
+//     security-wise (eligibility silently bypasses), so flipping
+//     the bit anyway is fine for "intent survives mailer state."
+func (s *Server) handleVerifyEmailEnableMFA(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	s.mu.RLock()
+	store := s.mfaSetupTokens
+	db := s.db
+	s.mu.RUnlock()
+	if store == nil || db == nil {
+		s.renderVerifyEmailError(w, http.StatusServiceUnavailable,
+			"Server not ready",
+			"The MFA setup service isn't ready yet. Please retry in a moment.")
+		return
+	}
+
+	if err := r.ParseForm(); err != nil {
+		s.renderVerifyEmailError(w, http.StatusBadRequest,
+			"Form error",
+			"Could not parse the form. Please try the verification link again.")
+		return
+	}
+	if !s.verifyLoginCSRF(r) {
+		s.renderVerifyEmailError(w, http.StatusOK,
+			"Form expired",
+			"This form has expired. Sign in to your account to enable MFA from your profile.")
+		return
+	}
+
+	token := strings.TrimSpace(r.PostForm.Get("setup_token"))
+	userID, err := store.Consume(r.Context(), token)
+	if errors.Is(err, email.ErrMFASetupTokenInvalid) {
+		s.renderVerifyEmailError(w, http.StatusOK,
+			"MFA setup link expired",
+			"This MFA setup window has expired. Sign in to your account and enable MFA from your profile's Two-factor authentication section.")
+		return
+	}
+	if err != nil {
+		s.logger.App.Error("verify-email/enable-mfa: consume token",
+			zap.Error(err))
+		s.renderVerifyEmailError(w, http.StatusInternalServerError,
+			"Server error",
+			"Something went wrong while enabling MFA. Please try from your profile after signing in.")
+		return
+	}
+
+	// Atomic-flip-on. We don't gate on the current value: if the
+	// user's MFA is already on (race with the user-side widget),
+	// the UPDATE is a no-op and the success page renders the same.
+	now := time.Now().UTC()
+	if err := db.WithContext(r.Context()).Model(&models.User{}).
+		Where("id = ?", userID).
+		Updates(map[string]any{
+			"mfa_enabled":    true,
+			"mfa_enabled_at": &now,
+		}).Error; err != nil {
+		s.logger.App.Error("verify-email/enable-mfa: db update",
+			zap.String("user_id", userID.String()), zap.Error(err))
+		s.renderVerifyEmailError(w, http.StatusInternalServerError,
+			"Server error",
+			"We accepted your setup request but couldn't enable MFA. Please try from your profile after signing in.")
+		return
+	}
+
+	s.logger.Security.Info("mfa enabled via post-verify token",
+		zap.String("user_id", userID.String()))
+
+	// Render the same template with a different banner — MFA-enabled
+	// confirmation, no setup-token (already consumed). The user
+	// can still hit Sign in to finish landing on their portal.
+	renderTemplate(w, "verify_email_result.html.tmpl", http.StatusOK, map[string]any{
+		"Title":       "MFA enabled",
+		"Success":     true,
+		"MFAEnabled":  true,
+		"DisplayName": "",
 	})
 }
 

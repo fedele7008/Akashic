@@ -61,9 +61,11 @@ type clientView struct {
 	// SecretResetRequired = approval-minted, plaintext never seen.
 	// Drives the widget's button label switch + contextual hint.
 	// Phase 9e v2.
-	SecretResetRequired bool   `json:"secret_reset_required"`
-	CreatedAt           string `json:"created_at"`
-	UpdatedAt           string `json:"updated_at"`
+	SecretResetRequired bool `json:"secret_reset_required"`
+	// RequireMFA = per-client MFA gate. Phase 9f.
+	RequireMFA bool   `json:"require_mfa"`
+	CreatedAt  string `json:"created_at"`
+	UpdatedAt  string `json:"updated_at"`
 }
 
 // Canonical wire labels for client_type. Always uppercase on the
@@ -98,6 +100,7 @@ func toClientView(c *models.ClientService) clientView {
 		RequirePKCE:         c.RequirePKCE,
 		IsTenantPortal:      c.IsTenantPortal,
 		SecretResetRequired: c.SecretResetRequired,
+		RequireMFA:          c.RequireMFA,
 		CreatedAt:           c.CreatedAt.UTC().Format(time.RFC3339),
 		UpdatedAt:           c.UpdatedAt.UTC().Format(time.RFC3339),
 	}
@@ -502,6 +505,10 @@ type patchClientRequest struct {
 	// allowed iff an approved `oauth_scope_requests` row exists.
 	RequiredScopes *string `json:"required_scopes,omitempty"`
 	OptionalScopes *string `json:"optional_scopes,omitempty"`
+	// Phase 9f: per-client MFA gate. When toggled true with no
+	// mailer configured, the handler refuses with MFA_REQUIRES_MAILER
+	// (running-MFA-without-a-mailer would lock users out).
+	RequireMFA *bool `json:"require_mfa,omitempty"`
 }
 
 func (s *Server) handlePatchClient(w http.ResponseWriter, r *http.Request, ctx *clientCtx) {
@@ -605,6 +612,19 @@ func (s *Server) handlePatchClient(w http.ResponseWriter, r *http.Request, ctx *
 		updates["required_scopes"] = newRequired
 		updates["optional_scopes"] = newOptional
 		updates["allowed_scopes"] = oauth.UnionScopes(newRequired, newOptional)
+	}
+	if req.RequireMFA != nil {
+		// Phase 9f: refuse to enable per-client require_mfa without
+		// a mailer. The MFA challenge would have nowhere to deliver
+		// codes and every login through this client would degrade.
+		if *req.RequireMFA && (s.emailSvc == nil || !s.emailSvc.IsConfigured()) {
+			response.WriteJSON(w, http.StatusConflict,
+				response.Fail("MFA_REQUIRES_MAILER",
+					"email is not configured for this deployment; "+
+						"per-client MFA can't be enabled until an admin sets up email", nil))
+			return
+		}
+		updates["require_mfa"] = *req.RequireMFA
 	}
 	if len(updates) == 0 {
 		response.WriteJSON(w, http.StatusBadRequest,

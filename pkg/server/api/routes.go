@@ -93,6 +93,27 @@ func (s *Server) registerRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/users/me/send-verification-email",
 		s.requireFirstPartyBearer(s.handleSendVerificationEmail))
 
+	// Phase 9f: per-user MFA management. First-party only — the
+	// toggle is account-takeover-grade. GET returns the user's
+	// current state + trusted-device history; POST toggles the
+	// `users.mfa_enabled` flag. Trusted-device revoke nests under
+	// /users/me/mfa/trusted-devices/<id>/revoke.
+	mux.HandleFunc("/users/me/mfa", s.requireFirstPartyBearer(
+		func(w http.ResponseWriter, r *http.Request, uid uuid.UUID, claims *oauth.AccessTokenClaims) {
+			switch r.Method {
+			case http.MethodGet:
+				s.handleGetMyMFA(w, r, uid, claims)
+			case http.MethodPost:
+				s.handlePatchMyMFA(w, r, uid, claims)
+			default:
+				writeBearerError(w, http.StatusMethodNotAllowed,
+					"method_not_allowed",
+					"GET or POST only on /users/me/mfa")
+			}
+		}))
+	mux.HandleFunc("/users/me/mfa/trusted-devices/",
+		s.requireFirstPartyBearer(s.handleRevokeMyTrustedDevice))
+
 	// Phase 7.5: end-user consent management.
 	//   GET    /users/me/consents       → list active grants
 	//   DELETE /users/me/consents/<id>  → revoke a specific grant

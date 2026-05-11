@@ -74,6 +74,9 @@ export interface TenantPolicy {
   require_verified_email_for_client_registration: boolean;
   require_approval_for_client_registration: boolean;
   default_max_clients: number;
+  /** Phase 9f: ceiling for the MFA "remember this device" cookie
+   *  duration; user-pickable values clamp down to this. */
+  mfa_trusted_device_max_days: number;
   updated_at: string;
   updated_by?: string;
 }
@@ -92,6 +95,7 @@ export interface UpdatePolicyRequest {
   require_verified_email_for_client_registration?: boolean;
   require_approval_for_client_registration?: boolean;
   default_max_clients?: number;
+  mfa_trusted_device_max_days?: number;
 }
 
 export class PolicyApi {
@@ -149,6 +153,8 @@ export interface UserView {
   /** Phase 9e v2: signed offset on tenant default_max_clients.
    *  Effective cap = max(0, policy.default_max_clients + offset). */
   client_count_offset: number;
+  /** Phase 9f: per-user MFA opt-in. Admin-toggleable. */
+  mfa_enabled: boolean;
   last_login_at?: string;
   created_at: string;
   updated_at: string;
@@ -164,6 +170,8 @@ export interface UpdateUserRequest {
   is_disabled?: boolean;
   /** Phase 9e v2: signed offset on tenant default_max_clients. */
   client_count_offset?: number;
+  /** Phase 9f: per-user MFA opt-in flag. */
+  mfa_enabled?: boolean;
 }
 
 export interface UserListParams {
